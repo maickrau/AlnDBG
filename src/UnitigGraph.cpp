@@ -216,28 +216,28 @@ MostlySparse2DHashmap<uint8_t, size_t> getUnitigEdgeCoverages(const std::vector<
 	return result;
 }
 
-void writeGraph(std::string outputFileName, const std::vector<double>& nodeCoverage, const std::vector<size_t>& nodeLength, const MostlySparse2DHashmap<uint8_t, size_t>& edgeCoverage, const size_t minCoverage, const size_t k)
+void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, const size_t minCoverage, const size_t k)
 {
 	std::ofstream graph { outputFileName };
 	size_t countNodes = 0;
 	size_t countEdges = 0;
-	for (size_t i = 0; i < nodeCoverage.size(); i++)
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
-		if (nodeCoverage[i] < minCoverage) continue;
-		graph << "S\tnode_" << i << "\t*\tLN:i:" << (nodeLength[i]+k-1) << "\tll:f:" << nodeCoverage[i] << "\tFC:i:" << nodeCoverage[i] * (nodeLength[i]+k-1) << std::endl;
+		if (unitigGraph.coverages[i] < minCoverage) continue;
+		graph << "S\tnode_" << i << "\t*\tLN:i:" << (unitigGraph.lengths[i]+k-1) << "\tll:f:" << unitigGraph.coverages[i] << "\tFC:i:" << unitigGraph.coverages[i] * (unitigGraph.lengths[i]+k-1) << std::endl;
 		countNodes += 1;
 	}
-	for (size_t i = 0; i < edgeCoverage.size(); i++)
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
 		auto fw = std::make_pair(i, true);
-		for (auto pair : edgeCoverage.getValues(fw))
+		for (auto pair : unitigGraph.edgeCoverages.getValues(fw))
 		{
 			if (pair.second < minCoverage) continue;
 			graph << "L\tnode_" << i << "\t+\tnode_" << pair.first.first << "\t" << (pair.first.second ? "+" : "-") << "\t" << (k-1) << "M\tec:i:" << pair.second << std::endl;
 			countEdges += 1;
 		}
 		auto bw = std::make_pair(i, false);
-		for (auto pair : edgeCoverage.getValues(bw))
+		for (auto pair : unitigGraph.edgeCoverages.getValues(bw))
 		{
 			if (pair.second < minCoverage) continue;
 			graph << "L\tnode_" << i << "\t-\tnode_" << pair.first.first << "\t" << (pair.first.second ? "+" : "-") << "\t" << (k-1) << "M\tec:i:" << pair.second << std::endl;
@@ -246,4 +246,21 @@ void writeGraph(std::string outputFileName, const std::vector<double>& nodeCover
 	}
 	std::cerr << countNodes << " graph nodes" << std::endl;
 	std::cerr << countEdges << " graph edges" << std::endl;
+}
+
+UnitigGraph makeUnitigGraph(const KmerGraph& kmerGraph, const size_t minCoverage)
+{
+	UnitigGraph result;
+	std::vector<std::vector<uint64_t>> unitigs;
+	std::vector<uint64_t> unitigLeftmostNode;
+	std::vector<uint64_t> unitigRightmostNode;
+	std::tie(unitigs, unitigLeftmostNode, unitigRightmostNode) = getUnitigs(kmerGraph.nodeCount(), minCoverage, kmerGraph.edgeCoverages);
+	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, kmerGraph.coverages, kmerGraph.lengths);
+	result.edgeCoverages = getUnitigEdgeCoverages(unitigLeftmostNode, unitigRightmostNode, minCoverage, kmerGraph.edgeCoverages);
+	return result;
+}
+
+size_t UnitigGraph::nodeCount() const
+{
+	return coverages.size();
 }

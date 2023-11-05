@@ -362,3 +362,33 @@ std::vector<size_t> getNodeLengths(const std::vector<uint64_t>& segments, const 
 	}
 	return result;
 }
+
+KmerGraph makeKmerGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage)
+{
+	KmerGraph result;
+	std::vector<RankBitvector> breakpoints = extendBreakpoints(readLengths, matches);
+	size_t countBreakpoints = 0;
+	for (size_t i = 0; i < breakpoints.size(); i++)
+	{
+		for (size_t j = 0; j < breakpoints[i].size(); j++)
+		{
+			if (breakpoints[i].get(j)) countBreakpoints += 1;
+		}
+	}
+	std::cerr << countBreakpoints << " breakpoints" << std::endl;
+	result.readSegmentPaths = mergeSegments(readLengths, matches, breakpoints, countBreakpoints);
+	std::cerr << result.readSegmentPaths.size() << " segments" << std::endl;
+	RankBitvector segmentToNode = getSegmentToNode(result.readSegmentPaths, minCoverage);
+	size_t countNodes = (segmentToNode.getRank(segmentToNode.size()-1) + (segmentToNode.get(segmentToNode.size()-1) ? 1 : 0));
+	std::cerr << countNodes << " nodes pre coverage filter" << std::endl;
+	result.coverages = getNodeCoverage(result.readSegmentPaths, segmentToNode, countNodes);
+	result.lengths = getNodeLengths(result.readSegmentPaths, segmentToNode, breakpoints, countNodes);
+	result.edgeCoverages = getEdgeCoverages(readLengths, segmentToNode, result.readSegmentPaths, breakpoints, minCoverage, result.coverages, countNodes);
+	std::cerr << result.edgeCoverages.size() << " edges pre coverage filter" << std::endl;
+	return result;
+}
+
+size_t KmerGraph::nodeCount() const
+{
+	return coverages.size();
+}

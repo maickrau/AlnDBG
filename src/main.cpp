@@ -12,35 +12,9 @@
 
 void makeGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k)
 {
-	std::vector<RankBitvector> breakpoints = extendBreakpoints(readLengths, matches);
-	size_t countBreakpoints = 0;
-	for (size_t i = 0; i < breakpoints.size(); i++)
-	{
-		for (size_t j = 0; j < breakpoints[i].size(); j++)
-		{
-			if (breakpoints[i].get(j)) countBreakpoints += 1;
-		}
-	}
-	std::cerr << countBreakpoints << " breakpoints" << std::endl;
-	std::vector<uint64_t> segments = mergeSegments(readLengths, matches, breakpoints, countBreakpoints);
-	std::cerr << segments.size() << " segments" << std::endl;
-	RankBitvector segmentToNode = getSegmentToNode(segments, minCoverage);
-	size_t countNodes = (segmentToNode.getRank(segmentToNode.size()-1) + (segmentToNode.get(segmentToNode.size()-1) ? 1 : 0));
-	std::cerr << countNodes << " nodes pre coverage filter" << std::endl;
-	std::vector<size_t> nodeCoverage = getNodeCoverage(segments, segmentToNode, countNodes);
-	std::vector<size_t> nodeLength = getNodeLengths(segments, segmentToNode, breakpoints, countNodes);
-	MostlySparse2DHashmap<uint8_t, size_t> edgeCoverages = getEdgeCoverages(readLengths, segmentToNode, segments, breakpoints, minCoverage, nodeCoverage, countNodes);
-	std::cerr << edgeCoverages.size() << " edges pre coverage filter" << std::endl;
-	std::vector<std::vector<uint64_t>> unitigs;
-	std::vector<uint64_t> unitigLeftmostNode;
-	std::vector<uint64_t> unitigRightmostNode;
-	std::tie(unitigs, unitigLeftmostNode, unitigRightmostNode) = getUnitigs(countNodes, minCoverage, edgeCoverages);
-	std::vector<size_t> unitigLength;
-	std::vector<double> unitigCoverage;
-	std::tie(unitigLength, unitigCoverage) = getUnitigLengthAndCoverage(unitigs, nodeCoverage, nodeLength);
-	MostlySparse2DHashmap<uint8_t, size_t> unitigEdgeCoverages = getUnitigEdgeCoverages(unitigLeftmostNode, unitigRightmostNode, minCoverage, edgeCoverages);
-	// writeGraph(outputFileName, nodeCoverage, nodeLength, edgeCoverages, minCoverage, k);
-	writeGraph(outputFileName, unitigCoverage, unitigLength, unitigEdgeCoverages, minCoverage, k);
+	auto kmerGraph = makeKmerGraph(readLengths, matches, minCoverage);
+	auto unitigGraph = makeUnitigGraph(kmerGraph, minCoverage);
+	writeGraph(outputFileName, unitigGraph, minCoverage, k);
 }
 
 int main(int argc, char** argv)

@@ -8,11 +8,17 @@
 #include "MostlySparse2DHashmap.h"
 #include "MatchGroup.h"
 
-std::vector<RankBitvector> extendBreakpoints(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches);
-std::vector<uint64_t> mergeSegments(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const std::vector<RankBitvector>& breakpoints, const size_t countBreakpoints);
-RankBitvector getSegmentToNode(const std::vector<uint64_t>& segments, const size_t minCoverage);
-std::vector<size_t> getNodeCoverage(const std::vector<uint64_t>& segments, const RankBitvector& segmentToNode, const size_t countNodes);
-std::vector<size_t> getNodeLengths(const std::vector<uint64_t>& segments, const RankBitvector& segmentToNode, const std::vector<RankBitvector>& breakpoints, const size_t countNodes);
-MostlySparse2DHashmap<uint8_t, size_t> getEdgeCoverages(const std::vector<size_t>& readLengths, const RankBitvector& segmentToNode, const std::vector<uint64_t>& segments, const std::vector<RankBitvector>& breakpoints, const size_t minCoverage, const std::vector<size_t>& nodeCoverage, const size_t countNodes);
+class KmerGraph
+{
+public:
+	size_t nodeCount() const;
+	std::vector<uint64_t> readSegmentPaths;
+	std::vector<size_t> coverages;
+	std::vector<size_t> lengths;
+	RankBitvector segmentToNode;
+	MostlySparse2DHashmap<uint8_t, size_t> edgeCoverages;
+};
+
+KmerGraph makeKmerGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage);
 
 #endif
