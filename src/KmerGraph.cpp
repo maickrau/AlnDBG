@@ -138,50 +138,61 @@ std::vector<RankBitvector> extendBreakpoints(const std::vector<size_t>& readLeng
 	return breakpoints;
 }
 
-uint64_t find(std::vector<uint64_t>& result, const size_t pos)
+uint64_t find(std::vector<std::vector<uint64_t>>& result, const std::vector<size_t>& countBeforeRead, const RankBitvector& segmentToRead, const size_t pos)
 {
 	assert((pos & firstBitUint64_t) == 0);
-	if (result[pos] == (pos & maskUint64_t))
+	size_t readi = segmentToRead.getRank(pos);
+	size_t offset = pos - countBeforeRead[readi];
+	if (result[readi][offset] == (pos & maskUint64_t))
 	{
-		assert(result[pos] == pos);
+		assert(result[readi][offset] == pos);
 		return pos;
 	}
-	uint64_t foundPos = result[pos];
-	while (result[foundPos & maskUint64_t] != (foundPos & maskUint64_t))
+	uint64_t foundPos = result[readi][offset];
+	while (true)
 	{
-		uint64_t nextFoundPos = result[foundPos & maskUint64_t];
+		size_t nextreadi = segmentToRead.getRank(foundPos & maskUint64_t);
+		size_t nextoffset = (foundPos & maskUint64_t) - countBeforeRead[nextreadi];
+		if (result[nextreadi][nextoffset] == (foundPos & maskUint64_t)) break;
+		uint64_t nextFoundPos = result[nextreadi][nextoffset];
 		if (foundPos & firstBitUint64_t) nextFoundPos ^= firstBitUint64_t;
 		foundPos = nextFoundPos;
 	}
-	assert(result[foundPos & maskUint64_t] == (foundPos & maskUint64_t));
 	uint64_t finalPos = foundPos;
-	foundPos = result[pos];
-	result[pos] = finalPos;
-	while (result[foundPos & maskUint64_t] != (foundPos & maskUint64_t))
+	foundPos = result[readi][offset];
+	result[readi][offset] = finalPos;
+	while (true)
 	{
-		uint64_t nextFoundPos = result[foundPos & maskUint64_t];
+		size_t nextreadi = segmentToRead.getRank(foundPos & maskUint64_t);
+		size_t nextoffset = (foundPos & maskUint64_t) - countBeforeRead[nextreadi];
+		if (result[nextreadi][nextoffset] == (foundPos & maskUint64_t)) break;
+		uint64_t nextFoundPos = result[nextreadi][nextoffset];
 		if (foundPos & firstBitUint64_t) finalPos ^= firstBitUint64_t;
-		result[foundPos & maskUint64_t] = finalPos;
+		result[nextreadi][nextoffset] = finalPos;
 		foundPos = nextFoundPos;
 	}
-	return result[pos];
+	return result[readi][offset];
 }
 
-void mergeSegments(std::vector<uint64_t>& result, const size_t leftPos, const size_t rightPos, const bool fw)
+void mergeSegments(std::vector<std::vector<uint64_t>>& result, const std::vector<size_t>& countBeforeRead, const RankBitvector& segmentToRead, const size_t leftPos, const size_t rightPos, const bool fw)
 {
-	auto leftParent = find(result, leftPos);
-	auto rightParent = find(result, rightPos);
-	assert((result[leftParent & maskUint64_t] & maskUint64_t) == (leftParent & maskUint64_t));
-	assert((result[rightParent & maskUint64_t] & maskUint64_t) == (rightParent & maskUint64_t));
+	auto leftParent = find(result, countBeforeRead, segmentToRead, leftPos);
+	auto rightParent = find(result, countBeforeRead, segmentToRead, rightPos);
+	size_t leftreadi = segmentToRead.getRank(leftParent & maskUint64_t);
+	size_t leftoffset = (leftParent & maskUint64_t) - countBeforeRead[leftreadi];
+	size_t rightreadi = segmentToRead.getRank(rightParent & maskUint64_t);
+	size_t rightoffset = (rightParent & maskUint64_t) - countBeforeRead[rightreadi];
+	assert(result[leftreadi][leftoffset] == (leftParent & maskUint64_t));
+	assert(result[rightreadi][rightoffset] == (rightParent & maskUint64_t));
 	if ((leftParent & maskUint64_t) == (rightParent & maskUint64_t))
 	{
 		assert(((leftParent & firstBitUint64_t) == 0) ^ ((rightParent & firstBitUint64_t) == 0) ^ fw);
 		return;
 	}
-	result[rightParent & maskUint64_t] = (leftParent & maskUint64_t) + ((((leftParent & firstBitUint64_t) == 0) ^ ((rightParent & firstBitUint64_t) == 0) ^ fw) ? 0 : firstBitUint64_t);
+	result[rightreadi][rightoffset] = (leftParent & maskUint64_t) + ((((leftParent & firstBitUint64_t) == 0) ^ ((rightParent & firstBitUint64_t) == 0) ^ fw) ? 0 : firstBitUint64_t);
 }
 
-void mergeSegments(const std::vector<size_t>& readLengths, const std::vector<size_t>& countBeforeRead, std::vector<uint64_t>& result, const std::vector<RankBitvector>& breakpoints, const size_t leftRead, const bool leftFw, const size_t leftStart, const size_t leftEnd, const size_t rightRead, const bool rightFw, const size_t rightStart, const size_t rightEnd)
+void mergeSegments(const std::vector<size_t>& readLengths, const std::vector<size_t>& countBeforeRead, const RankBitvector& segmentToRead, std::vector<std::vector<uint64_t>>& result, const std::vector<RankBitvector>& breakpoints, const size_t leftRead, const bool leftFw, const size_t leftStart, const size_t leftEnd, const size_t rightRead, const bool rightFw, const size_t rightStart, const size_t rightEnd)
 {
 	assert(leftFw);
 	assert(breakpoints[leftRead].get(leftStart));
@@ -211,61 +222,76 @@ void mergeSegments(const std::vector<size_t>& readLengths, const std::vector<siz
 	{
 		if (rightFw)
 		{
-			mergeSegments(result, countBeforeRead[leftRead] + leftFirst + i, countBeforeRead[rightRead] + rightFirst+i, true);
+			mergeSegments(result, countBeforeRead, segmentToRead, countBeforeRead[leftRead] + leftFirst + i, countBeforeRead[rightRead] + rightFirst+i, true);
 		}
 		else
 		{
-			mergeSegments(result, countBeforeRead[leftRead] + leftFirst + i, countBeforeRead[rightRead] + rightLast-i-1, false);
+			mergeSegments(result, countBeforeRead, segmentToRead, countBeforeRead[leftRead] + leftFirst + i, countBeforeRead[rightRead] + rightLast-i-1, false);
 		}
 	}
 }
 
-std::vector<uint64_t> mergeSegments(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const std::vector<RankBitvector>& breakpoints, const size_t countBreakpoints)
+std::pair<std::vector<std::vector<uint64_t>>, std::vector<size_t>> mergeSegments(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const std::vector<RankBitvector>& breakpoints, const size_t countBreakpoints)
 {
 	assert(breakpoints.size() == readLengths.size());
-	std::vector<uint64_t> result;
+	std::vector<std::vector<uint64_t>> result;
 	assert(countBreakpoints >= 2*readLengths.size());
-	result.resize(countBreakpoints - readLengths.size());
+	result.resize(breakpoints.size());
 	std::vector<size_t> countBeforeRead;
 	countBeforeRead.resize(readLengths.size(), 0);
+	RankBitvector segmentToRead;
+	segmentToRead.resize(countBreakpoints - readLengths.size());
 	size_t countBeforeNow = 0;
 	for (size_t i = 0; i < breakpoints.size(); i++)
 	{
 		countBeforeRead[i] = countBeforeNow;
-		size_t index = 0;
+		size_t count = 0;
 		for (size_t j = 1; j < breakpoints[i].size(); j++)
 		{
 			if (!breakpoints[i].get(j)) continue;
-			result[countBeforeNow + index] = countBeforeNow + index;
-			index += 1;
+			count += 1;
 		}
-		countBeforeNow += index;
+		result[i].resize(count);
+		for (size_t j = 0; j < count; j++)
+		{
+			result[i][j] = countBeforeNow + j;
+		}
+		assert(count >= 1);
+		segmentToRead.set(countBeforeNow + count - 1, true);
+		countBeforeNow += count;
 	}
-	assert(countBeforeNow == result.size());
+	segmentToRead.buildRanks();
+	assert(countBeforeNow == segmentToRead.size());
 	for (size_t groupi = 0; groupi < matches.size(); groupi++)
 	{
 		for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
 		{
-			mergeSegments(readLengths, countBeforeRead,result, breakpoints, matches[groupi].leftRead, true, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightFw, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+			mergeSegments(readLengths, countBeforeRead, segmentToRead, result, breakpoints, matches[groupi].leftRead, true, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightFw, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
 		}
 	}
 	for (size_t i = 0; i < result.size(); i++)
 	{
-		find(result, i);
+		for (size_t j = 0; j < result[i].size(); j++)
+		{
+			find(result, countBeforeRead, segmentToRead, countBeforeRead[i]+j);
+		}
 	}
-	return result;
+	return std::make_pair(std::move(result), std::move(countBeforeRead));
 }
 
-RankBitvector getSegmentToNode(const std::vector<uint64_t>& segments)
+RankBitvector getSegmentToNode(const std::vector<std::vector<uint64_t>>& segments, const std::vector<uint64_t>& segmentCountBeforeRead)
 {
 	RankBitvector result;
-	result.resize(segments.size());
+	result.resize(segmentCountBeforeRead.back() + segments.back().size());
 	for (size_t i = 0; i < segments.size(); i++)
 	{
-		assert((segments[i] & maskUint64_t) < segments.size());
-		if ((segments[i] & maskUint64_t) != i) continue;
-		assert(segments[i] == i);
-		result.set(i, true);
+		for (size_t j = 0; j < segments[i].size(); j++)
+		{
+			assert((segments[i][j] & maskUint64_t) < result.size());
+			if ((segments[i][j] & maskUint64_t) != segmentCountBeforeRead[i] + j) continue;
+			assert(segments[i][j] == segmentCountBeforeRead[i] + j);
+			result.set(segments[i][j], true);
+		}
 	}
 	result.buildRanks();
 	return result;
@@ -311,15 +337,18 @@ MostlySparse2DHashmap<uint8_t, size_t> getEdgeCoverages(const std::vector<size_t
 	return edgeCoverage;
 }
 
-RankBitvector keepCoveredNodes(const std::vector<uint64_t>& segments, const RankBitvector& segmentToNode, const size_t countNodes, const size_t minCoverage)
+RankBitvector keepCoveredNodes(const std::vector<std::vector<uint64_t>>& segments, const RankBitvector& segmentToNode, const size_t countNodes, const size_t minCoverage)
 {
 	std::vector<size_t> coverages;
 	coverages.resize(countNodes, 0);
 	for (size_t i = 0; i < segments.size(); i++)
 	{
-		uint64_t node = segmentToNode.getRank(segments[i] & maskUint64_t);
-		assert(node < coverages.size());
-		coverages[node] += 1;
+		for (size_t j = 0; j < segments[i].size(); j++)
+		{
+			uint64_t node = segmentToNode.getRank(segments[i][j] & maskUint64_t);
+			assert(node < coverages.size());
+			coverages[node] += 1;
+		}
 	}
 	RankBitvector result;
 	result.resize(countNodes);
@@ -332,19 +361,19 @@ RankBitvector keepCoveredNodes(const std::vector<uint64_t>& segments, const Rank
 	return result;
 }
 
-std::vector<size_t> getNodeLengths(const std::vector<uint64_t>& segments, const RankBitvector& segmentToNode, const RankBitvector& keptNodes, const std::vector<RankBitvector>& breakpoints, const size_t countKeptNodes)
+std::vector<size_t> getNodeLengths(const std::vector<std::vector<uint64_t>>& segments, const RankBitvector& segmentToNode, const RankBitvector& keptNodes, const std::vector<RankBitvector>& breakpoints, const size_t countKeptNodes)
 {
 	std::vector<size_t> result;
 	result.resize(countKeptNodes, std::numeric_limits<size_t>::max());
-	size_t i = 0;
 	for (size_t readi = 0; readi < breakpoints.size(); readi++)
 	{
 		size_t lastBreakpoint = 0;
 		assert(breakpoints[readi].get(0));
+		size_t i = 0;
 		for (size_t pos = 1; pos < breakpoints[readi].size(); pos++)
 		{
 			if (!breakpoints[readi].get(pos)) continue;
-			size_t node = segmentToNode.getRank(segments[i] & maskUint64_t);
+			size_t node = segmentToNode.getRank(segments[readi][i] & maskUint64_t);
 			if (!keptNodes.get(node))
 			{
 				i += 1;
@@ -360,8 +389,8 @@ std::vector<size_t> getNodeLengths(const std::vector<uint64_t>& segments, const 
 			i += 1;
 			lastBreakpoint = pos;
 		}
+		assert(i == segments[readi].size());
 	}
-	assert(i == segments.size());
 	for (size_t i = 0; i < result.size(); i++)
 	{
 		assert(result[i] != std::numeric_limits<size_t>::max());
@@ -369,20 +398,21 @@ std::vector<size_t> getNodeLengths(const std::vector<uint64_t>& segments, const 
 	return result;
 }
 
-std::vector<ReadPathBundle> getReadPaths(const std::vector<uint64_t>& segments, const std::vector<RankBitvector>& breakpoints, const RankBitvector& segmentToNode, const RankBitvector& keptNodes)
+// destroy segments to save memory, otherwise segments and result both use huge memory to represent the same thing
+std::vector<ReadPathBundle> getReadPathsAndDestroySegments(std::vector<std::vector<uint64_t>>& segments, const std::vector<RankBitvector>& breakpoints, const RankBitvector& segmentToNode, const RankBitvector& keptNodes)
 {
 	std::vector<ReadPathBundle> result;
 	result.resize(breakpoints.size());
-	size_t segmenti = 0;
 	for (size_t i = 0; i < result.size(); i++)
 	{
 		result[i].readName = i;
 		uint64_t lastNode = std::numeric_limits<size_t>::max();
+		size_t segmenti = 0;
 		for (size_t j = 0; j < breakpoints[i].size()-1; j++)
 		{
 			if (!breakpoints[i].get(j)) continue;
-			size_t node = segmentToNode.getRank(segments[segmenti] & maskUint64_t);
-			bool fw = (segments[segmenti] & firstBitUint64_t) == 0;
+			size_t node = segmentToNode.getRank(segments[i][segmenti] & maskUint64_t);
+			bool fw = (segments[i][segmenti] & firstBitUint64_t) == 0;
 			segmenti += 1;
 			if (!keptNodes.get(node))
 			{
@@ -400,8 +430,10 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<uint64_t>& segments, 
 			result[i].paths.back().path.emplace_back(node + (fw ? firstBitUint64_t : 0));
 			lastNode = node + (fw ? firstBitUint64_t : 0);
 		}
+		assert(segmenti == segments[i].size());
+		std::vector<uint64_t> tmp;
+		std::swap(segments[i], tmp);
 	}
-	assert(segmenti == segments.size());
 	return result;
 }
 
@@ -418,16 +450,22 @@ std::pair<KmerGraph, std::vector<ReadPathBundle>> makeKmerGraph(const std::vecto
 		}
 	}
 	std::cerr << countBreakpoints << " breakpoints" << std::endl;
-	std::vector<uint64_t> segments = mergeSegments(readLengths, matches, breakpoints, countBreakpoints);
-	std::cerr << segments.size() << " segments" << std::endl;
-	RankBitvector segmentToNode = getSegmentToNode(segments);
+	std::vector<size_t> segmentCountBeforeRead;
+	std::vector<std::vector<uint64_t>> segments;
+	std::tie(segments, segmentCountBeforeRead) = mergeSegments(readLengths, matches, breakpoints, countBreakpoints);
+	std::cerr << segmentCountBeforeRead.back() + segments.back().size() << " segments" << std::endl;
+	RankBitvector segmentToNode = getSegmentToNode(segments, segmentCountBeforeRead);
+	{
+		std::vector<size_t> tmp;
+		std::swap(tmp, segmentCountBeforeRead);
+	}
 	size_t countNodes = (segmentToNode.getRank(segmentToNode.size()-1) + (segmentToNode.get(segmentToNode.size()-1) ? 1 : 0));
 	std::cerr << countNodes << " kmer-nodes pre coverage filter" << std::endl;
 	RankBitvector keptNodes = keepCoveredNodes(segments, segmentToNode, countNodes, minCoverage);
 	size_t countKeptNodes = (keptNodes.getRank(keptNodes.size()-1) + (keptNodes.get(keptNodes.size()-1) ? 1 : 0));
 	std::cerr << countKeptNodes << " kmer-nodes post coverage filter" << std::endl;
 	result.lengths = getNodeLengths(segments, segmentToNode, keptNodes, breakpoints, countKeptNodes);
-	std::vector<ReadPathBundle> readPaths = getReadPaths(segments, breakpoints, segmentToNode, keptNodes);
+	std::vector<ReadPathBundle> readPaths = getReadPathsAndDestroySegments(segments, breakpoints, segmentToNode, keptNodes);
 	return std::make_pair(std::move(result), std::move(readPaths));
 }
 
