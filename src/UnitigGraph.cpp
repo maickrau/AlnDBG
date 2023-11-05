@@ -1,10 +1,11 @@
 #include <fstream>
 #include <iostream>
 #include <cassert>
+#include "MBGCommon.h"
 #include "UnitigGraph.h"
 #include "Common.h"
 
-void startUnitig(const size_t startPos, const std::vector<uint64_t>& uniqueLeftEdge, const std::vector<uint64_t>& uniqueRightEdge, std::vector<bool>& belongsToUnitig, std::vector<std::vector<uint64_t>>& unitigs, std::vector<uint64_t>& unitigLeftmostNode, std::vector<uint64_t>& unitigRightmostNode)
+void startUnitig(const size_t startPos, const VectorWithDirection<uint64_t>& uniqueEdges, std::vector<bool>& belongsToUnitig, std::vector<std::vector<uint64_t>>& unitigs)
 {
 	assert(!belongsToUnitig[startPos & maskUint64_t]);
 	uint64_t unitigStartPos = startPos;
@@ -13,24 +14,24 @@ void startUnitig(const size_t startPos, const std::vector<uint64_t>& uniqueLeftE
 		uint64_t next;
 		if (unitigStartPos & firstBitUint64_t)
 		{
-			next = uniqueLeftEdge[unitigStartPos & maskUint64_t];
+			next = uniqueEdges[std::make_pair(unitigStartPos & maskUint64_t, false)];
 		}
 		else
 		{
-			next = uniqueRightEdge[unitigStartPos & maskUint64_t];
+			next = uniqueEdges[std::make_pair(unitigStartPos & maskUint64_t, true)];
 		}
 		if (next >= std::numeric_limits<size_t>::max()-1) break;
 		next ^= firstBitUint64_t;
 		if ((next & maskUint64_t) == (unitigStartPos & maskUint64_t)) break;
 		if (next & firstBitUint64_t)
 		{
-			if (uniqueRightEdge[next & maskUint64_t] >= std::numeric_limits<size_t>::max()-1) break;
-			assert(uniqueRightEdge[next & maskUint64_t] == unitigStartPos);
+			if (uniqueEdges[std::make_pair(next & maskUint64_t, true)] >= std::numeric_limits<size_t>::max()-1) break;
+			assert(uniqueEdges[std::make_pair(next & maskUint64_t, true)] == unitigStartPos);
 		}
 		else
 		{
-			if (uniqueLeftEdge[next & maskUint64_t] >= std::numeric_limits<size_t>::max()-1) break;
-			assert(uniqueLeftEdge[next & maskUint64_t] == unitigStartPos);
+			if (uniqueEdges[std::make_pair(next & maskUint64_t, false)] >= std::numeric_limits<size_t>::max()-1) break;
+			assert(uniqueEdges[std::make_pair(next & maskUint64_t, false)] == unitigStartPos);
 		}
 		if (next == startPos) break;
 		assert(!belongsToUnitig[next & maskUint64_t]);
@@ -38,7 +39,6 @@ void startUnitig(const size_t startPos, const std::vector<uint64_t>& uniqueLeftE
 	}
 	unitigs.emplace_back();
 	unitigs.back().push_back(unitigStartPos);
-	unitigLeftmostNode.emplace_back(unitigStartPos ^ firstBitUint64_t);
 	uint64_t pos = unitigStartPos;
 	belongsToUnitig[pos & maskUint64_t] = true;
 	while (true)
@@ -46,23 +46,23 @@ void startUnitig(const size_t startPos, const std::vector<uint64_t>& uniqueLeftE
 		uint64_t next;
 		if (pos & firstBitUint64_t)
 		{
-			next = uniqueRightEdge[pos & maskUint64_t];
+			next = uniqueEdges[std::make_pair(pos & maskUint64_t, true)];
 		}
 		else
 		{
-			next = uniqueLeftEdge[pos & maskUint64_t];
+			next = uniqueEdges[std::make_pair(pos & maskUint64_t, false)];
 		}
 		if (next >= std::numeric_limits<size_t>::max()-1) break;
 		if ((next & maskUint64_t) == (pos & maskUint64_t)) break;
 		if (next & firstBitUint64_t)
 		{
-			if (uniqueLeftEdge[next & maskUint64_t] >= std::numeric_limits<size_t>::max()-1) break;
-			assert(uniqueLeftEdge[next & maskUint64_t] == (pos ^ firstBitUint64_t));
+			if (uniqueEdges[std::make_pair(next & maskUint64_t, false)] >= std::numeric_limits<size_t>::max()-1) break;
+			assert(uniqueEdges[std::make_pair(next & maskUint64_t, false)] == (pos ^ firstBitUint64_t));
 		}
 		else
 		{
-			if (uniqueRightEdge[next & maskUint64_t] >= std::numeric_limits<size_t>::max()-1) break;
-			assert(uniqueRightEdge[next & maskUint64_t] == (pos ^ firstBitUint64_t));
+			if (uniqueEdges[std::make_pair(next & maskUint64_t, true)] >= std::numeric_limits<size_t>::max()-1) break;
+			assert(uniqueEdges[std::make_pair(next & maskUint64_t, true)] == (pos ^ firstBitUint64_t));
 		}
 		if (next == unitigStartPos) break;
 		pos = next;
@@ -70,100 +70,22 @@ void startUnitig(const size_t startPos, const std::vector<uint64_t>& uniqueLeftE
 		belongsToUnitig[pos & maskUint64_t] = true;
 		unitigs.back().push_back(pos);
 	}
-	unitigRightmostNode.emplace_back(pos);
 }
 
-std::tuple<std::vector<std::vector<uint64_t>>, std::vector<uint64_t>, std::vector<uint64_t>> getUnitigs(const size_t countNodes, const size_t minCoverage, const MostlySparse2DHashmap<uint8_t, size_t>& edgeCoverages)
+std::vector<std::vector<uint64_t>> getUnitigs(const size_t countNodes, const size_t minCoverage, const VectorWithDirection<uint64_t>& uniqueEdges)
 {
-	std::vector<uint64_t> uniqueRightEdge;
-	std::vector<uint64_t> uniqueLeftEdge;
-	uniqueRightEdge.resize(countNodes, std::numeric_limits<size_t>::max());
-	uniqueLeftEdge.resize(countNodes, std::numeric_limits<size_t>::max());
-	for (size_t i = 0; i < countNodes; i++)
-	{
-		for (auto pair : edgeCoverages.getValues(std::make_pair(i, true)))
-		{
-			if (pair.second < minCoverage) continue;
-			if (uniqueRightEdge[i] == std::numeric_limits<size_t>::max())
-			{
-				uniqueRightEdge[i] = pair.first.first + (pair.first.second ? firstBitUint64_t : 0);
-			}
-			else
-			{
-				uniqueRightEdge[i] = std::numeric_limits<size_t>::max()-1;
-			}
-			if (pair.first.second)
-			{
-				if (uniqueLeftEdge[pair.first.first] == std::numeric_limits<size_t>::max())
-				{
-					uniqueLeftEdge[pair.first.first] = i;
-				}
-				else
-				{
-					uniqueLeftEdge[pair.first.first] = std::numeric_limits<size_t>::max()-1;
-				}
-			}
-			else
-			{
-				if (uniqueRightEdge[pair.first.first] == std::numeric_limits<size_t>::max())
-				{
-					uniqueRightEdge[pair.first.first] = i;
-				}
-				else
-				{
-					uniqueRightEdge[pair.first.first] = std::numeric_limits<size_t>::max()-1;
-				}
-			}
-		}
-		for (auto pair : edgeCoverages.getValues(std::make_pair(i, false)))
-		{
-			if (pair.second < minCoverage) continue;
-			if (uniqueLeftEdge[i] == std::numeric_limits<size_t>::max())
-			{
-				uniqueLeftEdge[i] = pair.first.first + (pair.first.second ? firstBitUint64_t : 0);
-			}
-			else
-			{
-				uniqueLeftEdge[i] = std::numeric_limits<size_t>::max()-1;
-			}
-			if (pair.first.second)
-			{
-				if (uniqueLeftEdge[pair.first.first] == std::numeric_limits<size_t>::max())
-				{
-					uniqueLeftEdge[pair.first.first] = i + firstBitUint64_t;
-				}
-				else
-				{
-					uniqueLeftEdge[pair.first.first] = std::numeric_limits<size_t>::max()-1;
-				}
-			}
-			else
-			{
-				if (uniqueRightEdge[pair.first.first] == std::numeric_limits<size_t>::max())
-				{
-					uniqueRightEdge[pair.first.first] = i + firstBitUint64_t;
-				}
-				else
-				{
-					uniqueRightEdge[pair.first.first] = std::numeric_limits<size_t>::max()-1;
-				}
-			}
-		}
-	}
 	std::vector<bool> belongsToUnitig;
 	belongsToUnitig.resize(countNodes, false);
 	std::vector<std::vector<uint64_t>> unitigs;
-	std::vector<uint64_t> unitigLeftmostNode;
-	std::vector<uint64_t> unitigRightmostNode;
 	for (size_t i = 0; i < countNodes; i++)
 	{
 		if (belongsToUnitig[i]) continue;
-		startUnitig(i, uniqueLeftEdge, uniqueRightEdge, belongsToUnitig, unitigs, unitigLeftmostNode, unitigRightmostNode);
+		startUnitig(i, uniqueEdges, belongsToUnitig, unitigs);
 	}
-	return std::make_tuple(std::move(unitigs), std::move(unitigLeftmostNode), std::move(unitigRightmostNode));
+	return unitigs;
 }
 
-std::pair<std::vector<size_t>, std::vector<double>> getUnitigLengthAndCoverage(const std::vector<std::vector<uint64_t>>& unitigs, const std::vector<size_t>& nodeCoverage, const std::vector<size_t>& nodeLength)
+std::pair<std::vector<size_t>, std::vector<double>> getUnitigLengthAndCoverage(const std::vector<std::vector<uint64_t>>& unitigs, const std::vector<ReadPathBundle>& kmerGraphReadPaths, const std::vector<std::pair<uint64_t, size_t>>& kmerNodeToUnitig, const std::vector<size_t>& nodeLength)
 {
 	std::vector<double> coverage;
 	std::vector<size_t> length;
@@ -173,44 +95,63 @@ std::pair<std::vector<size_t>, std::vector<double>> getUnitigLengthAndCoverage(c
 	{
 		for (uint64_t node : unitigs[i])
 		{
-			coverage[i] += nodeLength[node & maskUint64_t] * nodeCoverage[node & maskUint64_t];
 			length[i] += nodeLength[node & maskUint64_t];
 		}
+	}
+	for (size_t i = 0; i < kmerGraphReadPaths.size(); i++)
+	{
+		for (size_t j = 0; j < kmerGraphReadPaths[i].paths.size(); j++)
+		{
+			for (size_t k = 0; k < kmerGraphReadPaths[i].paths[j].path.size(); k++)
+			{
+				size_t node = kmerGraphReadPaths[i].paths[j].path[k] & maskUint64_t;
+				assert(node < kmerNodeToUnitig.size());
+				size_t unitig = kmerNodeToUnitig[node].first & maskUint64_t;
+				assert(unitig < coverage.size());
+				assert(node < nodeLength.size());
+				coverage[unitig] += nodeLength[node];
+			}
+		}
+	}
+	for (size_t i = 0; i < unitigs.size(); i++)
+	{
 		coverage[i] /= (double)length[i];
 	}
 	return std::make_pair(std::move(length), std::move(coverage));
 }
 
-MostlySparse2DHashmap<uint8_t, size_t> getUnitigEdgeCoverages(const std::vector<uint64_t>& unitigLeftmostNode, const std::vector<uint64_t>& unitigRightmostNode, const size_t minCoverage, const MostlySparse2DHashmap<uint8_t, size_t>& edgeCoverages)
+MostlySparse2DHashmap<uint8_t, size_t> getUnitigEdgeCoverages(const std::vector<std::vector<uint64_t>>& unitigs, const size_t minCoverage, const std::vector<ReadPathBundle>& kmerGraphReadPaths, const std::vector<std::pair<uint64_t, size_t>>& kmerNodeToUnitig)
 {
-	phmap::flat_hash_map<uint64_t, uint64_t> nodeToUnitig;
-	assert(unitigLeftmostNode.size() == unitigRightmostNode.size());
 	MostlySparse2DHashmap<uint8_t, size_t> result;
-	result.resize(unitigLeftmostNode.size());
-	for (size_t i = 0; i < unitigLeftmostNode.size(); i++)
+	result.resize(unitigs.size());
+	for (size_t i = 0; i < kmerGraphReadPaths.size(); i++)
 	{
-		assert(nodeToUnitig.count(unitigLeftmostNode[i] ^ firstBitUint64_t) == 0);
-		nodeToUnitig[unitigLeftmostNode[i] ^ firstBitUint64_t] = i + firstBitUint64_t;
-		assert(nodeToUnitig.count(unitigRightmostNode[i] ^ firstBitUint64_t) == 0);
-		nodeToUnitig[unitigRightmostNode[i] ^ firstBitUint64_t] = i;
-	}
-	for (size_t i = 0; i < unitigLeftmostNode.size(); i++)
-	{
-		for (auto pair : edgeCoverages.getValues(std::make_pair(unitigLeftmostNode[i] & maskUint64_t, (unitigLeftmostNode[i] & firstBitUint64_t) == firstBitUint64_t)))
+		for (size_t j = 0; j < kmerGraphReadPaths[i].paths.size(); j++)
 		{
-			if (pair.second < minCoverage) continue;
-			uint64_t kmerKey = pair.first.first + (pair.first.second ? firstBitUint64_t : 0);
-			assert(nodeToUnitig.count(kmerKey) == 1);
-			uint64_t targetUnitig = nodeToUnitig.at(kmerKey);
-			result.set(std::make_pair(i, false), std::make_pair(targetUnitig & maskUint64_t, (targetUnitig & firstBitUint64_t) == firstBitUint64_t), pair.second);
-		}
-		for (auto pair : edgeCoverages.getValues(std::make_pair(unitigRightmostNode[i] & maskUint64_t, (unitigRightmostNode[i] & firstBitUint64_t) == firstBitUint64_t)))
-		{
-			if (pair.second < minCoverage) continue;
-			uint64_t kmerKey = pair.first.first + (pair.first.second ? firstBitUint64_t : 0);
-			assert(nodeToUnitig.count(kmerKey) == 1);
-			uint64_t targetUnitig = nodeToUnitig.at(kmerKey);
-			result.set(std::make_pair(i, true), std::make_pair(targetUnitig & maskUint64_t, (targetUnitig & firstBitUint64_t) == firstBitUint64_t), pair.second);
+			for (size_t k = 1; k < kmerGraphReadPaths[i].paths[j].path.size(); k++)
+			{
+				std::pair<uint64_t, size_t> beforePos = kmerNodeToUnitig[kmerGraphReadPaths[i].paths[j].path[k-1] & maskUint64_t];
+				if ((kmerGraphReadPaths[i].paths[j].path[k-1] & firstBitUint64_t) == 0)
+				{
+					beforePos.first ^= firstBitUint64_t;
+					beforePos.second = unitigs[beforePos.first & maskUint64_t].size() - 1 - beforePos.second;
+				}
+				std::pair<uint64_t, size_t> afterPos = kmerNodeToUnitig[kmerGraphReadPaths[i].paths[j].path[k] & maskUint64_t];
+				if ((kmerGraphReadPaths[i].paths[j].path[k] & firstBitUint64_t) == 0)
+				{
+					afterPos.first ^= firstBitUint64_t;
+					afterPos.second = unitigs[afterPos.first & maskUint64_t].size() - 1 - afterPos.second;
+				}
+				if (beforePos.second != unitigs[beforePos.first & maskUint64_t].size()-1) continue;
+				if (afterPos.second != 0) continue;
+				std::pair<size_t, bool> from { beforePos.first & maskUint64_t, beforePos.first & firstBitUint64_t };
+				std::pair<size_t, bool> to { afterPos.first & maskUint64_t, afterPos.first & firstBitUint64_t };
+				auto key = canon(from, to);
+				size_t coverage = 0;
+				if (result.hasValue(key.first, key.second)) coverage = result.get(key.first, key.second);
+				coverage += 1;
+				result.set(key.first, key.second, coverage);
+			}
 		}
 	}
 	return result;
@@ -248,15 +189,119 @@ void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, cons
 	std::cerr << countEdges << " graph edges" << std::endl;
 }
 
-UnitigGraph makeUnitigGraph(const KmerGraph& kmerGraph, const size_t minCoverage)
+VectorWithDirection<uint64_t> getUniqueEdges(const std::vector<ReadPathBundle>& kmerGraphReadPaths, const size_t numKmerNodes, const size_t minCoverage)
+{
+	MostlySparse2DHashmap<uint8_t, size_t> edgeCoverage;
+	edgeCoverage.resize(numKmerNodes);
+	for (size_t i = 0; i < kmerGraphReadPaths.size(); i++)
+	{
+		for (size_t j = 0; j < kmerGraphReadPaths[i].paths.size(); j++)
+		{
+			for (size_t k = 1; k < kmerGraphReadPaths[i].paths[j].path.size(); k++)
+			{
+				std::pair<size_t, bool> fromNode { kmerGraphReadPaths[i].paths[j].path[k-1] & maskUint64_t, kmerGraphReadPaths[i].paths[j].path[k-1] & firstBitUint64_t };
+				std::pair<size_t, bool> toNode { kmerGraphReadPaths[i].paths[j].path[k] & maskUint64_t, kmerGraphReadPaths[i].paths[j].path[k] & firstBitUint64_t };
+				auto key = canon(fromNode, toNode);
+				size_t coverage = 0;
+				if (edgeCoverage.hasValue(key.first, key.second)) coverage = edgeCoverage.get(key.first, key.second);
+				if (coverage < minCoverage) coverage += 1;
+				edgeCoverage.set(key.first, key.second, coverage);
+			}
+		}
+	}
+	VectorWithDirection<uint64_t> result;
+	result.resize(numKmerNodes, std::numeric_limits<uint64_t>::max());
+	for (size_t i = 0; i < numKmerNodes; i++)
+	{
+		for (auto pair : edgeCoverage.getValues(std::make_pair(i, true)))
+		{
+			if (pair.second < minCoverage) continue;
+			if (result[std::make_pair(i, true)] == std::numeric_limits<size_t>::max())
+			{
+				result[std::make_pair(i, true)] = pair.first.first + (pair.first.second ? firstBitUint64_t : 0);
+			}
+			else
+			{
+				result[std::make_pair(i, true)] = std::numeric_limits<size_t>::max()-1;
+			}
+			if (result[reverse(pair.first)] == std::numeric_limits<size_t>::max())
+			{
+				result[reverse(pair.first)] = i;
+			}
+			else
+			{
+				result[reverse(pair.first)] = std::numeric_limits<size_t>::max()-1;
+			}
+		}
+		for (auto pair : edgeCoverage.getValues(std::make_pair(i, false)))
+		{
+			if (pair.second < minCoverage) continue;
+			if (result[std::make_pair(i, false)] == std::numeric_limits<size_t>::max())
+			{
+				result[std::make_pair(i, false)] = pair.first.first + (pair.first.second ? firstBitUint64_t : 0);
+			}
+			else
+			{
+				result[std::make_pair(i, false)] = std::numeric_limits<size_t>::max()-1;
+			}
+			if (result[reverse(pair.first)] == std::numeric_limits<size_t>::max())
+			{
+				result[reverse(pair.first)] = i + firstBitUint64_t;
+			}
+			else
+			{
+				result[reverse(pair.first)] = std::numeric_limits<size_t>::max()-1;
+			}
+		}
+	}
+	return result;
+}
+
+std::vector<std::pair<uint64_t, size_t>> getKmerPosToUnitigPos(const std::vector<std::vector<uint64_t>>& unitigs, const size_t kmerNodeCount)
+{
+	std::vector<std::pair<uint64_t, size_t>> result;
+	result.resize(kmerNodeCount, std::make_pair(std::numeric_limits<uint64_t>::max(), std::numeric_limits<size_t>::max()));
+	for (size_t i = 0; i < unitigs.size(); i++)
+	{
+		for (size_t j = 0; j < unitigs[i].size(); j++)
+		{
+			size_t node = unitigs[i][j] & maskUint64_t;
+			assert(node < result.size());
+			assert(result[node].first == std::numeric_limits<uint64_t>::max());
+			result[node].first = i;
+			result[node].second = j;
+			if (unitigs[i][j] & firstBitUint64_t)
+			{
+				result[node].first += firstBitUint64_t;
+			}
+			else
+			{
+				result[node].second = unitigs[i].size()-1-j;
+			}
+		}
+	}
+	for (size_t i = 0; i < result.size(); i++)
+	{
+		assert(result[i].first != std::numeric_limits<uint64_t>::max());
+		if (result[i].first & firstBitUint64_t)
+		{
+			assert(unitigs[result[i].first & maskUint64_t][result[i].second] == (i + firstBitUint64_t));
+		}
+		else
+		{
+			assert(unitigs[result[i].first & maskUint64_t][unitigs[result[i].first & maskUint64_t].size() - 1 - result[i].second] == i);
+		}
+	}
+	return result;
+}
+
+UnitigGraph makeUnitigGraph(const KmerGraph& kmerGraph, const std::vector<ReadPathBundle>& kmerGraphReadPaths, const size_t minCoverage)
 {
 	UnitigGraph result;
-	std::vector<std::vector<uint64_t>> unitigs;
-	std::vector<uint64_t> unitigLeftmostNode;
-	std::vector<uint64_t> unitigRightmostNode;
-	std::tie(unitigs, unitigLeftmostNode, unitigRightmostNode) = getUnitigs(kmerGraph.nodeCount(), minCoverage, kmerGraph.edgeCoverages);
-	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, kmerGraph.coverages, kmerGraph.lengths);
-	result.edgeCoverages = getUnitigEdgeCoverages(unitigLeftmostNode, unitigRightmostNode, minCoverage, kmerGraph.edgeCoverages);
+	std::vector<std::vector<uint64_t>> unitigs = getUnitigs(kmerGraph.nodeCount(), minCoverage, getUniqueEdges(kmerGraphReadPaths, kmerGraph.nodeCount(), minCoverage));
+	std::vector<std::pair<uint64_t, size_t>> kmerNodeToUnitig = getKmerPosToUnitigPos(unitigs, kmerGraph.nodeCount());
+	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, kmerGraphReadPaths, kmerNodeToUnitig, kmerGraph.lengths);
+	result.edgeCoverages = getUnitigEdgeCoverages(unitigs, minCoverage, kmerGraphReadPaths, kmerNodeToUnitig);
 	return result;
 }
 

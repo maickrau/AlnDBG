@@ -12,8 +12,10 @@
 
 void makeGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k)
 {
-	auto kmerGraph = makeKmerGraph(readLengths, matches, minCoverage);
-	auto unitigGraph = makeUnitigGraph(kmerGraph, minCoverage);
+	KmerGraph kmerGraph;
+	std::vector<ReadPathBundle> readKmerGraphPaths;
+	std::tie(kmerGraph, readKmerGraphPaths) = makeKmerGraph(readLengths, matches, minCoverage);
+	UnitigGraph unitigGraph = makeUnitigGraph(kmerGraph, readKmerGraphPaths, minCoverage);
 	writeGraph(outputFileName, unitigGraph, minCoverage, k);
 }
 

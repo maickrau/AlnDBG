@@ -256,7 +256,7 @@ std::vector<uint64_t> mergeSegments(const std::vector<size_t>& readLengths, cons
 	return result;
 }
 
-RankBitvector getSegmentToNode(const std::vector<uint64_t>& segments, const size_t minCoverage)
+RankBitvector getSegmentToNode(const std::vector<uint64_t>& segments)
 {
 	RankBitvector result;
 	result.resize(segments.size());
@@ -311,27 +311,31 @@ MostlySparse2DHashmap<uint8_t, size_t> getEdgeCoverages(const std::vector<size_t
 	return edgeCoverage;
 }
 
-std::vector<size_t> getNodeCoverage(const std::vector<uint64_t>& segments, const RankBitvector& segmentToNode, const size_t countNodes)
+RankBitvector keepCoveredNodes(const std::vector<uint64_t>& segments, const RankBitvector& segmentToNode, const size_t countNodes, const size_t minCoverage)
 {
-	std::vector<size_t> result;
-	result.resize(countNodes, 0);
+	std::vector<size_t> coverages;
+	coverages.resize(countNodes, 0);
 	for (size_t i = 0; i < segments.size(); i++)
 	{
 		uint64_t node = segmentToNode.getRank(segments[i] & maskUint64_t);
-		assert(node < result.size());
-		result[node] += 1;
+		assert(node < coverages.size());
+		coverages[node] += 1;
 	}
-	for (size_t i = 0; i < result.size(); i++)
+	RankBitvector result;
+	result.resize(countNodes);
+	for (size_t i = 0; i < coverages.size(); i++)
 	{
-		assert(result[i] != 0);
+		assert(coverages[i] != 0);
+		if (coverages[i] >= minCoverage) result.set(i, true);
 	}
+	result.buildRanks();
 	return result;
 }
 
-std::vector<size_t> getNodeLengths(const std::vector<uint64_t>& segments, const RankBitvector& segmentToNode, const std::vector<RankBitvector>& breakpoints, const size_t countNodes)
+std::vector<size_t> getNodeLengths(const std::vector<uint64_t>& segments, const RankBitvector& segmentToNode, const RankBitvector& keptNodes, const std::vector<RankBitvector>& breakpoints, const size_t countKeptNodes)
 {
 	std::vector<size_t> result;
-	result.resize(countNodes, std::numeric_limits<size_t>::max());
+	result.resize(countKeptNodes, std::numeric_limits<size_t>::max());
 	size_t i = 0;
 	for (size_t readi = 0; readi < breakpoints.size(); readi++)
 	{
@@ -340,15 +344,17 @@ std::vector<size_t> getNodeLengths(const std::vector<uint64_t>& segments, const 
 		for (size_t pos = 1; pos < breakpoints[readi].size(); pos++)
 		{
 			if (!breakpoints[readi].get(pos)) continue;
-			const size_t node = segmentToNode.getRank(segments[i] & maskUint64_t);
+			size_t node = segmentToNode.getRank(segments[i] & maskUint64_t);
+			if (!keptNodes.get(node))
+			{
+				i += 1;
+				lastBreakpoint = pos;
+				continue;
+			}
 			const size_t length = pos - lastBreakpoint;
+			node = keptNodes.getRank(node);
 			assert(node < result.size());
 			assert(length >= 1);
-			if (!(result[node] == std::numeric_limits<size_t>::max() || result[node] == length))
-			{
-				std::cerr << length << " " << result[node] << std::endl;
-				std::cerr << i << " " << segments[i] << " " << node << std::endl;
-			}
 			assert(result[node] == std::numeric_limits<size_t>::max() || result[node] == length);
 			result[node] = length;
 			i += 1;
@@ -363,7 +369,43 @@ std::vector<size_t> getNodeLengths(const std::vector<uint64_t>& segments, const 
 	return result;
 }
 
-KmerGraph makeKmerGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage)
+std::vector<ReadPathBundle> getReadPaths(const std::vector<uint64_t>& segments, const std::vector<RankBitvector>& breakpoints, const RankBitvector& segmentToNode, const RankBitvector& keptNodes)
+{
+	std::vector<ReadPathBundle> result;
+	result.resize(breakpoints.size());
+	size_t segmenti = 0;
+	for (size_t i = 0; i < result.size(); i++)
+	{
+		result[i].readName = i;
+		uint64_t lastNode = std::numeric_limits<size_t>::max();
+		for (size_t j = 0; j < breakpoints[i].size()-1; j++)
+		{
+			if (!breakpoints[i].get(j)) continue;
+			size_t node = segmentToNode.getRank(segments[segmenti] & maskUint64_t);
+			bool fw = (segments[segmenti] & firstBitUint64_t) == 0;
+			segmenti += 1;
+			if (!keptNodes.get(node))
+			{
+				lastNode = std::numeric_limits<size_t>::max();
+				continue;
+			}
+			node = keptNodes.getRank(node);
+			if (lastNode == std::numeric_limits<size_t>::max())
+			{
+				result[i].paths.emplace_back();
+				result[i].paths.back().pathLeftClipKmers = 0;
+				result[i].paths.back().pathRightClipKmers = 0;
+				result[i].paths.back().readStartPos = j;
+			}
+			result[i].paths.back().path.emplace_back(node + (fw ? firstBitUint64_t : 0));
+			lastNode = node + (fw ? firstBitUint64_t : 0);
+		}
+	}
+	assert(segmenti == segments.size());
+	return result;
+}
+
+std::pair<KmerGraph, std::vector<ReadPathBundle>> makeKmerGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage)
 {
 	KmerGraph result;
 	std::vector<RankBitvector> breakpoints = extendBreakpoints(readLengths, matches);
@@ -376,19 +418,20 @@ KmerGraph makeKmerGraph(const std::vector<size_t>& readLengths, const std::vecto
 		}
 	}
 	std::cerr << countBreakpoints << " breakpoints" << std::endl;
-	result.readSegmentPaths = mergeSegments(readLengths, matches, breakpoints, countBreakpoints);
-	std::cerr << result.readSegmentPaths.size() << " segments" << std::endl;
-	RankBitvector segmentToNode = getSegmentToNode(result.readSegmentPaths, minCoverage);
+	std::vector<uint64_t> segments = mergeSegments(readLengths, matches, breakpoints, countBreakpoints);
+	std::cerr << segments.size() << " segments" << std::endl;
+	RankBitvector segmentToNode = getSegmentToNode(segments);
 	size_t countNodes = (segmentToNode.getRank(segmentToNode.size()-1) + (segmentToNode.get(segmentToNode.size()-1) ? 1 : 0));
-	std::cerr << countNodes << " nodes pre coverage filter" << std::endl;
-	result.coverages = getNodeCoverage(result.readSegmentPaths, segmentToNode, countNodes);
-	result.lengths = getNodeLengths(result.readSegmentPaths, segmentToNode, breakpoints, countNodes);
-	result.edgeCoverages = getEdgeCoverages(readLengths, segmentToNode, result.readSegmentPaths, breakpoints, minCoverage, result.coverages, countNodes);
-	std::cerr << result.edgeCoverages.size() << " edges pre coverage filter" << std::endl;
-	return result;
+	std::cerr << countNodes << " kmer-nodes pre coverage filter" << std::endl;
+	RankBitvector keptNodes = keepCoveredNodes(segments, segmentToNode, countNodes, minCoverage);
+	size_t countKeptNodes = (keptNodes.getRank(keptNodes.size()-1) + (keptNodes.get(keptNodes.size()-1) ? 1 : 0));
+	std::cerr << countKeptNodes << " kmer-nodes post coverage filter" << std::endl;
+	result.lengths = getNodeLengths(segments, segmentToNode, keptNodes, breakpoints, countKeptNodes);
+	std::vector<ReadPathBundle> readPaths = getReadPaths(segments, breakpoints, segmentToNode, keptNodes);
+	return std::make_pair(std::move(result), std::move(readPaths));
 }
 
 size_t KmerGraph::nodeCount() const
 {
-	return coverages.size();
+	return lengths.size();
 }

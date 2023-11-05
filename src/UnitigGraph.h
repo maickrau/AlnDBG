@@ -8,6 +8,7 @@
 #include "RankBitvector.h"
 #include "MostlySparse2DHashmap.h"
 #include "KmerGraph.h"
+#include "Common.h"
 
 class UnitigGraph
 {
@@ -19,6 +20,6 @@ public:
 };
 
 void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, const size_t minCoverage, const size_t k);
-UnitigGraph makeUnitigGraph(const KmerGraph& kmerGraph, const size_t minCoverage);
+UnitigGraph makeUnitigGraph(const KmerGraph& kmerGraph, const std::vector<ReadPathBundle>& kmerGraphReadPaths, const size_t minCoverage);
 
 #endif
