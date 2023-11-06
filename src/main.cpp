@@ -1,4 +1,5 @@
 #include <mutex>
+#include <fstream>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -10,13 +11,38 @@
 #include "MatchGroup.h"
 #include "UnitigGraph.h"
 
-void makeGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k)
+void writePaths(const std::string& filename, const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readUnitigGraphPaths, const size_t k)
+{
+	std::ofstream file { filename };
+	for (size_t i = 0; i < readUnitigGraphPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readUnitigGraphPaths[i].paths.size(); j++)
+		{
+			std::string pathstr;
+			size_t pathLengthKmers = 0;
+			for (size_t k = 0; k < readUnitigGraphPaths[i].paths[j].path.size(); k++)
+			{
+				pathstr += (readUnitigGraphPaths[i].paths[j].path[k] & firstBitUint64_t) ? ">" : "<";
+				pathstr += std::to_string(readUnitigGraphPaths[i].paths[j].path[k] & maskUint64_t);
+				pathLengthKmers += unitigGraph.lengths[readUnitigGraphPaths[i].paths[j].path[k] & maskUint64_t];
+			}
+			assert(pathLengthKmers > readUnitigGraphPaths[i].paths[j].pathLeftClipKmers + readUnitigGraphPaths[i].paths[j].pathRightClipKmers);
+			size_t alnLengthKmers = pathLengthKmers - readUnitigGraphPaths[i].paths[j].pathLeftClipKmers - readUnitigGraphPaths[i].paths[j].pathRightClipKmers;
+			file << readNames[i] << "\t" << readLengths[i] << "\t" << readUnitigGraphPaths[i].paths[j].readStartPos << "\t" << (readUnitigGraphPaths[i].paths[j].readStartPos + alnLengthKmers + k-1) << "\t+\t" << pathstr << "\t" << (pathLengthKmers + k-1) << "\t" << readUnitigGraphPaths[i].paths[j].pathLeftClipKmers << "\t" << (pathLengthKmers - readUnitigGraphPaths[i].paths[j].pathRightClipKmers + k-1) << "\t" << (alnLengthKmers + k-1) << "\t" << (alnLengthKmers + k-1) << "\t60" << std::endl;
+		}
+	}
+}
+
+void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k)
 {
 	KmerGraph kmerGraph;
 	std::vector<ReadPathBundle> readKmerGraphPaths;
 	std::tie(kmerGraph, readKmerGraphPaths) = makeKmerGraph(readLengths, matches, minCoverage);
-	UnitigGraph unitigGraph = makeUnitigGraph(kmerGraph, readKmerGraphPaths, minCoverage);
+	UnitigGraph unitigGraph;
+	std::vector<ReadPathBundle> readUnitigGraphPaths;
+	std::tie(unitigGraph, readUnitigGraphPaths) = makeUnitigGraph(kmerGraph, readKmerGraphPaths, minCoverage);
 	writeGraph(outputFileName, unitigGraph, minCoverage, k);
+	writePaths("paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 }
 
 int main(int argc, char** argv)
@@ -120,5 +146,5 @@ int main(int argc, char** argv)
 	std::cerr << result.maxPerChunk << " max windowchunk size" << std::endl;
 	std::cerr << matches.size() << " mapping matches" << std::endl;
 	addKmerMatches(numThreads, readSequences, matches, graphk, graphd);
-	makeGraph(readKmerLengths, matches, minCoverage, "graph.gfa", graphk);
+	makeGraph(readKmerLengths, readNames, matches, minCoverage, "graph.gfa", graphk);
 }
