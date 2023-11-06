@@ -10,6 +10,7 @@
 #include "KmerMatcher.h"
 #include "MatchGroup.h"
 #include "UnitigGraph.h"
+#include "GraphCleaner.h"
 
 void writePaths(const std::string& filename, const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readUnitigGraphPaths, const size_t k)
 {
@@ -41,6 +42,15 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	UnitigGraph unitigGraph;
 	std::vector<ReadPathBundle> readUnitigGraphPaths;
 	std::tie(unitigGraph, readUnitigGraphPaths) = makeUnitigGraph(kmerGraph, readKmerGraphPaths, minCoverage);
+	std::cerr << unitigGraph.nodeCount() << " nodes before cleaning" << std::endl;
+	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
+	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
+	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
+	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
+	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
+	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
+	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
+	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
 	writeGraph(outputFileName, unitigGraph, minCoverage, k);
 	writePaths("paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 }
