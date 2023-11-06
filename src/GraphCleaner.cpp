@@ -78,21 +78,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> cleanUnitigGraph(const Uniti
 	RankBitvector keep;
 	keep.resize(unitigGraph.nodeCount());
 	bool removeAny = false;
-	SparseEdgeContainer edges;
-	edges.resize(unitigGraph.nodeCount());
-	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
-	{
-		for (auto pair : unitigGraph.edgeCoverages.getValues(std::make_pair(i, true)))
-		{
-			edges.addEdge(std::make_pair(i, true), pair.first);
-			edges.addEdge(reverse(pair.first), std::make_pair(i, false));
-		}
-		for (auto pair : unitigGraph.edgeCoverages.getValues(std::make_pair(i, false)))
-		{
-			edges.addEdge(std::make_pair(i, false), pair.first);
-			edges.addEdge(reverse(pair.first), std::make_pair(i, true));
-		}
-	}
+	SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
 		keep.set(i, true);

@@ -12,6 +12,7 @@
 #include "UnitigGraph.h"
 #include "GraphCleaner.h"
 #include "AlnHaploFilter.h"
+#include "GraphPhaser.h"
 
 void writePaths(const std::string& filename, const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readUnitigGraphPaths, const size_t k)
 {
@@ -52,6 +53,21 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
 	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
 	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
+	auto phaseBlocks = getGraphPhaseBlockNodes(unitigGraph, readUnitigGraphPaths, 17);
+	std::cerr << phaseBlocks.size() << " phase blocks" << std::endl;
+	for (size_t i = 0; i < phaseBlocks.size(); i++)
+	{
+		for (size_t j = 0; j < phaseBlocks[i].first.size(); j++)
+		{
+			std::cerr << "node_" << phaseBlocks[i].first[j] << ",";
+		}
+		std::cerr << std::endl;
+		for (size_t j = 0; j < phaseBlocks[i].second.size(); j++)
+		{
+			std::cerr << "node_" << phaseBlocks[i].second[j] << ",";
+		}
+		std::cerr << std::endl;
+	}
 	writeGraph(outputFileName, unitigGraph, minCoverage, k);
 	writePaths("paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 }

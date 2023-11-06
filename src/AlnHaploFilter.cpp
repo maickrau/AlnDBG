@@ -1,6 +1,7 @@
 #include <cassert>
 #include <phmap.h>
 #include "AlnHaploFilter.h"
+#include "Common.h"
 
 class AlnSpan
 {
@@ -29,32 +30,6 @@ std::vector<std::pair<uint32_t, uint32_t>> getMergedSpans(const std::vector<std:
 		}
 	}
 	return result;
-}
-
-size_t intersectSize(const std::vector<size_t>& left, const std::vector<size_t>& right)
-{
-	size_t lefti = 0;
-	size_t righti = 0;
-	size_t count = 0;
-	while (lefti < left.size() && righti < right.size())
-	{
-		if (left[lefti] < right[righti])
-		{
-			lefti += 1;
-		}
-		else if (right[righti] < left[lefti])
-		{
-			righti += 1;
-		}
-		else
-		{
-			assert(left[lefti] == right[righti]);
-			lefti += 1;
-			righti += 1;
-			count += 1;
-		}
-	}
-	return count;
 }
 
 void forbidPerRead(const size_t readi, const std::vector<AlnSpan>& spansHere, std::vector<bool>& kept, const size_t minHapCoverage, const size_t maxCrossCoverage)
