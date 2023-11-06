@@ -230,7 +230,7 @@ void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& 
 			addKmer(firstKmerPositionInLeft, extraKmerPositionsInLeft, leftSyncmers[leftLeadingIndex].first, leftSyncmers[leftLeadingIndex].second);
 			leftLeadingIndex += 1;
 		}
-		while (leftTrailingIndex < leftSyncmers.size() && leftSyncmers[leftTrailingIndex].second + w < interpolatedLeftPos && leftSyncmers[leftLeadingIndex].second < leftEnd)
+		while (leftTrailingIndex < leftSyncmers.size() && leftSyncmers[leftTrailingIndex].second + w < interpolatedLeftPos && leftSyncmers[leftTrailingIndex].second < leftEnd)
 		{
 			removeKmer(firstKmerPositionInLeft, extraKmerPositionsInLeft, leftSyncmers[leftTrailingIndex].first, leftSyncmers[leftTrailingIndex].second);
 			leftTrailingIndex += 1;
