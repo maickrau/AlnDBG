@@ -11,6 +11,7 @@
 #include "MatchGroup.h"
 #include "UnitigGraph.h"
 #include "GraphCleaner.h"
+#include "AlnHaploFilter.h"
 
 void writePaths(const std::string& filename, const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readUnitigGraphPaths, const size_t k)
 {
@@ -53,6 +54,21 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
 	writeGraph(outputFileName, unitigGraph, minCoverage, k);
 	writePaths("paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+}
+
+void doHaplofilter(std::vector<MatchGroup>& matches, const std::vector<size_t>& readLengths)
+{
+	std::vector<bool> kept = getValidAlignments(matches, readLengths, 5, 2);
+	size_t numRemoved = 0;
+	assert(kept.size() == matches.size());
+	for (size_t i = matches.size()-1; i < matches.size(); i--)
+	{
+		if (kept[i]) continue;
+		std::swap(matches[i], matches.back());
+		matches.pop_back();
+		numRemoved += 1;
+	}
+	std::cerr << numRemoved << " mapping matches removed by haplofilter" << std::endl;
 }
 
 int main(int argc, char** argv)
@@ -156,5 +172,6 @@ int main(int argc, char** argv)
 	std::cerr << result.maxPerChunk << " max windowchunk size" << std::endl;
 	std::cerr << matches.size() << " mapping matches" << std::endl;
 	addKmerMatches(numThreads, readSequences, matches, graphk, graphd);
+//	doHaplofilter(matches, readKmerLengths);
 	makeGraph(readKmerLengths, readNames, matches, minCoverage, "graph.gfa", graphk);
 }
