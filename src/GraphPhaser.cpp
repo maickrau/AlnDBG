@@ -9,35 +9,50 @@ std::pair<size_t, size_t> findSimpleBubble(const SparseEdgeContainer& activeEdge
 	if (graph.coverages[start.first] < approxOneHapCoverage * 1.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
 	if (graph.coverages[start.first] > approxOneHapCoverage * 2.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
 	std::pair<size_t, bool> otherSideNode { std::numeric_limits<size_t>::max(), true };
-	size_t otherSideNodeFound = 0;
 	for (auto edge : activeEdges.getEdges(start))
 	{
 		if (graph.coverages[edge.first] < approxOneHapCoverage * 0.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
 		if (graph.coverages[edge.first] > approxOneHapCoverage * 1.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
-		if (activeEdges.getEdges(edge).size() > 1) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+		if (activeEdges.getEdges(edge).size() != 1) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
 		if (activeEdges.getEdges(reverse(edge)).size() != 1) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
-		if (activeEdges.getEdges(edge).size() == 1)
+		if (otherSideNode.first == std::numeric_limits<size_t>::max())
 		{
-			otherSideNodeFound += 1;
-			if (otherSideNode.first == std::numeric_limits<size_t>::max())
-			{
-				otherSideNode = activeEdges.getEdges(edge)[0];
-			}
-			else
-			{
-				if (activeEdges.getEdges(edge)[0] != otherSideNode) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
-			}
+			otherSideNode = activeEdges.getEdges(edge)[0];
+		}
+		else
+		{
+			if (activeEdges.getEdges(edge)[0] != otherSideNode) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
 		}
 	}
-	if (otherSideNodeFound == 1) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+	if (graph.coverages[otherSideNode.first] < approxOneHapCoverage * 1.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+	if (graph.coverages[otherSideNode.first] > approxOneHapCoverage * 2.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
 	auto edges = activeEdges.getEdges(start);
-	if ((graph.lengths[edges[0].first] < 100 || graph.lengths[edges[1].first] < 100) && (otherSideNodeFound != 2)) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
-	if (otherSideNodeFound == 2)
-	{
-		if (graph.coverages[otherSideNode.first] < approxOneHapCoverage * 1.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
-		if (graph.coverages[otherSideNode.first] > approxOneHapCoverage * 2.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
-	}
 	return std::make_pair(edges[0].first, edges[1].first);
+}
+
+std::pair<size_t, size_t> findHighCoverageFork(const SparseEdgeContainer& activeEdges, const std::pair<size_t, bool> start, const UnitigGraph& graph, const double approxOneHapCoverage)
+{
+	if (activeEdges.getEdges(start).size() != 2) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+	if (graph.coverages[start.first] < approxOneHapCoverage * 1.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+	if (graph.coverages[start.first] > approxOneHapCoverage * 2.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+	if (graph.lengths[start.first] < 100) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+	for (auto edge : activeEdges.getEdges(start))
+	{
+		if (graph.coverages[edge.first] < approxOneHapCoverage * 0.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+		if (graph.coverages[edge.first] > approxOneHapCoverage * 1.5) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+		if (activeEdges.getEdges(reverse(edge)).size() != 1) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+		if (graph.lengths[edge.first] < 100) return std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+	}
+	auto edges = activeEdges.getEdges(start);
+	return std::make_pair(edges[0].first, edges[1].first);
+}
+
+std::pair<size_t, size_t> findPhaseableStructure(const SparseEdgeContainer& activeEdges, const std::pair<size_t, bool> start, const UnitigGraph& graph, const double approxOneHapCoverage)
+{
+	auto found = findSimpleBubble(activeEdges, start, graph, approxOneHapCoverage);
+	if (found.first != std::numeric_limits<size_t>::max()) return found;
+	found = findHighCoverageFork(activeEdges, start, graph, approxOneHapCoverage);
+	return found;
 }
 
 std::vector<std::pair<size_t, size_t>> getSimpleBubbles(const SparseEdgeContainer& activeEdges, const UnitigGraph& graph, const double approxOneHapCoverage)
@@ -45,14 +60,14 @@ std::vector<std::pair<size_t, size_t>> getSimpleBubbles(const SparseEdgeContaine
 	phmap::flat_hash_set<std::pair<size_t, size_t>> result;
 	for (size_t i = 0; i < activeEdges.size(); i++)
 	{
-		auto fwBubble = findSimpleBubble(activeEdges, std::make_pair(i, true), graph, approxOneHapCoverage);
+		auto fwBubble = findPhaseableStructure(activeEdges, std::make_pair(i, true), graph, approxOneHapCoverage);
 		if (fwBubble.first < activeEdges.size())
 		{
 			assert(fwBubble.second < activeEdges.size());
 			assert(fwBubble.first != fwBubble.second);
 			result.emplace(std::min(fwBubble.first, fwBubble.second), std::max(fwBubble.first, fwBubble.second));
 		}
-		auto bwBubble = findSimpleBubble(activeEdges, std::make_pair(i, true), graph, approxOneHapCoverage);
+		auto bwBubble = findPhaseableStructure(activeEdges, std::make_pair(i, false), graph, approxOneHapCoverage);
 		if (bwBubble.first < activeEdges.size())
 		{
 			assert(bwBubble.second < activeEdges.size());
@@ -414,6 +429,7 @@ std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> getGraphPhaseBl
 {
 	SparseEdgeContainer activeEdges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
 	std::vector<std::pair<size_t, size_t>> simpleBubbles = getSimpleBubbles(activeEdges, unitigGraph, approxOneHapCoverage);
+	if (simpleBubbles.size() == 0) return std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> {};
 	std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> readsPerBubbleAllele = getReadsPerBubbleAllele(readPaths, simpleBubbles);
 	clearInvalidBubbles(readsPerBubbleAllele, simpleBubbles);
 	std::vector<std::vector<size_t>> bubbleIndicesPerCluster = mergeBubblesToClusters(simpleBubbles, readsPerBubbleAllele);
