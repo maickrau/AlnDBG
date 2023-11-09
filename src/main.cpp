@@ -36,7 +36,35 @@ void writePaths(const std::string& filename, const std::vector<size_t>& readLeng
 	}
 }
 
-void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k)
+bool haplotypeMismatch(const size_t leftRead, const size_t rightRead, const phmap::flat_hash_map<size_t, std::vector<std::pair<size_t, bool>>>& readBelongsToPhaseBlock)
+{
+	if (readBelongsToPhaseBlock.count(leftRead) == 0) return false;
+	if (readBelongsToPhaseBlock.count(rightRead) == 0) return false;
+	size_t lefti = 0;
+	size_t righti = 0;
+	const std::vector<std::pair<size_t, bool>>& leftvec = readBelongsToPhaseBlock.at(leftRead);
+	const std::vector<std::pair<size_t, bool>>& rightvec = readBelongsToPhaseBlock.at(rightRead);
+	while (lefti < leftvec.size() && righti < rightvec.size())
+	{
+		if (leftvec[lefti].first < rightvec[righti].first)
+		{
+			lefti += 1;
+			continue;
+		}
+		if (rightvec[righti].first < leftvec[lefti].first)
+		{
+			righti += 1;
+			continue;
+		}
+		assert(leftvec[lefti].first == rightvec[righti].first);
+		if (leftvec[lefti].second != rightvec[righti].second) return true;
+		lefti += 1;
+		righti += 1;
+	}
+	return false;
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> makeGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage)
 {
 	KmerGraph kmerGraph;
 	std::vector<ReadPathBundle> readKmerGraphPaths;
@@ -53,22 +81,49 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
 	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
 	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
+	return std::make_pair(std::move(unitigGraph), std::move(readUnitigGraphPaths));
+}
+
+void forbidAlnsFromDifferentHaplotypes(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readUnitigGraphPaths, std::vector<MatchGroup>& matches, const std::vector<std::string>& readNames)
+{
 	auto phaseBlocks = getGraphPhaseBlockNodes(unitigGraph, readUnitigGraphPaths, 17);
 	std::cerr << phaseBlocks.size() << " phase blocks" << std::endl;
+	phmap::flat_hash_map<size_t, std::vector<std::pair<size_t, bool>>> readBelongsToPhaseBlock;
 	for (size_t i = 0; i < phaseBlocks.size(); i++)
 	{
-		for (size_t j = 0; j < phaseBlocks[i].first.size(); j++)
+		auto reads = getReadsPerPhaseBlock(unitigGraph, readUnitigGraphPaths, phaseBlocks[i]);
+		for (auto read : reads.first)
 		{
-			std::cerr << "node_" << phaseBlocks[i].first[j] << ",";
+			readBelongsToPhaseBlock[read].emplace_back(i, true);
 		}
-		std::cerr << std::endl;
-		for (size_t j = 0; j < phaseBlocks[i].second.size(); j++)
+		for (auto read : reads.second)
 		{
-			std::cerr << "node_" << phaseBlocks[i].second[j] << ",";
+			readBelongsToPhaseBlock[read].emplace_back(i, false);
 		}
-		std::cerr << std::endl;
 	}
-	writeGraph(outputFileName, unitigGraph, minCoverage, k);
+	size_t countForbidden = 0;
+	for (size_t i = matches.size()-1; i < matches.size(); i--)
+	{
+		if (haplotypeMismatch(matches[i].leftRead, matches[i].rightRead, readBelongsToPhaseBlock))
+		{
+			std::swap(matches[i], matches.back());
+			matches.pop_back();
+			countForbidden += 1;
+		}
+	}
+	std::cerr << countForbidden << " alns forbidden by phasing" << std::endl;
+}
+
+void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k)
+{
+	UnitigGraph unitigGraph;
+	std::vector<ReadPathBundle> readUnitigGraphPaths;
+	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
+	forbidAlnsFromDifferentHaplotypes(unitigGraph, readUnitigGraphPaths, matches, readNames);
+	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
+	auto nodeSequences  = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
+	writeGraph(outputFileName, unitigGraph, nodeSequences, k);
+//	writeGraph(outputFileName, unitigGraph, k);
 	writePaths("paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 }
 
@@ -94,7 +149,7 @@ int main(int argc, char** argv)
 	size_t numWindows = std::stoull(argv[3]);
 	size_t windowSize = std::stoull(argv[4]);
 	size_t minAlignmentLength = std::stoull(argv[5]);
-	const size_t graphk = 31;
+	const size_t graphk = 21;
 	const size_t minCoverage = 2;
 	const size_t graphd = 50;
 	std::vector<std::string> readFiles;
@@ -189,5 +244,5 @@ int main(int argc, char** argv)
 	std::cerr << matches.size() << " mapping matches" << std::endl;
 	addKmerMatches(numThreads, readSequences, matches, graphk, graphd);
 //	doHaplofilter(matches, readKmerLengths);
-	makeGraph(readKmerLengths, readNames, matches, minCoverage, "graph.gfa", graphk);
+	makeGraph(readKmerLengths, readNames, readSequences, matches, minCoverage, "graph.gfa", graphk);
 }

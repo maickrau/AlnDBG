@@ -206,14 +206,13 @@ MostlySparse2DHashmap<uint8_t, size_t> getUnitigEdgeCoverages(const std::vector<
 	return result;
 }
 
-void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, const size_t minCoverage, const size_t k)
+void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, const size_t k)
 {
 	std::ofstream graph { outputFileName };
 	size_t countNodes = 0;
 	size_t countEdges = 0;
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
-		if (unitigGraph.coverages[i] < minCoverage) continue;
 		graph << "S\tnode_" << i << "\t*\tLN:i:" << (unitigGraph.lengths[i]+k-1) << "\tll:f:" << unitigGraph.coverages[i] << "\tFC:i:" << unitigGraph.coverages[i] * (unitigGraph.lengths[i]+k-1) << std::endl;
 		countNodes += 1;
 	}
@@ -222,14 +221,42 @@ void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, cons
 		auto fw = std::make_pair(i, true);
 		for (auto pair : unitigGraph.edgeCoverages.getValues(fw))
 		{
-			if (pair.second < minCoverage) continue;
 			graph << "L\tnode_" << i << "\t+\tnode_" << pair.first.first << "\t" << (pair.first.second ? "+" : "-") << "\t" << (k-1) << "M\tec:i:" << pair.second << std::endl;
 			countEdges += 1;
 		}
 		auto bw = std::make_pair(i, false);
 		for (auto pair : unitigGraph.edgeCoverages.getValues(bw))
 		{
-			if (pair.second < minCoverage) continue;
+			graph << "L\tnode_" << i << "\t-\tnode_" << pair.first.first << "\t" << (pair.first.second ? "+" : "-") << "\t" << (k-1) << "M\tec:i:" << pair.second << std::endl;
+			countEdges += 1;
+		}
+	}
+	std::cerr << countNodes << " graph nodes" << std::endl;
+	std::cerr << countEdges << " graph edges" << std::endl;
+}
+
+void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, const std::vector<TwobitString>& nodeSequences, const size_t k)
+{
+	std::ofstream graph { outputFileName };
+	size_t countNodes = 0;
+	size_t countEdges = 0;
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		assert(nodeSequences[i].size() == (unitigGraph.lengths[i]+k-1));
+		graph << "S\tnode_" << i << "\t" << nodeSequences[i].toString() << "\tLN:i:" << (unitigGraph.lengths[i]+k-1) << "\tll:f:" << unitigGraph.coverages[i] << "\tFC:i:" << unitigGraph.coverages[i] * (unitigGraph.lengths[i]+k-1) << std::endl;
+		countNodes += 1;
+	}
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		auto fw = std::make_pair(i, true);
+		for (auto pair : unitigGraph.edgeCoverages.getValues(fw))
+		{
+			graph << "L\tnode_" << i << "\t+\tnode_" << pair.first.first << "\t" << (pair.first.second ? "+" : "-") << "\t" << (k-1) << "M\tec:i:" << pair.second << std::endl;
+			countEdges += 1;
+		}
+		auto bw = std::make_pair(i, false);
+		for (auto pair : unitigGraph.edgeCoverages.getValues(bw))
+		{
 			graph << "L\tnode_" << i << "\t-\tnode_" << pair.first.first << "\t" << (pair.first.second ? "+" : "-") << "\t" << (k-1) << "M\tec:i:" << pair.second << std::endl;
 			countEdges += 1;
 		}
@@ -406,6 +433,7 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNod
 						}
 					}
 					readPos += kmerGraphNodeLengths[kmerGraphReadPaths[i].paths[j].path[k] & maskUint64_t];
+					if (k == 0) readPos -= kmerGraphReadPaths[i].paths[j].pathLeftClipKmers;
 					lastPos = thisPos;
 					continue;
 				}
@@ -417,6 +445,7 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNod
 				if (lastPos.first != std::numeric_limits<uint64_t>::max() && thisPos.first == lastPos.first && thisPos.second == lastPos.second+1)
 				{
 					readPos += kmerGraphNodeLengths[kmerGraphReadPaths[i].paths[j].path[k] & maskUint64_t];
+					if (k == 0) readPos -= kmerGraphReadPaths[i].paths[j].pathLeftClipKmers;
 					lastPos = thisPos;
 					continue;
 				}
@@ -429,6 +458,7 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNod
 					{
 						result[i].paths.back().path.emplace_back(thisPos.first);
 						readPos += kmerGraphNodeLengths[kmerGraphReadPaths[i].paths[j].path[k] & maskUint64_t];
+						if (k == 0) readPos -= kmerGraphReadPaths[i].paths[j].pathLeftClipKmers;
 						lastPos = thisPos;
 						continue;
 					}
@@ -460,6 +490,7 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNod
 				result[i].paths.back().path.emplace_back(thisPos.first);
 				lastPos = thisPos;
 				readPos += kmerGraphNodeLengths[kmerGraphReadPaths[i].paths[j].path[k] & maskUint64_t];
+				if (k == 0) readPos -= kmerGraphReadPaths[i].paths[j].pathLeftClipKmers;
 			}
 			if (lastPos.first != std::numeric_limits<uint64_t>::max())
 			{
@@ -518,3 +549,65 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> filterUnitigGraph(const Unit
 	auto resultReadPaths = getReadPaths(unitigGraph.lengths, readPaths, kmerNodeToUnitig, unitigs, result);
 	return std::make_pair(std::move(result), std::move(resultReadPaths));
 }
+
+void addSequence(std::vector<TwobitString>& sequences, std::vector<std::vector<bool>>& bpSequenceGotten, const uint64_t node, const size_t nodeKmerStartPos, const size_t nodeKmerEndPos, const size_t readI, const size_t readStartPos, const std::vector<TwobitString>& readSequences, const size_t k)
+{
+	for (size_t i = 0; i < nodeKmerEndPos - nodeKmerStartPos + k - 1; i++)
+	{
+		uint8_t c = readSequences[readI].get(readStartPos + i);
+		size_t nodePos = nodeKmerStartPos + i;
+		if ((node & firstBitUint64_t) == 0)
+		{
+			c = 3-c;
+			nodePos = sequences[node & maskUint64_t].size() - 1 - nodePos;
+		}
+		if (!bpSequenceGotten[node & maskUint64_t][nodePos])
+		{
+			sequences[node & maskUint64_t].set(nodePos, c);
+			bpSequenceGotten[node & maskUint64_t][nodePos] = true;
+		}
+		else
+		{
+			assert(sequences[node & maskUint64_t].get(nodePos) == c);
+		}
+	}
+}
+
+std::vector<TwobitString> getNodeSequences(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t kmerSize, const std::vector<TwobitString>& readSequences)
+{
+	std::vector<std::vector<bool>> bpSequenceGotten;
+	std::vector<TwobitString> sequences;
+	bpSequenceGotten.resize(unitigGraph.nodeCount());
+	sequences.resize(unitigGraph.nodeCount());
+	for (size_t i = 0; i < unitigGraph.nodeCount();i++)
+	{
+		bpSequenceGotten[i].resize(unitigGraph.lengths[i] + kmerSize - 1, false);
+		sequences[i].resize(unitigGraph.lengths[i] + kmerSize - 1);
+	}
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			size_t readStartPos = readPaths[i].paths[j].readStartPos;
+			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
+			{
+				uint64_t node = readPaths[i].paths[j].path[k];
+				size_t nodeKmerStartPos = 0;
+				size_t nodeKmerEndPos = unitigGraph.lengths[node & maskUint64_t];
+				if (k == 0) nodeKmerStartPos = readPaths[i].paths[j].pathLeftClipKmers;
+				if (k == readPaths[i].paths[j].path.size()-1) nodeKmerEndPos -= readPaths[i].paths[j].pathRightClipKmers;
+				addSequence(sequences, bpSequenceGotten, node, nodeKmerStartPos, nodeKmerEndPos, i, readStartPos, readSequences, kmerSize);
+				readStartPos += nodeKmerEndPos - nodeKmerStartPos;
+			}
+		}
+	}
+	for (size_t i = 0; i < bpSequenceGotten.size(); i++)
+	{
+		for (size_t j = 0; j < bpSequenceGotten[i].size(); j++)
+		{
+			assert(bpSequenceGotten[i][j]);
+		}
+	}
+	return sequences;
+}
+

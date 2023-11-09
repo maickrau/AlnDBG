@@ -282,6 +282,134 @@ void clearInvalidBubbles(std::vector<std::pair<std::vector<size_t>, std::vector<
 	}
 }
 
+size_t findbidirected(std::vector<size_t>& parent, const size_t i)
+{
+	assert((i & firstBitUint64_t) == 0);
+	if (parent[i] == i) return i;
+	auto result = findbidirected(parent, parent[i] & maskUint64_t) ^ (parent[i] & firstBitUint64_t);
+	parent[i] = result;
+	return result;
+}
+
+void merge(std::vector<size_t>& parent, const size_t i, const size_t j, const bool fw)
+{
+	auto leftParent = findbidirected(parent, i);
+	auto rightParent = findbidirected(parent, j);
+	if ((leftParent & maskUint64_t) == (rightParent & maskUint64_t))
+	{
+		assert((leftParent & firstBitUint64_t) ^ (rightParent & firstBitUint64_t) ^ fw);
+		return;
+	}
+	parent[rightParent & maskUint64_t] = (leftParent & maskUint64_t) + (((leftParent & firstBitUint64_t) ^ (rightParent & firstBitUint64_t) ^ fw) ? 0 : firstBitUint64_t);
+}
+
+std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> mergePhaseBlocks(const std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>>& blocks, const std::vector<ReadPathBundle>& readPaths)
+{
+	phmap::flat_hash_map<size_t, size_t> nodeToBlockAllele;
+	for (size_t i = 0; i < blocks.size(); i++)
+	{
+		for (auto node : blocks[i].first)
+		{
+			assert(nodeToBlockAllele.count(node) == 0);
+			nodeToBlockAllele[node] = i + firstBitUint64_t;
+		}
+		for (auto node : blocks[i].second)
+		{
+			assert(nodeToBlockAllele.count(node) == 0);
+			nodeToBlockAllele[node] = i;
+		}
+	}
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> connectionCounts;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		phmap::flat_hash_set<size_t> blocksHere;
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
+			{
+				if (nodeToBlockAllele.count(readPaths[i].paths[j].path[k] & maskUint64_t) == 0) continue;
+				blocksHere.insert(nodeToBlockAllele.at(readPaths[i].paths[j].path[k] & maskUint64_t));
+			}
+		}
+		if (blocksHere.size() >= 2)
+		{
+			for (auto b1 : blocksHere)
+			{
+				for (auto b2 : blocksHere)
+				{
+					if (b1 < b2) connectionCounts[std::make_pair(b1, b2)] += 1;
+					if (b2 < b1) connectionCounts[std::make_pair(b2, b1)] += 1;
+				}
+			}
+		}
+	}
+	std::vector<size_t> parent;
+	for (size_t i = 0; i < blocks.size(); i++)
+	{
+		parent.push_back(i);
+	}
+	for (size_t i = 0; i < blocks.size(); i++)
+	{
+		for (size_t j = i+1; j < blocks.size(); j++)
+		{
+			bool hasBothNormal = false;
+			bool hasBothCross = false;
+			bool hasAnyNormal = false;
+			bool hasAnyCross = false;
+			if (connectionCounts.count(std::make_pair(i, j)) == 1 && connectionCounts.count(std::make_pair(i + firstBitUint64_t, j + firstBitUint64_t)) == 1)
+			{
+				if (connectionCounts.at(std::make_pair(i, j)) >= 2 && connectionCounts.at(std::make_pair(i + firstBitUint64_t, j + firstBitUint64_t)) >= 2)
+				{
+					hasBothNormal = true;
+				}
+			}
+			if (connectionCounts.count(std::make_pair(i + firstBitUint64_t, j)) == 1 && connectionCounts.count(std::make_pair(i, j + firstBitUint64_t)) == 1)
+			{
+				if (connectionCounts.at(std::make_pair(i + firstBitUint64_t, j)) >= 2 && connectionCounts.at(std::make_pair(i, j + firstBitUint64_t)) >= 2)
+				{
+					hasBothCross = true;
+				}
+			}
+			if (connectionCounts.count(std::make_pair(i, j)) == 1) hasAnyNormal = true;
+			if (connectionCounts.count(std::make_pair(i + firstBitUint64_t, j + firstBitUint64_t)) == 1) hasAnyNormal = true;
+			if (connectionCounts.count(std::make_pair(i, j + firstBitUint64_t)) == 1) hasAnyCross = true;
+			if (connectionCounts.count(std::make_pair(i + firstBitUint64_t, j)) == 1) hasAnyCross = true;
+			if (hasBothNormal && !hasAnyCross)
+			{
+				merge(parent, i, j, true);
+			}
+			if (hasBothCross && !hasAnyNormal)
+			{
+				merge(parent, i, j, false);
+			}
+		}
+	}
+	RankBitvector kept;
+	kept.resize(parent.size());
+	for (size_t i = 0; i < parent.size(); i++)
+	{
+		if (findbidirected(parent, i) == i) kept.set(i, true);
+	}
+	kept.buildRanks();
+	std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> result;
+	result.resize(kept.getRank(kept.size()-1) + (kept.get(kept.size()-1) ? 1 : 0));
+	for (size_t i = 0; i < parent.size(); i++)
+	{
+		size_t target = findbidirected(parent, i);
+		if (target & firstBitUint64_t)
+		{
+			result[kept.getRank(target & maskUint64_t)].first.insert(result[kept.getRank(target & maskUint64_t)].first.end(), blocks[i].first.begin(), blocks[i].first.end());
+			result[kept.getRank(target & maskUint64_t)].second.insert(result[kept.getRank(target & maskUint64_t)].second.end(), blocks[i].second.begin(), blocks[i].second.end());
+		}
+		else
+		{
+			result[kept.getRank(target & maskUint64_t)].second.insert(result[kept.getRank(target & maskUint64_t)].second.end(), blocks[i].first.begin(), blocks[i].first.end());
+			result[kept.getRank(target & maskUint64_t)].first.insert(result[kept.getRank(target & maskUint64_t)].first.end(), blocks[i].second.begin(), blocks[i].second.end());
+		}
+	}
+	return result;
+}
+
 std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> getGraphPhaseBlockNodes(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
 	SparseEdgeContainer activeEdges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
@@ -290,5 +418,51 @@ std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> getGraphPhaseBl
 	clearInvalidBubbles(readsPerBubbleAllele, simpleBubbles);
 	std::vector<std::vector<size_t>> bubbleIndicesPerCluster = mergeBubblesToClusters(simpleBubbles, readsPerBubbleAllele);
 	std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> result = orientBubblesAndGetPhaseBlocks(bubbleIndicesPerCluster, readsPerBubbleAllele, simpleBubbles);
+	result = mergePhaseBlocks(result, readPaths);
+	return result;
+}
+
+std::pair<std::vector<size_t>, std::vector<size_t>> getReadsPerPhaseBlock(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::pair<std::vector<size_t>, std::vector<size_t>>& phaseBlock)
+{
+	phmap::flat_hash_set<size_t> leftNodes { phaseBlock.first.begin(), phaseBlock.first.end() };
+	phmap::flat_hash_set<size_t> rightNodes { phaseBlock.second.begin(), phaseBlock.second.end() };
+	std::pair<std::vector<size_t>, std::vector<size_t>> result;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		size_t leftScore = 0;
+		size_t rightScore = 0;
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
+			{
+				if (leftNodes.count(readPaths[i].paths[j].path[k] & maskUint64_t) == 1)
+				{
+					size_t matchSize = unitigGraph.lengths[readPaths[i].paths[j].path[k] & maskUint64_t];
+					if (k == 0) matchSize -= readPaths[i].paths[j].pathLeftClipKmers;
+					if (k == readPaths[i].paths[j].path.size()-1) matchSize -= readPaths[i].paths[j].pathRightClipKmers;
+					assert(matchSize >= 1);
+					assert(matchSize <= unitigGraph.lengths[readPaths[i].paths[j].path[k] & maskUint64_t]);
+					leftScore += matchSize;
+				}
+				else if (rightNodes.count(readPaths[i].paths[j].path[k] & maskUint64_t) == 1)
+				{
+					size_t matchSize = unitigGraph.lengths[readPaths[i].paths[j].path[k] & maskUint64_t];
+					if (k == 0) matchSize -= readPaths[i].paths[j].pathLeftClipKmers;
+					if (k == readPaths[i].paths[j].path.size()-1) matchSize -= readPaths[i].paths[j].pathRightClipKmers;
+					assert(matchSize >= 1);
+					assert(matchSize <= unitigGraph.lengths[readPaths[i].paths[j].path[k] & maskUint64_t]);
+					rightScore += matchSize;
+				}
+			}
+		}
+		if (leftScore > rightScore)
+		{
+			result.first.emplace_back(i);
+		}
+		else if (rightScore > leftScore)
+		{
+			result.second.emplace_back(i);
+		}
+	}
 	return result;
 }
