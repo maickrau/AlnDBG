@@ -152,7 +152,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSimpleStructures(cons
 	auto edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
 	phmap::flat_hash_set<size_t> possiblyResolvableNodes = getPossiblyResolvableNodes(unitigGraph, edges, averageOneHaplotypeCoverage);
 	auto resolutions = getValidResolutions(unitigGraph, edges, readPaths, possiblyResolvableNodes, averageOneHaplotypeCoverage);
-	std::cerr << resolutions.size() << " simple nodes resolved" << std::endl;
+	std::cerr << resolutions.size() << " simple repeat nodes resolved" << std::endl;
 	UnitigGraph newGraph;
 	std::vector<ReadPathBundle> newPaths;
 	std::tie(newGraph, newPaths) = resolve(unitigGraph, readPaths, resolutions);
