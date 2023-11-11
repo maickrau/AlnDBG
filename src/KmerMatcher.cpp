@@ -180,7 +180,7 @@ void removeKmer(phmap::flat_hash_map<uint64_t, uint64_t>& firstKmerPositionInLef
 	}
 }
 
-void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& mappingMatch, const size_t k, const size_t w)
+void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& mappingMatch, const size_t k, const size_t d)
 {
 	thread_local size_t lastLeftRead = std::numeric_limits<size_t>::max();
 	thread_local size_t lastLeftStart = std::numeric_limits<size_t>::max();
@@ -188,6 +188,7 @@ void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& 
 	thread_local std::vector<std::pair<uint64_t, size_t>> leftSyncmers;
 	assert(mappingMatch.leftEnd - mappingMatch.leftStart < std::numeric_limits<uint16_t>::max());
 	assert(mappingMatch.rightEnd - mappingMatch.rightStart < std::numeric_limits<uint16_t>::max());
+	const size_t syncmerw = 7;
 	assert(k <= 31);
 	assert(k % 2 == 1);
 	size_t leftStart = mappingMatch.leftStart;
@@ -202,7 +203,7 @@ void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& 
 	if (left != lastLeftRead || leftStart != lastLeftStart || leftEnd > lastLeftEnd)
 	{
 		leftSyncmers.clear();
-		iterateSyncmers(readSequences, k, 20, left, leftStart, leftEnd, true, [&leftSyncmers](const size_t kmer, const size_t pos)
+		iterateSyncmers(readSequences, k, syncmerw, left, leftStart, leftEnd, true, [&leftSyncmers](const size_t kmer, const size_t pos)
 		{
 			leftSyncmers.emplace_back(kmer, pos);
 		});
@@ -211,34 +212,34 @@ void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& 
 		lastLeftEnd = leftEnd;
 	}
 	std::vector<std::pair<size_t, size_t>> currentMatchesPerDiagonal;
-	size_t diagonalCount = 2*w+1;
-	size_t zeroDiagonal = w;
+	size_t diagonalCount = 2*d+1;
+	size_t zeroDiagonal = d;
 	if (leftEnd-leftStart > rightEnd-rightStart)
 	{
 		diagonalCount += (leftEnd-leftStart)-(rightEnd-rightStart);
-		zeroDiagonal = w + (leftEnd-leftStart)-(rightEnd-rightStart);
+		zeroDiagonal = d + (leftEnd-leftStart)-(rightEnd-rightStart);
 	}
 	if (rightEnd-rightStart > leftEnd-leftStart) diagonalCount += (rightEnd-rightStart)-(leftEnd-leftStart);
 	currentMatchesPerDiagonal.resize(diagonalCount, std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()));
 	size_t leftLeadingIndex = 0;
 	size_t leftTrailingIndex = 0;
-	iterateSyncmers(readSequences, k, 20, right, rightStart, rightEnd, rightFw, [&firstKmerPositionInLeft, &extraKmerPositionsInLeft, &currentMatchesPerDiagonal, diagonalCount, zeroDiagonal, rightFw, left, right, leftStart, rightStart, leftEnd, rightEnd, w, k, &mappingMatch, &leftTrailingIndex, &leftLeadingIndex, &leftSyncmers](const size_t kmer, const size_t rightPos)
+	iterateSyncmers(readSequences, k, syncmerw, right, rightStart, rightEnd, rightFw, [&firstKmerPositionInLeft, &extraKmerPositionsInLeft, &currentMatchesPerDiagonal, diagonalCount, zeroDiagonal, rightFw, left, right, leftStart, rightStart, leftEnd, rightEnd, d, k, &mappingMatch, &leftTrailingIndex, &leftLeadingIndex, &leftSyncmers](const size_t kmer, const size_t rightPos)
 	{
 		size_t interpolatedLeftPos = (double)(rightPos) / (double)(rightEnd-rightStart) * (double)(leftEnd-leftStart);
-		while (leftLeadingIndex < leftSyncmers.size() && leftSyncmers[leftLeadingIndex].second <= interpolatedLeftPos + w && leftSyncmers[leftLeadingIndex].second < leftEnd)
+		while (leftLeadingIndex < leftSyncmers.size() && leftSyncmers[leftLeadingIndex].second <= interpolatedLeftPos + d && leftSyncmers[leftLeadingIndex].second < leftEnd)
 		{
 			addKmer(firstKmerPositionInLeft, extraKmerPositionsInLeft, leftSyncmers[leftLeadingIndex].first, leftSyncmers[leftLeadingIndex].second);
 			leftLeadingIndex += 1;
 		}
-		while (leftTrailingIndex < leftSyncmers.size() && leftSyncmers[leftTrailingIndex].second + w < interpolatedLeftPos && leftSyncmers[leftTrailingIndex].second < leftEnd)
+		while (leftTrailingIndex < leftSyncmers.size() && leftSyncmers[leftTrailingIndex].second + d < interpolatedLeftPos && leftSyncmers[leftTrailingIndex].second < leftEnd)
 		{
 			removeKmer(firstKmerPositionInLeft, extraKmerPositionsInLeft, leftSyncmers[leftTrailingIndex].first, leftSyncmers[leftTrailingIndex].second);
 			leftTrailingIndex += 1;
 		}
-		assert(rightPos + zeroDiagonal >= interpolatedLeftPos + w);
-		assert(rightPos + zeroDiagonal + w >= interpolatedLeftPos);
-		size_t minDiagonal = rightPos + zeroDiagonal - interpolatedLeftPos - w;
-		size_t maxDiagonal = rightPos + zeroDiagonal - interpolatedLeftPos + w;
+		assert(rightPos + zeroDiagonal >= interpolatedLeftPos + d);
+		assert(rightPos + zeroDiagonal + d >= interpolatedLeftPos);
+		size_t minDiagonal = rightPos + zeroDiagonal - interpolatedLeftPos - d;
+		size_t maxDiagonal = rightPos + zeroDiagonal - interpolatedLeftPos + d;
 		assert(maxDiagonal <= diagonalCount);
 		iterateKmerMatchPositions(kmer, firstKmerPositionInLeft, extraKmerPositionsInLeft, [zeroDiagonal, rightPos, minDiagonal, maxDiagonal, &currentMatchesPerDiagonal, &mappingMatch, rightFw, left, right, leftStart, rightStart, diagonalCount, k](const size_t leftPos)
 		{

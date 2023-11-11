@@ -83,7 +83,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> makeGraph(const std::vector<
 	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
 	return std::make_pair(std::move(unitigGraph), std::move(readUnitigGraphPaths));
 }
-
+/*
 void forbidAlnsFromDifferentHaplotypes(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readUnitigGraphPaths, std::vector<MatchGroup>& matches, const std::vector<std::string>& readNames)
 {
 	auto phaseBlocks = getGraphPhaseBlockNodes(unitigGraph, readUnitigGraphPaths, 17);
@@ -113,14 +113,15 @@ void forbidAlnsFromDifferentHaplotypes(const UnitigGraph& unitigGraph, const std
 	}
 	std::cerr << countForbidden << " alns forbidden by phasing" << std::endl;
 }
-
+*/
 void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k)
 {
 	UnitigGraph unitigGraph;
 	std::vector<ReadPathBundle> readUnitigGraphPaths;
 	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
-	forbidAlnsFromDifferentHaplotypes(unitigGraph, readUnitigGraphPaths, matches, readNames);
-	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
+//	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraph(unitigGraph, readUnitigGraphPaths, getGraphPhaseBlockNodes(unitigGraph, readUnitigGraphPaths, 17));
+//	forbidAlnsFromDifferentHaplotypes(unitigGraph, readUnitigGraphPaths, matches, readNames);
+//	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
 	auto nodeSequences  = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	writeGraph(outputFileName, unitigGraph, nodeSequences, k);
 //	writeGraph(outputFileName, unitigGraph, k);
@@ -149,7 +150,7 @@ int main(int argc, char** argv)
 	size_t numWindows = std::stoull(argv[3]);
 	size_t windowSize = std::stoull(argv[4]);
 	size_t minAlignmentLength = std::stoull(argv[5]);
-	const size_t graphk = 21;
+	const size_t graphk = 11;
 	const size_t minCoverage = 2;
 	const size_t graphd = 50;
 	std::vector<std::string> readFiles;

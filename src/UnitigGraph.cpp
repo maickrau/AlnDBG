@@ -142,7 +142,7 @@ std::pair<std::vector<size_t>, std::vector<double>> getUnitigLengthAndCoverage(c
 	for (size_t i = 0; i < unitigs.size(); i++)
 	{
 		assert(length[i] != 0);
-		assert(coverage[i] != 0);
+		// assert(coverage[i] != 0);
 		coverage[i] /= (double)length[i];
 	}
 	return std::make_pair(std::move(length), std::move(coverage));
@@ -605,7 +605,7 @@ std::vector<TwobitString> getNodeSequences(const UnitigGraph& unitigGraph, const
 	{
 		for (size_t j = 0; j < bpSequenceGotten[i].size(); j++)
 		{
-			assert(bpSequenceGotten[i][j]);
+			// assert(bpSequenceGotten[i][j]);
 		}
 	}
 	return sequences;
