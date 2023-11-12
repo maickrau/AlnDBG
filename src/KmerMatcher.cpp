@@ -291,6 +291,38 @@ void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& 
 	}
 }
 
+bool matchContained(MatchGroup::Match smaller, MatchGroup::Match bigger)
+{
+	if (smaller.leftStart <= bigger.leftStart) return false;
+	if (smaller.rightStart <= bigger.rightStart) return false;
+	if (smaller.leftStart + smaller.length >= bigger.leftStart + bigger.length) return false;
+	if (smaller.rightStart + smaller.length >= bigger.rightStart + bigger.length) return false;
+	return true;
+}
+
+void removeContainedKmerMatches(MatchGroup& matches)
+{
+	std::sort(matches.matches.begin(), matches.matches.end(), [](auto left, auto right) { return left.length < right.length; });
+	std::vector<bool> remove;
+	remove.resize(matches.matches.size(), false);
+	for (size_t i = 0; i < matches.matches.size(); i++)
+	{
+		for (size_t j = matches.matches.size()-1; j > i; j--)
+		{
+			if (matches.matches[j].length < matches.matches[i].length+2) break;
+			if (!matchContained(matches.matches[i], matches.matches[j])) continue;
+			remove[i] = true;
+			break;
+		}
+	}
+	for (size_t i = matches.matches.size()-1; i < matches.matches.size(); i--)
+	{
+		if (!remove[i]) continue;
+		std::swap(matches.matches[i], matches.matches.back());
+		matches.matches.pop_back();
+	}
+}
+
 void addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t graphk, const size_t graphd)
 {
 	std::atomic<size_t> kmerMatchCount;
@@ -316,6 +348,7 @@ void addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& re
 				for (size_t i = startIndex; i < endIndex; i++)
 				{
 					getKmerMatches(readSequences, matches[i], graphk, graphd);
+					removeContainedKmerMatches(matches[i]);
 					kmerMatchCount += matches[i].matches.size();
 				}
 			}
