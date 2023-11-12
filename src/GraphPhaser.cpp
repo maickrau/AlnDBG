@@ -768,7 +768,7 @@ void removeContainedNonphasedErrorNodes(const UnitigGraph& unphasedGraph, const 
 	}
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraph(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>>& phaseBlocks)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphBubbles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>>& phaseBlocks)
 {
 	std::cerr << phaseBlocks.size() << " phase blocks" << std::endl;
 	std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> readsPerPhaseBlock;
@@ -835,4 +835,153 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraph(const UnitigGraph
 	}
 	// removeContainedNonphasedErrorNodes(unitigGraph, uniquePhaseBlockPerNode, kept);
 	return filterUnitigGraph(newGraph, remappedReads, kept);
+}
+
+std::vector<uint64_t> getReachableEvenBackwards(const SparseEdgeContainer& edges, const phmap::flat_hash_set<size_t>& allowedNodes, const uint64_t start, const phmap::flat_hash_set<uint64_t>& boundingCoreNodes, const size_t forbiddenNode)
+{
+	std::vector<uint64_t> stack;
+	phmap::flat_hash_set<uint64_t> checked;
+	stack.push_back(start);
+	while (stack.size() >= 1)
+	{
+		auto top = stack.back();
+		stack.pop_back();
+		if (checked.count(top) == 1) continue;
+		checked.insert(top);
+		if (allowedNodes.count(top & maskUint64_t) == 0 && boundingCoreNodes.count(top) == 0) continue;
+		if ((top & maskUint64_t) != forbiddenNode && boundingCoreNodes.count(top) == 0) stack.push_back(top ^ firstBitUint64_t);
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			stack.push_back((edge.first & maskUint64_t) + (edge.second ? 0 : firstBitUint64_t));
+		}
+	}
+	std::vector<uint64_t> result;
+	for (auto node : boundingCoreNodes)
+	{
+		if (checked.count(node) == 0) continue;
+		result.push_back(node);
+	}
+	return result;
+}
+
+std::pair<uint64_t, uint64_t> canonPointingInwards(uint64_t left, uint64_t right)
+{
+	return std::make_pair(std::min(left, right), std::max(left, right));
+}
+
+phmap::flat_hash_set<std::pair<size_t, size_t>> getSubgraphBoundaryConnections(const SparseEdgeContainer& edges, const phmap::flat_hash_set<size_t>& insideNodes, const phmap::flat_hash_set<uint64_t>& boundingCoreNodes)
+{
+	phmap::flat_hash_set<std::pair<size_t, size_t>> result;
+	for (auto node : boundingCoreNodes)
+	{
+		auto reachable = getReachableEvenBackwards(edges, insideNodes, node, boundingCoreNodes, std::numeric_limits<size_t>::max() & maskUint64_t);
+		for (auto node2 : reachable)
+		{
+			result.insert(canonPointingInwards(node, node2));
+		}
+	}
+	return result;
+}
+
+phmap::flat_hash_set<std::pair<size_t, size_t>> getSubgraphBoundaryConnectionsWithoutOneNode(const SparseEdgeContainer& edges, const phmap::flat_hash_set<size_t>& insideNodes, const phmap::flat_hash_set<uint64_t>& boundingCoreNodes, const size_t forbiddenNode)
+{
+	phmap::flat_hash_set<std::pair<size_t, size_t>> result;
+	for (auto node : boundingCoreNodes)
+	{
+		auto reachable = getReachableEvenBackwards(edges, insideNodes, node, boundingCoreNodes, forbiddenNode);
+		for (auto node2 : reachable)
+		{
+			result.insert(canonPointingInwards(node, node2));
+		}
+	}
+	return result;
+}
+
+void addTangleCoreNodes(std::vector<bool>& fwChecked, std::vector<bool>& bwChecked, RankBitvector& coreNode, const SparseEdgeContainer& edges, const size_t startNode)
+{
+	assert(!fwChecked[startNode]);
+	assert(!bwChecked[startNode]);
+	assert(!coreNode.get(startNode));
+	std::vector<size_t> stack;
+	stack.push_back(startNode);
+	phmap::flat_hash_set<size_t> insideNodes;
+	phmap::flat_hash_set<uint64_t> boundingCoreNodes;
+	while (stack.size() >= 1)
+	{
+		auto top = stack.back();
+		stack.pop_back();
+		if (!coreNode.get(top & maskUint64_t)) insideNodes.insert(top & maskUint64_t);
+		if (coreNode.get(top & maskUint64_t))
+		{
+			boundingCoreNodes.insert(top);
+		}
+		if ((top & firstBitUint64_t) && fwChecked[top & maskUint64_t]) continue;
+		if (((top & firstBitUint64_t) == 0) && bwChecked[top & maskUint64_t]) continue;
+		if (top & firstBitUint64_t)
+		{
+			fwChecked[top & maskUint64_t] = true;
+		}
+		else
+		{
+			bwChecked[top & maskUint64_t] = true;
+		}
+		if (!coreNode.get(top & maskUint64_t)) stack.push_back(top ^ firstBitUint64_t);
+		auto edgesHere = edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t));
+		for (auto edge : edgesHere)
+		{
+			stack.push_back((edge.first & maskUint64_t) + (edge.second ? 0 : firstBitUint64_t));
+		}
+	}
+	if (insideNodes.size() < 2) return;
+	if (boundingCoreNodes.size() != 2) return;
+	phmap::flat_hash_set<std::pair<size_t, size_t>> normalEdges = getSubgraphBoundaryConnections(edges, insideNodes, boundingCoreNodes);
+	// if (normalEdges.size() != 1) return;
+	for (auto node : insideNodes)
+	{
+		phmap::flat_hash_set<std::pair<size_t, size_t>> edgesHere = getSubgraphBoundaryConnectionsWithoutOneNode(edges, insideNodes, boundingCoreNodes, node);
+		assert(edgesHere.size() <= normalEdges.size());
+		if (edgesHere.size() < normalEdges.size())
+		{
+			coreNode.set(node, true);
+			std::cerr << "added " << node << std::endl;
+		}
+	}
+}
+
+void addCoreNodes(RankBitvector& coreNode, const SparseEdgeContainer& edges)
+{
+	std::vector<bool> fwChecked;
+	std::vector<bool> bwChecked;
+	fwChecked.resize(coreNode.size(), false);
+	bwChecked.resize(coreNode.size(), false);
+	for (size_t i = 0; i < coreNode.size(); i++)
+	{
+		if (coreNode.get(i)) continue;
+		if (fwChecked[i])
+		{
+			assert(bwChecked[i]);
+			continue;
+		}
+		assert(!bwChecked[i]);
+		addTangleCoreNodes(fwChecked, bwChecked, coreNode, edges, i);
+	}
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLinearizable(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+{
+	auto edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	RankBitvector coreNode;
+	coreNode.resize(unitigGraph.nodeCount());
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		if (unitigGraph.lengths[i] < 100) continue;
+		coreNode.set(i, true);
+	}
+	addCoreNodes(coreNode, edges);
+	for (size_t i = 0; i < coreNode.size(); i++)
+	{
+		if (!coreNode.get(i)) continue;
+		std::cerr << "core node_" << i << std::endl;
+	}
+	return std::make_pair(unitigGraph, readPaths);
 }
