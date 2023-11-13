@@ -99,6 +99,10 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<size_t, size_t>>> getValidRes
 			result[i].push_back(pair.first);
 		}
 	}
+	for (auto& pair : result)
+	{
+		std::sort(pair.second.begin(), pair.second.end());
+	}
 	return result;
 }
 
