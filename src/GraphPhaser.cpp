@@ -1498,93 +1498,107 @@ size_t getHaplotypeScore(const std::vector<size_t>& readAssignment, const size_t
 	return score;
 }
 
+class ReadPartition
+{
+public:
+	std::vector<size_t> readAssignment;
+	size_t maxAssignmentPlusOne;
+	size_t score;
+};
+
 std::vector<size_t> getUnweightedHeuristicMEC(const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const size_t ploidy, const std::vector<size_t>& readOrder, const size_t realReadCount)
 {
 	const size_t beamWidth = 10000;
 	size_t addEverythingUntilHere = log(beamWidth)/log(ploidy+1);
 	assert(ploidy >= 2);
-	std::vector<std::pair<size_t, std::vector<size_t>>> activeAssignments;
+	std::vector<ReadPartition> activeAssignments;
 	activeAssignments.emplace_back();
+	activeAssignments.back().maxAssignmentPlusOne = 0;
+	activeAssignments.back().score = 0;
 	for (size_t i = 0; i < addEverythingUntilHere && i < realReadCount; i++)
 	{
-		std::vector<std::pair<size_t, std::vector<size_t>>> nextActiveAssignments;
+		std::vector<ReadPartition> nextActiveAssignments;
 		for (const auto& haplotype : activeAssignments)
 		{
-			for (size_t j = 0; j < ploidy; j++)
+			for (size_t j = 0; j < std::min(haplotype.maxAssignmentPlusOne+1, ploidy); j++)
 			{
 				nextActiveAssignments.emplace_back();
-				nextActiveAssignments.back().second = haplotype.second;
-				nextActiveAssignments.back().second.push_back(j);
+				nextActiveAssignments.back().readAssignment = haplotype.readAssignment;
+				nextActiveAssignments.back().maxAssignmentPlusOne = std::max(haplotype.maxAssignmentPlusOne, j+1);
+				nextActiveAssignments.back().readAssignment.push_back(j);
 			}
 			nextActiveAssignments.emplace_back();
-			nextActiveAssignments.back().second = haplotype.second;
-			nextActiveAssignments.back().second.push_back(std::numeric_limits<size_t>::max());
+			nextActiveAssignments.back().readAssignment = haplotype.readAssignment;
+			nextActiveAssignments.back().maxAssignmentPlusOne = haplotype.maxAssignmentPlusOne;
+			nextActiveAssignments.back().readAssignment.push_back(std::numeric_limits<size_t>::max());
 		}
 		activeAssignments = nextActiveAssignments;
 	}
 	for (size_t i = 0; i < activeAssignments.size(); i++)
 	{
-		activeAssignments[i].first = getHaplotypeScore(activeAssignments[i].second, ploidy, readsPerAllele, readOrder);
+		activeAssignments[i].score = getHaplotypeScore(activeAssignments[i].readAssignment, ploidy, readsPerAllele, readOrder);
 	}
-	std::sort(activeAssignments.begin(), activeAssignments.end());
+	std::sort(activeAssignments.begin(), activeAssignments.end(), [](const auto& left, const auto& right) { return left.score < right.score; });
 	for (size_t i = addEverythingUntilHere; i < realReadCount; i++)
 	{
-		std::vector<std::pair<size_t, std::vector<size_t>>> nextActiveAssignments;
+		std::vector<ReadPartition> nextActiveAssignments;
 		for (const auto& haplotype : activeAssignments)
 		{
-			for (size_t j = 0; j < ploidy; j++)
+			for (size_t j = 0; j < std::min(haplotype.maxAssignmentPlusOne+1, ploidy); j++)
 			{
 				nextActiveAssignments.emplace_back();
-				nextActiveAssignments.back().second = haplotype.second;
-				nextActiveAssignments.back().second.push_back(j);
-				nextActiveAssignments.back().first = getHaplotypeScore(nextActiveAssignments.back().second, ploidy, readsPerAllele, readOrder);
+				nextActiveAssignments.back().readAssignment = haplotype.readAssignment;
+				nextActiveAssignments.back().readAssignment.push_back(j);
+				nextActiveAssignments.back().maxAssignmentPlusOne = std::max(haplotype.maxAssignmentPlusOne, j+1);
+				nextActiveAssignments.back().score = getHaplotypeScore(nextActiveAssignments.back().readAssignment, ploidy, readsPerAllele, readOrder);
 			}
 			nextActiveAssignments.emplace_back();
-			nextActiveAssignments.back().second = haplotype.second;
-			nextActiveAssignments.back().second.push_back(std::numeric_limits<size_t>::max());
-			nextActiveAssignments.back().first = getHaplotypeScore(nextActiveAssignments.back().second, ploidy, readsPerAllele, readOrder);
+			nextActiveAssignments.back().readAssignment = haplotype.readAssignment;
+			nextActiveAssignments.back().maxAssignmentPlusOne = haplotype.maxAssignmentPlusOne;
+			nextActiveAssignments.back().readAssignment.push_back(std::numeric_limits<size_t>::max());
+			nextActiveAssignments.back().score = getHaplotypeScore(nextActiveAssignments.back().readAssignment, ploidy, readsPerAllele, readOrder);
 		}
-		std::sort(nextActiveAssignments.begin(), nextActiveAssignments.end());
+		std::sort(nextActiveAssignments.begin(), nextActiveAssignments.end(), [](const auto& left, const auto& right) { return left.score < right.score; });
 		if (nextActiveAssignments.size() > beamWidth)
 		{
 			nextActiveAssignments.erase(nextActiveAssignments.begin()+beamWidth, nextActiveAssignments.end());
 		}
 		activeAssignments = nextActiveAssignments;
 	}
-	assert(activeAssignments[0].second.size() == realReadCount);
+	assert(activeAssignments[0].readAssignment.size() == realReadCount);
 	std::cerr << "MEC best scores:";
 	for (size_t i = 0; i < 10 && i < activeAssignments.size(); i++)
 	{
-		std::cerr << " " << activeAssignments[i].first;
+		std::cerr << " " << activeAssignments[i].score;
 	}
 	std::cerr << std::endl;
 	std::cerr << "best two assignments:" << std::endl;
-	for (size_t i = 0; i < activeAssignments[0].second.size(); i++)
+	for (size_t i = 0; i < activeAssignments[0].readAssignment.size(); i++)
 	{
-		if (activeAssignments[0].second[i] == std::numeric_limits<size_t>::max())
+		if (activeAssignments[0].readAssignment[i] == std::numeric_limits<size_t>::max())
 		{
 			std::cerr << "_";
 		}
 		else
 		{
-			std::cerr << activeAssignments[0].second[i];
+			std::cerr << activeAssignments[0].readAssignment[i];
 		}
 	}
 	std::cerr << std::endl;
-	for (size_t i = 0; i < activeAssignments[1].second.size(); i++)
+	for (size_t i = 0; i < activeAssignments[1].readAssignment.size(); i++)
 	{
-		if (activeAssignments[1].second[i] == std::numeric_limits<size_t>::max())
+		if (activeAssignments[1].readAssignment[i] == std::numeric_limits<size_t>::max())
 		{
 			std::cerr << "_";
 		}
 		else
 		{
-			std::cerr << activeAssignments[1].second[i];
+			std::cerr << activeAssignments[1].readAssignment[i];
 		}
 	}
 	std::cerr << std::endl;
 	std::cerr << "best alleles:" << std::endl;
-	std::vector<std::vector<size_t>> allelesPerHaplotype = getAllelesPerHaplotype(activeAssignments[0].second, ploidy, readsPerAllele, readOrder);
+	std::vector<std::vector<size_t>> allelesPerHaplotype = getAllelesPerHaplotype(activeAssignments[0].readAssignment, ploidy, readsPerAllele, readOrder);
 	for (size_t i = 0; i < allelesPerHaplotype.size(); i++)
 	{
 		for (size_t j = 0; j < allelesPerHaplotype[i].size(); j++)
@@ -1608,7 +1622,7 @@ std::vector<size_t> getUnweightedHeuristicMEC(const std::vector<std::vector<std:
 		{
 			for (size_t read : readsPerAllele[site][allele])
 			{
-				if (readOrder[read] == activeAssignments[0].second.size()-1)
+				if (readOrder[read] == activeAssignments[0].readAssignment.size()-1)
 				{
 					lastReadAlleleHere = allele;
 				}
@@ -1624,7 +1638,7 @@ std::vector<size_t> getUnweightedHeuristicMEC(const std::vector<std::vector<std:
 		}
 	}
 	std::cerr << std::endl;
-	return activeAssignments[0].second;
+	return activeAssignments[0].readAssignment;
 }
 
 std::vector<size_t> getReadOrder(const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const size_t readCount)
