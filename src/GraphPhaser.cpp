@@ -1065,7 +1065,11 @@ std::vector<uint64_t> getCoreChain(const SparseEdgeContainer& coreEdges, std::ve
 			if ((chainFw.back() ^ firstBitUint64_t) == chainBw[1])
 			{
 				// circular chain
-				assert((chainBw.back() ^ firstBitUint64_t) == chainFw[1]);
+				for (size_t i = 0; i < chainFw.size(); i++)
+				{
+					checked[chainFw[i] & maskUint64_t] = true;
+					assert(i == 0 || chainFw[i] == (chainBw[chainFw.size()-i] ^ firstBitUint64_t));
+				}
 				return chainFw;
 			}
 		}
@@ -1095,6 +1099,7 @@ std::vector<std::vector<uint64_t>> getCoreNodeChains(const SparseEdgeContainer& 
 		if (!coreNode[i]) continue;
 		if (checked[i]) continue;
 		result.emplace_back(getCoreChain(coreEdges, checked, coreNode, i));
+		assert(checked[i]);
 	}
 	std::vector<bool> found;
 	found.resize(coreNode.size(), false);
