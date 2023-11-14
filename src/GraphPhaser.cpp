@@ -1420,7 +1420,7 @@ std::vector<bool> getPossiblyHaplotypeInformativeSites(const std::vector<std::ve
 	return result;
 }
 
-std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t>& readAssignment, const size_t ploidy, const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const std::vector<size_t>& readOrder)
+std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t>& readAssignment, const size_t ploidy, const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>& readsPerAllele, const std::vector<size_t>& readOrder)
 {
 	assert(ploidy >= 2);
 	std::vector<std::vector<phmap::flat_hash_map<size_t, size_t>>> alleleCoveragePerHaplotype;
@@ -1433,11 +1433,13 @@ std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t
 	{
 		for (size_t allele = 0; allele < readsPerAllele[site].size(); allele++)
 		{
-			for (size_t read : readsPerAllele[site][allele])
+			for (std::pair<size_t, size_t> pair: readsPerAllele[site][allele])
 			{
+				size_t read = pair.first;
+				size_t weight = pair.second;
 				if (readOrder[read] >= readAssignment.size()) continue;
 				if (readAssignment[readOrder[read]] == std::numeric_limits<size_t>::max()) continue;
-				alleleCoveragePerHaplotype[readAssignment[readOrder[read]]][site][allele] += 1;
+				alleleCoveragePerHaplotype[readAssignment[readOrder[read]]][site][allele] += weight;
 			}
 		}
 	}
@@ -1465,7 +1467,7 @@ std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t
 	return result;
 }
 
-size_t getHaplotypeScore(const std::vector<size_t>& readAssignment, const size_t ploidy, const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const std::vector<size_t>& readOrder)
+size_t getHaplotypeScore(const std::vector<size_t>& readAssignment, const size_t ploidy, const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>& readsPerAllele, const std::vector<size_t>& readOrder)
 {
 	assert(readOrder.size() >= 1);
 	assert(ploidy >= 2);
@@ -1475,22 +1477,24 @@ size_t getHaplotypeScore(const std::vector<size_t>& readAssignment, const size_t
 	{
 		for (size_t allele = 0; allele < readsPerAllele[i].size(); allele++)
 		{
-			for (size_t read : readsPerAllele[i][allele])
+			for (std::pair<size_t, size_t> pair : readsPerAllele[i][allele])
 			{
+				size_t read = pair.first;
+				size_t weight = pair.second;
 				if (readOrder[read] >= readAssignment.size()) continue;
 				if (readAssignment[readOrder[read]] == std::numeric_limits<size_t>::max())
 				{
-					score += 1;
+					score += weight;
 					continue;
 				}
 				size_t haplotypeAllele = allelesPerHaplotype[readAssignment[readOrder[read]]][i];
 				if (haplotypeAllele == std::numeric_limits<size_t>::max())
 				{
-					score += 1;
+					score += weight;
 				}
 				else if (haplotypeAllele != allele)
 				{
-					score += 10;
+					score += weight;
 				}
 			}
 		}
@@ -1506,7 +1510,7 @@ public:
 	size_t score;
 };
 
-std::vector<size_t> getUnweightedHeuristicMEC(const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const size_t ploidy, const std::vector<size_t>& readOrder, const size_t realReadCount)
+std::vector<size_t> getUnweightedHeuristicMEC(const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>& readsPerAllele, const size_t ploidy, const std::vector<size_t>& readOrder, const size_t realReadCount)
 {
 	const size_t beamWidth = 10000;
 	size_t addEverythingUntilHere = log(beamWidth)/log(ploidy+1);
@@ -1614,34 +1618,10 @@ std::vector<size_t> getUnweightedHeuristicMEC(const std::vector<std::vector<std:
 		}
 		std::cerr << std::endl;
 	}
-	std::cerr << "last read alleles:" << std::endl;
-	for (size_t site = 0; site < readsPerAllele.size(); site++)
-	{
-		size_t lastReadAlleleHere = std::numeric_limits<size_t>::max();
-		for (size_t allele = 0; allele < readsPerAllele[site].size(); allele++)
-		{
-			for (size_t read : readsPerAllele[site][allele])
-			{
-				if (readOrder[read] == activeAssignments[0].readAssignment.size()-1)
-				{
-					lastReadAlleleHere = allele;
-				}
-			}
-		}
-		if (lastReadAlleleHere == std::numeric_limits<size_t>::max())
-		{
-			std::cerr << "_,";
-		}
-		else
-		{
-			std::cerr << lastReadAlleleHere << ",";
-		}
-	}
-	std::cerr << std::endl;
 	return activeAssignments[0].readAssignment;
 }
 
-std::vector<size_t> getReadOrder(const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const size_t readCount)
+std::vector<size_t> getReadOrder(const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>& readsPerAllele, const size_t readCount)
 {
 	std::vector<size_t> firstPerRead;
 	std::vector<size_t> lastPerRead;
@@ -1651,8 +1631,9 @@ std::vector<size_t> getReadOrder(const std::vector<std::vector<std::vector<size_
 	{
 		for (size_t allele = 0; allele < readsPerAllele[site].size(); allele++)
 		{
-			for (size_t read : readsPerAllele[site][allele])
+			for (std::pair<size_t, size_t> pair : readsPerAllele[site][allele])
 			{
+				size_t read = pair.first;
 				if (firstPerRead[read] == std::numeric_limits<size_t>::max())
 				{
 					firstPerRead[read] = site;
@@ -1689,8 +1670,9 @@ std::vector<size_t> getReadOrder(const std::vector<std::vector<std::vector<size_
 	{
 		for (size_t j = 0; j < readsPerAllele[i].size(); j++)
 		{
-			for (size_t read : readsPerAllele[i][j])
+			for (std::pair<size_t, size_t> pair : readsPerAllele[i][j])
 			{
+				size_t read = pair.first;
 				assert(result[read] != std::numeric_limits<size_t>::max());
 				found[result[read]] = true;
 			}
@@ -1736,6 +1718,58 @@ std::vector<std::vector<std::vector<size_t>>> getInformativeReads(const std::vec
 	return result;
 }
 
+std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>> mergeReadsPerAllele(const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const size_t readCount)
+{
+	std::vector<std::vector<std::pair<size_t, size_t>>> allelesPerRead;
+	allelesPerRead.resize(readCount);
+	for (size_t site = 0; site < readsPerAllele.size(); site++)
+	{
+		for (size_t allele = 0; allele < readsPerAllele[site].size(); allele++)
+		{
+			for (size_t read : readsPerAllele[site][allele])
+			{
+				allelesPerRead[read].emplace_back(site, allele);
+			}
+		}
+	}
+	std::sort(allelesPerRead.begin(), allelesPerRead.end());
+	std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>> result;
+	result.resize(readsPerAllele.size());
+	for (size_t site = 0; site < readsPerAllele.size(); site++)
+	{
+		result[site].resize(readsPerAllele[site].size());
+	}
+	size_t currentReadCount = 1;
+	size_t currentReadName = 0;
+	for (size_t i = 1; i < allelesPerRead.size(); i++)
+	{
+		if (allelesPerRead[i] == allelesPerRead[i-1])
+		{
+			currentReadCount += 1;
+			continue;
+		}
+		if (allelesPerRead[i-1].size() < 2)
+		{
+			currentReadCount = 1;
+			continue;
+		}
+		for (auto pair : allelesPerRead[i-1])
+		{
+			result[pair.first][pair.second].emplace_back(currentReadName, currentReadCount);
+		}
+		currentReadName += 1;
+		currentReadCount = 1;
+	}
+	if (allelesPerRead.back().size() >= 2)
+	{
+		for (auto pair : allelesPerRead.back())
+		{
+			result[pair.first][pair.second].emplace_back(currentReadName, currentReadCount);
+		}
+	}
+	return result;
+}
+
 std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>> phaseReadsToHaplotypes(const std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
 {
 	assert(ploidy >= 2);
@@ -1764,14 +1798,31 @@ std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, si
 		return std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>>{};
 	}
 	std::vector<std::vector<std::vector<size_t>>> readsPerAllele = getInformativeReads(unfilteredReadsPerAllele, maybeHaplotypeInformative);
-	std::vector<size_t> readOrder = getReadOrder(readsPerAllele, readCount);
+	size_t informativeReadCount = 0;
+	{
+		phmap::flat_hash_set<size_t> foundRead;
+		for (size_t i = 0; i < readsPerAllele.size(); i++)
+		{
+			for (size_t j = 0; j < readsPerAllele[i].size(); j++)
+			{
+				for (size_t read : readsPerAllele[i][j])
+				{
+					foundRead.insert(read);
+				}
+			}
+		}
+		informativeReadCount = foundRead.size();
+	}
+	std::cerr << informativeReadCount << " real reads" << std::endl;
+	std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>> mergedReadsPerAllele = mergeReadsPerAllele(readsPerAllele, readCount);
+	std::vector<size_t> readOrder = getReadOrder(mergedReadsPerAllele, readCount);
 	size_t realReadCount = 0;
 	for (size_t i = 0; i < readOrder.size(); i++)
 	{
 		if (readOrder[i] != std::numeric_limits<size_t>::max()) realReadCount += 1;
 	}
-	std::cerr << realReadCount << " real reads" << std::endl;
-	std::vector<size_t> readAssignments = getUnweightedHeuristicMEC(readsPerAllele, ploidy, readOrder, realReadCount);
+	std::cerr << realReadCount << " merged reads" << std::endl;
+	std::vector<size_t> readAssignments = getUnweightedHeuristicMEC(mergedReadsPerAllele, ploidy, readOrder, realReadCount);
 	std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>> splittedReads;
 	splittedReads.resize(ploidy);
 	for (size_t i = 0; i < readAssignments.size(); i++)
