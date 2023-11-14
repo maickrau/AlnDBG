@@ -1423,11 +1423,15 @@ std::vector<bool> getPossiblyHaplotypeInformativeSites(const std::vector<std::ve
 std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t>& readAssignment, const size_t ploidy, const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>& readsPerAllele, const std::vector<size_t>& readOrder)
 {
 	assert(ploidy >= 2);
-	std::vector<std::vector<phmap::flat_hash_map<size_t, size_t>>> alleleCoveragePerHaplotype;
+	std::vector<std::vector<std::vector<size_t>>> alleleCoveragePerHaplotype;
 	alleleCoveragePerHaplotype.resize(ploidy);
 	for (size_t i = 0; i < ploidy; i++)
 	{
 		alleleCoveragePerHaplotype[i].resize(readsPerAllele.size());
+		for (size_t site = 0; site < readsPerAllele.size(); site++)
+		{
+			alleleCoveragePerHaplotype[i][site].resize(readsPerAllele[site].size(), 0);
+		}
 	}
 	for (size_t site = 0; site < readsPerAllele.size(); site++)
 	{
@@ -1451,10 +1455,14 @@ std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t
 		{
 			std::pair<size_t, size_t> bestHere { std::numeric_limits<size_t>::max(), 0 };
 			size_t totalCount = 0;
-			for (auto pair : alleleCoveragePerHaplotype[hap][site])
+			for (size_t allele = 0; allele < alleleCoveragePerHaplotype[hap][site].size(); allele++)
 			{
-				if (pair.second > bestHere.second) bestHere = pair;
-				totalCount += pair.second;
+				if (alleleCoveragePerHaplotype[hap][site][allele] > bestHere.second)
+				{
+					bestHere.first = allele;
+					bestHere.second = alleleCoveragePerHaplotype[hap][site][allele];
+				}
+				totalCount += alleleCoveragePerHaplotype[hap][site][allele];
 			}
 			if (bestHere.second*10 < totalCount)
 			{
