@@ -349,6 +349,7 @@ void addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& re
 				{
 					getKmerMatches(readSequences, matches[i], graphk, graphd);
 					removeContainedKmerMatches(matches[i]);
+					std::sort(matches[i].matches.begin(), matches[i].matches.end(), [](auto left, auto right) { return left.leftStart < right.leftStart; });
 					kmerMatchCount += matches[i].matches.size();
 				}
 			}

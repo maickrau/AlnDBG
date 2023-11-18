@@ -155,7 +155,7 @@ int main(int argc, char** argv)
 	size_t numWindows = std::stoull(argv[3]);
 	size_t windowSize = std::stoull(argv[4]);
 	size_t minAlignmentLength = std::stoull(argv[5]);
-	const size_t graphk = 11;
+	const size_t graphk = 21;
 	const size_t minCoverage = 2;
 	const size_t graphd = 50;
 	std::vector<std::string> readFiles;
