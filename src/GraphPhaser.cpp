@@ -3,6 +3,7 @@
 #include "MBGCommon.h"
 #include "GraphPhaser.h"
 #include "Common.h"
+#include "AnchorFinder.h"
 
 std::pair<size_t, size_t> findSimpleBubble(const SparseEdgeContainer& activeEdges, const std::pair<size_t, bool> start, const UnitigGraph& graph, const double approxOneHapCoverage)
 {
@@ -836,309 +837,6 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphBubbles(const Unit
 	return filterUnitigGraph(newGraph, remappedReads, kept);
 }
 
-std::vector<uint64_t> getReachableEvenBackwards(const SparseEdgeContainer& edges, const phmap::flat_hash_set<size_t>& allowedNodes, const uint64_t start, const phmap::flat_hash_set<uint64_t>& boundingCoreNodes, const size_t forbiddenNode)
-{
-	std::vector<uint64_t> stack;
-	phmap::flat_hash_set<uint64_t> checked;
-	stack.push_back(start);
-	while (stack.size() >= 1)
-	{
-		auto top = stack.back();
-		stack.pop_back();
-		if (checked.count(top) == 1) continue;
-		checked.insert(top);
-		if (allowedNodes.count(top & maskUint64_t) == 0 && boundingCoreNodes.count(top) == 0) continue;
-		if ((top & maskUint64_t) != forbiddenNode && boundingCoreNodes.count(top) == 0) stack.push_back(top ^ firstBitUint64_t);
-		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
-		{
-			stack.push_back((edge.first & maskUint64_t) + (edge.second ? 0 : firstBitUint64_t));
-		}
-	}
-	std::vector<uint64_t> result;
-	for (auto node : boundingCoreNodes)
-	{
-		if (checked.count(node) == 0) continue;
-		result.push_back(node);
-	}
-	return result;
-}
-
-std::pair<uint64_t, uint64_t> canonPointingInwards(uint64_t left, uint64_t right)
-{
-	return std::make_pair(std::min(left, right), std::max(left, right));
-}
-
-phmap::flat_hash_set<std::pair<size_t, size_t>> getSubgraphBoundaryConnections(const SparseEdgeContainer& edges, const phmap::flat_hash_set<size_t>& insideNodes, const phmap::flat_hash_set<uint64_t>& boundingCoreNodes)
-{
-	phmap::flat_hash_set<std::pair<size_t, size_t>> result;
-	for (auto node : boundingCoreNodes)
-	{
-		auto reachable = getReachableEvenBackwards(edges, insideNodes, node, boundingCoreNodes, std::numeric_limits<size_t>::max() & maskUint64_t);
-		for (auto node2 : reachable)
-		{
-			result.insert(canonPointingInwards(node, node2));
-		}
-	}
-	return result;
-}
-
-phmap::flat_hash_set<std::pair<size_t, size_t>> getSubgraphBoundaryConnectionsWithoutOneNode(const SparseEdgeContainer& edges, const phmap::flat_hash_set<size_t>& insideNodes, const phmap::flat_hash_set<uint64_t>& boundingCoreNodes, const size_t forbiddenNode)
-{
-	phmap::flat_hash_set<std::pair<size_t, size_t>> result;
-	for (auto node : boundingCoreNodes)
-	{
-		auto reachable = getReachableEvenBackwards(edges, insideNodes, node, boundingCoreNodes, forbiddenNode);
-		for (auto node2 : reachable)
-		{
-			result.insert(canonPointingInwards(node, node2));
-		}
-	}
-	return result;
-}
-
-void addTangleCoreNodes(std::vector<bool>& fwChecked, std::vector<bool>& bwChecked, std::vector<bool>& coreNode, const SparseEdgeContainer& edges, const size_t startNode)
-{
-	assert(!fwChecked[startNode]);
-	assert(!bwChecked[startNode]);
-	assert(!coreNode[startNode]);
-	std::vector<size_t> stack;
-	stack.push_back(startNode);
-	phmap::flat_hash_set<size_t> insideNodes;
-	phmap::flat_hash_set<uint64_t> boundingCoreNodes;
-	while (stack.size() >= 1)
-	{
-		auto top = stack.back();
-		stack.pop_back();
-		if (!coreNode[top & maskUint64_t]) insideNodes.insert(top & maskUint64_t);
-		if (coreNode[top & maskUint64_t])
-		{
-			boundingCoreNodes.insert(top);
-		}
-		if ((top & firstBitUint64_t) && fwChecked[top & maskUint64_t]) continue;
-		if (((top & firstBitUint64_t) == 0) && bwChecked[top & maskUint64_t]) continue;
-		if (top & firstBitUint64_t)
-		{
-			fwChecked[top & maskUint64_t] = true;
-		}
-		else
-		{
-			bwChecked[top & maskUint64_t] = true;
-		}
-		if (!coreNode[top & maskUint64_t]) stack.push_back(top ^ firstBitUint64_t);
-		auto edgesHere = edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t));
-		for (auto edge : edgesHere)
-		{
-			stack.push_back((edge.first & maskUint64_t) + (edge.second ? 0 : firstBitUint64_t));
-		}
-	}
-	if (insideNodes.size() < 2) return;
-	if (boundingCoreNodes.size() != 2) return;
-	phmap::flat_hash_set<std::pair<size_t, size_t>> normalEdges = getSubgraphBoundaryConnections(edges, insideNodes, boundingCoreNodes);
-	// if (normalEdges.size() != 1) return;
-	for (auto node : insideNodes)
-	{
-		phmap::flat_hash_set<std::pair<size_t, size_t>> edgesHere = getSubgraphBoundaryConnectionsWithoutOneNode(edges, insideNodes, boundingCoreNodes, node);
-		assert(edgesHere.size() <= normalEdges.size());
-		if (edgesHere.size() < normalEdges.size())
-		{
-			coreNode[node] = true;;
-		}
-	}
-}
-
-void addCoreNodes(std::vector<bool>& coreNode, const SparseEdgeContainer& edges)
-{
-	std::vector<bool> fwChecked;
-	std::vector<bool> bwChecked;
-	fwChecked.resize(coreNode.size(), false);
-	bwChecked.resize(coreNode.size(), false);
-	for (size_t i = 0; i < coreNode.size(); i++)
-	{
-		if (coreNode[i]) continue;
-		if (fwChecked[i])
-		{
-			assert(bwChecked[i]);
-			continue;
-		}
-		assert(!bwChecked[i]);
-		addTangleCoreNodes(fwChecked, bwChecked, coreNode, edges, i);
-	}
-}
-
-phmap::flat_hash_set<uint64_t> getReachableCoreNodes(const SparseEdgeContainer& edges, const std::vector<bool>& coreNode, const uint64_t start)
-{
-	assert(coreNode[start & maskUint64_t]);
-	phmap::flat_hash_set<uint64_t> result;
-	phmap::flat_hash_set<uint64_t> checked;
-	std::vector<uint64_t> stack;
-	for (auto edge : edges.getEdges(std::make_pair(start & maskUint64_t, start & firstBitUint64_t)))
-	{
-		stack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
-	}
-	while (stack.size() >= 1)
-	{
-		auto top = stack.back();
-		stack.pop_back();
-		if (checked.count(top) == 1) continue;
-		checked.insert(top);
-		if (coreNode[top & maskUint64_t])
-		{
-			result.insert(top);
-			continue;
-		}
-		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
-		{
-			stack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
-		}
-	}
-	return result;
-}
-
-SparseEdgeContainer getCoreEdges(const SparseEdgeContainer& edges, const std::vector<bool>& coreNode)
-{
-	SparseEdgeContainer coreEdges;
-	coreEdges.resize(edges.size());
-	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> uniqueEdges;
-	for (size_t i = 0; i < coreNode.size(); i++)
-	{
-		if (!coreNode[i]) continue;
-		auto fwreachable = getReachableCoreNodes(edges, coreNode, i + firstBitUint64_t);
-		auto bwreachable = getReachableCoreNodes(edges, coreNode, i);
-		for (uint64_t node : fwreachable)
-		{
-			assert(coreNode[node & maskUint64_t]);
-			uniqueEdges.emplace(canonPointingInwards(i + firstBitUint64_t, node ^ firstBitUint64_t));
-		}
-		for (uint64_t node : bwreachable)
-		{
-			assert(coreNode[node & maskUint64_t]);
-			uniqueEdges.emplace(canonPointingInwards(i, node ^ firstBitUint64_t));
-		}
-	}
-	for (auto pair : uniqueEdges)
-	{
-		std::pair<size_t, bool> from { pair.first & maskUint64_t, pair.first & firstBitUint64_t };
-		std::pair<size_t, bool> to { pair.second & maskUint64_t, (pair.second & firstBitUint64_t) ^ firstBitUint64_t };
-		coreEdges.addEdge(from, to);
-		coreEdges.addEdge(reverse(to), reverse(from));
-	}
-	return coreEdges;
-}
-
-std::vector<uint64_t> getChainOneWay(const SparseEdgeContainer& coreEdges, std::vector<bool>& checked, const std::vector<bool>& coreNode, const uint64_t start)
-{
-	assert(coreNode[start & maskUint64_t]);
-	assert(!checked[start & maskUint64_t]);
-	std::vector<uint64_t> result;
-	uint64_t pos = start;
-	result.emplace_back(pos);
-	while (coreEdges.getEdges(std::make_pair(pos & maskUint64_t, pos & firstBitUint64_t)).size() == 1)
-	{
-		std::pair<size_t, bool> nextpair = coreEdges.getEdges(std::make_pair(pos & maskUint64_t, pos & firstBitUint64_t))[0];
-		if (coreEdges.getEdges(reverse(nextpair)).size() != 1) break;
-		uint64_t next = nextpair.first + (nextpair.second ? firstBitUint64_t : 0);
-		if ((next & maskUint64_t) == (pos & maskUint64_t)) break;
-		if (next == start) break;
-		assert(!checked[next & maskUint64_t]);
-		assert(coreNode[next & maskUint64_t]);
-		pos = next;
-		result.emplace_back(pos);
-	}
-	return result;
-}
-
-std::vector<uint64_t> getCoreChain(const SparseEdgeContainer& coreEdges, std::vector<bool>& checked, const std::vector<bool>& coreNode, const uint64_t start)
-{
-	assert((start & firstBitUint64_t) == 0);
-	assert(!checked[start]);
-	assert(coreNode[start]);
-	std::vector<uint64_t> chainFw = getChainOneWay(coreEdges, checked, coreNode, start + firstBitUint64_t);
-	std::vector<uint64_t> chainBw = getChainOneWay(coreEdges, checked, coreNode, start);
-	assert(chainFw.size() >= 1);
-	assert(chainBw.size() >= 1);
-	assert(chainFw[0] == start + firstBitUint64_t);
-	assert(chainBw[0] == start);
-	if (chainFw.size() >= 2 && chainBw.size() >= 2)
-	{
-		if (chainFw.size() == chainBw.size())
-		{
-			if ((chainFw.back() ^ firstBitUint64_t) == chainBw[1])
-			{
-				// circular chain
-				for (size_t i = 0; i < chainFw.size(); i++)
-				{
-					checked[chainFw[i] & maskUint64_t] = true;
-					assert(i == 0 || chainFw[i] == (chainBw[chainFw.size()-i] ^ firstBitUint64_t));
-				}
-				return chainFw;
-			}
-		}
-	}
-	std::reverse(chainBw.begin(), chainBw.end());
-	for (size_t i = 0; i < chainBw.size(); i++)
-	{
-		chainBw[i] ^= firstBitUint64_t;
-	}
-	chainBw.insert(chainBw.end(), chainFw.begin()+1, chainFw.end());
-	for (size_t i = 0; i < chainBw.size(); i++)
-	{
-		checked[chainBw[i] & maskUint64_t] = true;
-	}
-	assert(chainBw.size() >= 1);
-	return chainBw;
-}
-
-std::vector<std::vector<uint64_t>> getCoreNodeChains(const SparseEdgeContainer& edges, const std::vector<bool>& coreNode)
-{
-	auto coreEdges = getCoreEdges(edges, coreNode);
-	std::vector<bool> checked;
-	checked.resize(coreNode.size(), false);
-	std::vector<std::vector<uint64_t>> result;
-	for (size_t i = 0; i < coreNode.size(); i++)
-	{
-		if (!coreNode[i]) continue;
-		if (checked[i]) continue;
-		result.emplace_back(getCoreChain(coreEdges, checked, coreNode, i));
-		assert(checked[i]);
-	}
-	std::vector<bool> found;
-	found.resize(coreNode.size(), false);
-	for (size_t i = 0 ; i < result.size(); i++)
-	{
-		for (auto node : result[i])
-		{
-			assert(!found[node & maskUint64_t]);
-			found[node & maskUint64_t] = true;
-		}
-	}
-	for (size_t i = 0; i < coreNode.size(); i++)
-	{
-		if (!coreNode[i])
-		{
-			assert(!found[i]);
-		}
-		else
-		{
-			assert(found[i]);
-		}
-	}
-	return result;
-}
-
-size_t estimateCoreNodeChainPloidy(const std::vector<uint64_t> chain, const UnitigGraph& unitigGraph, const double approxOneHapCoverage)
-{
-	double coverageSum = 0;
-	size_t lengthSum = 0;
-	for (auto node : chain)
-	{
-		coverageSum += unitigGraph.coverages[node & maskUint64_t] * unitigGraph.lengths[node & maskUint64_t];
-		lengthSum += unitigGraph.lengths[node & maskUint64_t];
-	}
-	assert(lengthSum > 0);
-	size_t result = ((coverageSum / (double)lengthSum) / approxOneHapCoverage) + 0.5;
-	return result;
-}
-
 size_t getAlleleIndex(std::vector<std::vector<std::vector<std::vector<uint64_t>>>>& allelesPerChain, const size_t i, const size_t j, const std::vector<uint64_t>& allele)
 {
 	for (size_t k = 0; k < allelesPerChain[i][j].size(); k++)
@@ -1149,19 +847,19 @@ size_t getAlleleIndex(std::vector<std::vector<std::vector<std::vector<uint64_t>>
 	return allelesPerChain[i][j].size()-1;
 }
 
-std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>>> getRawReadInfoPerChain(const std::vector<std::vector<uint64_t>>& coreNodeChains, const std::vector<std::vector<size_t>>& coreNodeOffsetInChain, const std::vector<ReadPathBundle>& readPaths, const UnitigGraph& unitigGraph)
+std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>>> getRawReadInfoPerChain(const std::vector<AnchorChain>& anchorChains, const std::vector<ReadPathBundle>& readPaths, const UnitigGraph& unitigGraph)
 {
 	std::vector<std::vector<std::vector<std::vector<uint64_t>>>> allelesPerChain;
 	std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>> allelesPerReadPerChain;
 	phmap::flat_hash_map<uint64_t, std::pair<size_t, size_t>> coreNodeLocator;
-	allelesPerChain.resize(coreNodeChains.size());
-	allelesPerReadPerChain.resize(coreNodeChains.size());
-	for (size_t i = 0; i < coreNodeChains.size(); i++)
+	allelesPerChain.resize(anchorChains.size());
+	allelesPerReadPerChain.resize(anchorChains.size());
+	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
-		allelesPerChain[i].resize(coreNodeChains[i].size()-1);
-		for (size_t j = 0; j < coreNodeChains[i].size(); j++)
+		allelesPerChain[i].resize(anchorChains[i].nodes.size()-1);
+		for (size_t j = 0; j < anchorChains[i].nodes.size(); j++)
 		{
-			coreNodeLocator[coreNodeChains[i][j] & maskUint64_t] = std::make_pair(i, j);
+			coreNodeLocator[anchorChains[i].nodes[j] & maskUint64_t] = std::make_pair(i, j);
 		}
 	}
 	for (size_t readi = 0; readi < readPaths.size(); readi++)
@@ -1176,7 +874,6 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 				readPos += unitigGraph.lengths[readPaths[readi].paths[j].path[k] & maskUint64_t];
 				if (k == 0) readPos -= readPaths[readi].paths[j].pathLeftClipKmers;
 				if (coreNodeLocator.count(readPaths[readi].paths[j].path[k] & maskUint64_t) == 0) continue;
-				std::cerr << "allele between " << (readPaths[readi].paths[j].path[lastCore] & maskUint64_t) << " and " << (readPaths[readi].paths[j].path[k] & maskUint64_t) << std::endl;
 				if (lastCore == std::numeric_limits<size_t>::max())
 				{
 					lastCore = k;
@@ -1197,12 +894,12 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 				bool fw = true;
 				if (curr.second == prev.second + 1)
 				{
-					if (coreNodeChains[prev.first][prev.second] != readPaths[readi].paths[j].path[lastCore])
+					if (anchorChains[prev.first].nodes[prev.second] != readPaths[readi].paths[j].path[lastCore])
 					{
 						lastCore = k;
 						continue;
 					}
-					if (coreNodeChains[curr.first][curr.second] != readPaths[readi].paths[j].path[k])
+					if (anchorChains[curr.first].nodes[curr.second] != readPaths[readi].paths[j].path[k])
 					{
 						lastCore = k;
 						continue;
@@ -1211,12 +908,12 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 				if (prev.second == curr.second + 1)
 				{
 					fw = false;
-					if (coreNodeChains[prev.first][prev.second] != (readPaths[readi].paths[j].path[lastCore] ^ firstBitUint64_t))
+					if (anchorChains[prev.first].nodes[prev.second] != (readPaths[readi].paths[j].path[lastCore] ^ firstBitUint64_t))
 					{
 						lastCore = k;
 						continue;
 					}
-					if (coreNodeChains[curr.first][curr.second] != (readPaths[readi].paths[j].path[k] ^ firstBitUint64_t))
+					if (anchorChains[curr.first].nodes[curr.second] != (readPaths[readi].paths[j].path[k] ^ firstBitUint64_t))
 					{
 						lastCore = k;
 						continue;
@@ -1232,8 +929,8 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 					}
 				}
 				size_t index = getAlleleIndex(allelesPerChain, curr.first, std::min(curr.second, prev.second), allele);
-				int diagonal = (int)readPos - (int)coreNodeOffsetInChain[curr.first][std::min(curr.second, prev.second)];
-				if (!fw) diagonal = (int)readPos + (int)coreNodeOffsetInChain[curr.first][std::min(curr.second, prev.second)];
+				int diagonal = (int)readPos - (int)anchorChains[curr.first].nodeOffsets[std::min(curr.second, prev.second)];
+				if (!fw) diagonal = (int)readPos + (int)anchorChains[curr.first].nodeOffsets[std::min(curr.second, prev.second)];
 				allelesInThisRead.emplace_back(curr.first + (fw ? firstBitUint64_t : 0), diagonal, std::min(curr.second, prev.second), index);
 				lastCore = k;
 			}
@@ -1241,7 +938,7 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 		std::sort(allelesInThisRead.begin(), allelesInThisRead.end());
 		for (size_t i = 0; i < allelesInThisRead.size(); i++)
 		{
-			if (i == 0 || std::get<0>(allelesInThisRead[i]) != std::get<0>(allelesInThisRead[i-1]) || std::get<1>(allelesInThisRead[i]) > std::get<1>(allelesInThisRead[i-1]) + (int)coreNodeOffsetInChain[std::get<0>(allelesInThisRead[i])].back()/2)
+			if (i == 0 || std::get<0>(allelesInThisRead[i]) != std::get<0>(allelesInThisRead[i-1]) || std::get<1>(allelesInThisRead[i]) > std::get<1>(allelesInThisRead[i-1]) + (int)anchorChains[std::get<0>(allelesInThisRead[i])].nodeOffsets.back()/2)
 			{
 				allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].emplace_back();
 				std::get<0>(allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back()) = i;
@@ -1251,51 +948,6 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 		}
 	}
 	return std::make_pair(std::move(allelesPerChain), std::move(allelesPerReadPerChain));
-}
-
-void heapify(std::vector<std::pair<size_t, size_t>>& heap)
-{
-	// good enough, todo implement better
-	std::sort(heap.begin(), heap.end());
-}
-
-size_t getShortestPathLength(const uint64_t start, const uint64_t end, const SparseEdgeContainer& edges, const UnitigGraph& graph)
-{
-	std::vector<std::pair<size_t, size_t>> minHeap;
-	phmap::flat_hash_set<uint64_t> checked;
-	minHeap.emplace_back(start, 0);
-	while (minHeap.size() >= 1)
-	{
-		auto top = minHeap[0];
-		std::swap(minHeap[0], minHeap.back());
-		minHeap.pop_back();
-		heapify(minHeap);
-		if (top.first == end) return top.second;
-		if (checked.count(top.first) == 1) continue;
-		checked.insert(top.first);
-		for (auto edge : edges.getEdges(std::make_pair(top.first & maskUint64_t, top.first & firstBitUint64_t)))
-		{
-			if (checked.count((edge.first & maskUint64_t) + (edge.second ? firstBitUint64_t : 0)) == 1) continue;
-			minHeap.emplace_back((edge.first & maskUint64_t) + (edge.second ? firstBitUint64_t : 0), top.second + graph.lengths[top.first & maskUint64_t]);
-		}
-		std::sort(minHeap.begin(), minHeap.end());
-	}
-	assert(false);
-}
-
-std::vector<std::vector<size_t>> getCoreNodeOffsetsPerChain(const std::vector<std::vector<uint64_t>>& coreNodeChains, const SparseEdgeContainer& edges, const UnitigGraph& unitigGraph)
-{
-	std::vector<std::vector<size_t>> result;
-	result.resize(coreNodeChains.size());
-	for (size_t i = 0; i < coreNodeChains.size(); i++)
-	{
-		result[i].push_back(0);
-		for (size_t j = 1; j < coreNodeChains[i].size(); j++)
-		{
-			result[i].push_back(result[i].back() + getShortestPathLength(coreNodeChains[i][j-1], coreNodeChains[i][j], edges, unitigGraph));
-		}
-	}
-	return result;
 }
 
 std::vector<size_t> getConsensusAlleles(const std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>& allelesPerRead, const size_t alleleCount)
@@ -1857,34 +1509,33 @@ std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, si
 	return splittedReads;
 }
 
-std::vector<std::vector<std::vector<size_t>>> phaseCoreChains(const std::vector<std::vector<uint64_t>>& coreNodeChains, const std::vector<size_t>& chainPloidies, const std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>>& allelesPerReadPerChain, const double approxOneHapCoverage)
+std::vector<std::vector<std::vector<size_t>>> phaseCoreChains(const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>>& allelesPerReadPerChain, const double approxOneHapCoverage)
 {
-	assert(coreNodeChains.size() == chainPloidies.size());
-	assert(coreNodeChains.size() == allelesPerReadPerChain.size());
+	assert(anchorChains.size() == allelesPerReadPerChain.size());
 	std::vector<std::vector<std::vector<size_t>>> result;
-	result.resize(coreNodeChains.size());
-	for (size_t i = 0; i < coreNodeChains.size(); i++)
+	result.resize(anchorChains.size());
+	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
-		if (coreNodeChains[i].size() < 2) continue;
-		std::cerr << "ploidy " << chainPloidies[i] << std::endl;
-		if (chainPloidies[i] == 1)
+		if (anchorChains[i].nodes.size() < 2) continue;
+		std::cerr << "ploidy " << anchorChains[i].ploidy << std::endl;
+		if (anchorChains[i].ploidy == 1)
 		{
-			result[i].push_back(getConsensusAlleles(allelesPerReadPerChain[i], coreNodeChains[i].size()-1));
+			result[i].push_back(getConsensusAlleles(allelesPerReadPerChain[i], anchorChains[i].nodes.size()-1));
 			continue;
 		}
-		else if (chainPloidies[i] == 2)
+		else if (anchorChains[i].ploidy == 2)
 		{
-			auto phasedReads = phaseReadsToHaplotypes(allelesPerReadPerChain[i], coreNodeChains[i], chainPloidies[i], coreNodeChains[i].size()-1, approxOneHapCoverage);
+			auto phasedReads = phaseReadsToHaplotypes(allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()-1, approxOneHapCoverage);
 			if (phasedReads.size() == 0) continue;
 			std::cerr << "phased" << std::endl;
 			for (size_t j = 0; j < phasedReads.size(); j++)
 			{
-				result[i].push_back(getConsensusAlleles(phasedReads[j], coreNodeChains[i].size()-1));
+				result[i].push_back(getConsensusAlleles(phasedReads[j], anchorChains[i].nodes.size()-1));
 			}
 		}
 		else
 		{
-			std::cerr << "skipped chain with ploidy " << chainPloidies[i] << std::endl;
+			std::cerr << "skipped chain with ploidy " << anchorChains[i].ploidy << std::endl;
 		}
 	}
 	return result;
@@ -1892,34 +1543,18 @@ std::vector<std::vector<std::vector<size_t>>> phaseCoreChains(const std::vector<
 
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLinearizable(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
-	auto edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
-	std::vector<bool> coreNode;
-	coreNode.resize(unitigGraph.nodeCount());
-	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
-	{
-		if (unitigGraph.lengths[i] < 100) continue;
-		coreNode[i] = true;
-	}
-	addCoreNodes(coreNode, edges);
-	std::vector<std::vector<uint64_t>> coreNodeChains = getCoreNodeChains(edges, coreNode);
-	std::vector<size_t> chainPloidies;
-	std::cerr << coreNodeChains.size() << " core node chains" << std::endl;
-	for (size_t i = 0; i < coreNodeChains.size(); i++)
-	{
-		size_t ploidy = estimateCoreNodeChainPloidy(coreNodeChains[i], unitigGraph, approxOneHapCoverage);
-		chainPloidies.emplace_back(ploidy);
-	}
-	std::vector<std::vector<size_t>> coreNodeOffsets = getCoreNodeOffsetsPerChain(coreNodeChains, edges, unitigGraph);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<std::vector<std::vector<uint64_t>>>> allelesPerChain;
 	std::vector<std::vector<std::tuple<size_t, int, std::vector<std::pair<size_t, size_t>>>>> allelesPerReadPerChain;
-	std::tie(allelesPerChain, allelesPerReadPerChain) = getRawReadInfoPerChain(coreNodeChains, coreNodeOffsets, readPaths, unitigGraph);
-	for (size_t i = 0; i < coreNodeChains.size(); i++)
+	std::tie(allelesPerChain, allelesPerReadPerChain) = getRawReadInfoPerChain(anchorChains, readPaths, unitigGraph);
+	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
-		for (size_t j = 0; j+1 < coreNodeChains[i].size(); j++)
+		for (size_t j = 0; j+1 < anchorChains[i].nodes.size(); j++)
 		{
-			std::cerr << "chain " << i << " ploidy " << chainPloidies[i] << " node_" << (coreNodeChains[i][j] & maskUint64_t) << " node_" << (coreNodeChains[i][j+1] & maskUint64_t) << " allele count " << allelesPerChain[i][j].size() << std::endl;
+			std::cerr << "chain " << i << " ploidy " << anchorChains[i].ploidy << " node_" << (anchorChains[i].nodes[j] & maskUint64_t) << " node_" << (anchorChains[i].nodes[j+1] & maskUint64_t) << " allele count " << allelesPerChain[i][j].size() << std::endl;
 		}
 	}
-	std::vector<std::vector<std::vector<size_t>>> chainHaplotypes = phaseCoreChains(coreNodeChains, chainPloidies, allelesPerReadPerChain, approxOneHapCoverage);
+	std::vector<std::vector<std::vector<size_t>>> chainHaplotypes = phaseCoreChains(anchorChains, allelesPerReadPerChain, approxOneHapCoverage);
 	return std::make_pair(unitigGraph, readPaths);
 }
