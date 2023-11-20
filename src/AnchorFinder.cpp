@@ -163,10 +163,74 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 	// return edges;
 }
 
+uint64_t findBubbleEnd(const UnitigGraph& unitigGraph, const SparseEdgeContainer& edges, const uint64_t startNode, const size_t maxNodeSize)
+{
+	std::vector<uint64_t> S;
+	phmap::flat_hash_set<uint64_t> visited;
+	phmap::flat_hash_set<uint64_t> seen;
+	seen.insert(startNode);
+	S.push_back(startNode);
+	while (S.size() >= 1)
+	{
+		uint64_t top = S.back();
+		S.pop_back();
+		assert(seen.count(top) == 1);
+		seen.erase(top);
+		assert(visited.count(top) == 0);
+		visited.insert(top);
+		if (top != startNode && unitigGraph.lengths[top & maskUint64_t] > maxNodeSize) return std::numeric_limits<size_t>::max();
+		if (edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)).size() == 0) return std::numeric_limits<size_t>::max();
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			if ((edge.first) == (top & maskUint64_t)) return std::numeric_limits<size_t>::max();
+			if (visited.count(edge.first + (edge.second ? 0 : firstBitUint64_t)) == 1) return std::numeric_limits<size_t>::max();
+			if (edge.first + (edge.second ? firstBitUint64_t : 0) == startNode) return std::numeric_limits<size_t>::max();
+			assert(visited.count(edge.first + (edge.second ? firstBitUint64_t : 0)) == 0);
+			seen.insert(edge.first + (edge.second ? firstBitUint64_t : 0));
+			bool hasNonvisitedParent = false;
+			for (auto edge2 : edges.getEdges(reverse(edge)))
+			{
+				if (visited.count(edge2.first + (edge2.second ? 0 : firstBitUint64_t)) == 0)
+				{
+					hasNonvisitedParent = true;
+				}
+			}
+			if (!hasNonvisitedParent) S.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+		}
+		if (S.size() == 1 && seen.size() == 1 && S[0] == *seen.begin())
+		{
+			uint64_t end = S.back();
+			return end;
+		}
+	}
+	return std::numeric_limits<size_t>::max();
+}
+
 void extendAnchors(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, std::vector<bool>& anchor)
 {
-	// todo implement
-	return;
+	SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		if (!anchor[i]) continue;
+		uint64_t start = i;
+		while (start != std::numeric_limits<size_t>::max())
+		{
+			start = findBubbleEnd(unitigGraph, edges, start, 100);
+			if (start == std::numeric_limits<size_t>::max()) break;
+			if (anchor[start & maskUint64_t]) break;
+			std::cerr << "extended anchor from >" << i << " to " << (start & maskUint64_t) << std::endl;
+			anchor[start & maskUint64_t] = true;
+		}
+		start = i + firstBitUint64_t;
+		while (start != std::numeric_limits<size_t>::max())
+		{
+			start = findBubbleEnd(unitigGraph, edges, start, 100);
+			if (start == std::numeric_limits<size_t>::max()) break;
+			if (anchor[start & maskUint64_t]) break;
+			std::cerr << "extended anchor from <" << i << " to " << (start & maskUint64_t) << std::endl;
+			anchor[start & maskUint64_t] = true;
+		}
+	}
 }
 
 size_t getPloidy(const std::vector<uint64_t>& nodes, const UnitigGraph& unitigGraph, const double approxOneHapCoverage)
@@ -382,7 +446,7 @@ std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const s
 	{
 		if (unitigGraph.lengths[i] >= 100) anchor[i] = true;
 	}
-	// extendAnchors(unitigGraph, readPaths, anchor);
+	extendAnchors(unitigGraph, readPaths, anchor);
 	SparseEdgeContainer edges = getAnchorEdges(unitigGraph, readPaths, anchor, approxOneHapCoverage);
 	for (size_t i = 0; i < edges.size(); i++)
 	{
