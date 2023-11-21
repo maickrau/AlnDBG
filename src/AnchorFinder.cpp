@@ -42,10 +42,67 @@ std::vector<std::tuple<uint64_t, uint64_t, uint64_t>> getPossiblyTransitiveTripl
 	return resultvec;
 }
 
+bool isReachableWithoutNodeEvenBackwards(const uint64_t startNode, const uint64_t endNode, const uint64_t forbiddenNode, const SparseEdgeContainer& edges)
+{
+	const size_t maxCheck = 1000;
+	phmap::flat_hash_set<uint64_t> checked;
+	std::vector<uint64_t> stack;
+	stack.push_back(startNode ^ firstBitUint64_t);
+	while (stack.size() >= 1)
+	{
+		auto top = stack.back();
+		stack.pop_back();
+		if (checked.count(top) == 1) continue;
+		if ((top & maskUint64_t) == (endNode & maskUint64_t)) return true;
+		checked.insert(top);
+		if (checked.size() >= maxCheck) return false;
+		if ((top & maskUint64_t) != startNode && (top & maskUint64_t) != forbiddenNode) stack.push_back(top ^ firstBitUint64_t);
+		for (const auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, (top & firstBitUint64_t) ^ firstBitUint64_t)))
+		{
+			stack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+		}
+	}
+	return false;
+}
+
+bool blocksGraphPath(const UnitigGraph& unitigGraph, const SparseEdgeContainer& edges, const uint64_t startNode, const uint64_t midNode, const uint64_t endNode)
+{
+	if (!isReachableWithoutNodeEvenBackwards(startNode, endNode, std::numeric_limits<size_t>::max(), edges)) return false;
+	if (isReachableWithoutNodeEvenBackwards(startNode, endNode, midNode, edges)) return false;
+	return true;
+}
+
 SparseEdgeContainer getEdgesWithoutTransitiveEdges(const SparseEdgeContainer& rawEdgesWithTransitiveEdges, const std::vector<std::tuple<uint64_t, uint64_t, uint64_t>>& maybeTransitiveEdges, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<bool>& anchor, const double approxOneHapCoverage)
 {
-	SparseEdgeContainer result { rawEdgesWithTransitiveEdges };
-	// todo implement
+	if (maybeTransitiveEdges.size() == 0) return rawEdgesWithTransitiveEdges;
+	SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> forbiddenTransitiveEdges;
+	for (auto t : maybeTransitiveEdges)
+	{
+		if (!blocksGraphPath(unitigGraph, edges, std::get<0>(t), std::get<1>(t), std::get<2>(t))) continue;
+		forbiddenTransitiveEdges.emplace(std::get<0>(t), std::get<2>(t));
+		std::cerr << "forbid transitive edge " << ((std::get<0>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(t) & maskUint64_t) << " " << ((std::get<2>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(t) & maskUint64_t) << std::endl;
+	}
+	if (forbiddenTransitiveEdges.size() == 0) return rawEdgesWithTransitiveEdges;
+	SparseEdgeContainer result;
+	result.resize(rawEdgesWithTransitiveEdges.size());
+	for (size_t i = 0; i < rawEdgesWithTransitiveEdges.size(); i++)
+	{
+		std::pair<size_t, bool> fw { i, true };
+		for (const auto edge : rawEdgesWithTransitiveEdges.getEdges(fw))
+		{
+			if (forbiddenTransitiveEdges.count(std::make_pair(fw.first + (fw.second ? firstBitUint64_t : 0), edge.first + (edge.second ? firstBitUint64_t : 0))) == 1) continue;
+			if (forbiddenTransitiveEdges.count(std::make_pair(edge.first + (edge.second ? 0 : firstBitUint64_t), fw.first + (fw.second ? 0 : firstBitUint64_t))) == 1) continue;
+			result.addEdge(fw, edge);
+		}
+		std::pair<size_t, bool> bw { i, false };
+		for (const auto edge : rawEdgesWithTransitiveEdges.getEdges(bw))
+		{
+			if (forbiddenTransitiveEdges.count(std::make_pair(bw.first + (bw.second ? firstBitUint64_t : 0), edge.first + (edge.second ? firstBitUint64_t : 0))) == 1) continue;
+			if (forbiddenTransitiveEdges.count(std::make_pair(edge.first + (edge.second ? 0 : firstBitUint64_t), bw.first + (bw.second ? 0 : firstBitUint64_t))) == 1) continue;
+			result.addEdge(bw, edge);
+		}
+	}
 	return result;
 }
 
@@ -163,73 +220,72 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 	// return edges;
 }
 
-uint64_t findBubbleEnd(const UnitigGraph& unitigGraph, const SparseEdgeContainer& edges, const uint64_t startNode, const size_t maxNodeSize)
+void setReachableAnchors(const SparseEdgeContainer& edges, std::vector<std::vector<uint64_t>>& forwardReachableAnchors, std::vector<std::vector<uint64_t>>& backwardReachableAnchors, const uint64_t startNode, const std::vector<bool>& anchor)
 {
-	std::vector<uint64_t> S;
-	phmap::flat_hash_set<uint64_t> visited;
-	phmap::flat_hash_set<uint64_t> seen;
-	seen.insert(startNode);
-	S.push_back(startNode);
-	while (S.size() >= 1)
+	std::vector<uint64_t> stack;
+	phmap::flat_hash_set<uint64_t> checked;
+	for (auto edge : edges.getEdges(std::make_pair(startNode & maskUint64_t, startNode & firstBitUint64_t)))
 	{
-		uint64_t top = S.back();
-		S.pop_back();
-		assert(seen.count(top) == 1);
-		seen.erase(top);
-		assert(visited.count(top) == 0);
-		visited.insert(top);
-		if (top != startNode && unitigGraph.lengths[top & maskUint64_t] > maxNodeSize) return std::numeric_limits<size_t>::max();
-		if (edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)).size() == 0) return std::numeric_limits<size_t>::max();
-		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		stack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+	}
+	while (stack.size() >= 1)
+	{
+		auto top = stack.back();
+		stack.pop_back();
+		if (checked.count(top) == 1) continue;
+		if (anchor[top & maskUint64_t]) continue;
+		checked.insert(top);
+		if (top & firstBitUint64_t)
 		{
-			if ((edge.first) == (top & maskUint64_t)) return std::numeric_limits<size_t>::max();
-			if (visited.count(edge.first + (edge.second ? 0 : firstBitUint64_t)) == 1) return std::numeric_limits<size_t>::max();
-			if (edge.first + (edge.second ? firstBitUint64_t : 0) == startNode) return std::numeric_limits<size_t>::max();
-			assert(visited.count(edge.first + (edge.second ? firstBitUint64_t : 0)) == 0);
-			seen.insert(edge.first + (edge.second ? firstBitUint64_t : 0));
-			bool hasNonvisitedParent = false;
-			for (auto edge2 : edges.getEdges(reverse(edge)))
-			{
-				if (visited.count(edge2.first + (edge2.second ? 0 : firstBitUint64_t)) == 0)
-				{
-					hasNonvisitedParent = true;
-				}
-			}
-			if (!hasNonvisitedParent) S.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+			forwardReachableAnchors[top & maskUint64_t].emplace_back(startNode);
 		}
-		if (S.size() == 1 && seen.size() == 1 && S[0] == *seen.begin())
+		else
 		{
-			uint64_t end = S.back();
-			return end;
+			backwardReachableAnchors[top & maskUint64_t].emplace_back(startNode);
+		}
+		for (const auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			stack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
 		}
 	}
-	return std::numeric_limits<size_t>::max();
 }
 
 void extendAnchors(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, std::vector<bool>& anchor)
 {
 	SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	std::vector<std::vector<uint64_t>> forwardReachableAnchors;
+	std::vector<std::vector<uint64_t>> backwardReachableAnchors;
+	forwardReachableAnchors.resize(unitigGraph.nodeCount());
+	backwardReachableAnchors.resize(unitigGraph.nodeCount());
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
 		if (!anchor[i]) continue;
-		uint64_t start = i;
-		while (start != std::numeric_limits<size_t>::max())
+		setReachableAnchors(edges, forwardReachableAnchors, backwardReachableAnchors, i + firstBitUint64_t, anchor);
+		setReachableAnchors(edges, forwardReachableAnchors, backwardReachableAnchors, i, anchor);
+	}
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		if (anchor[i]) continue;
+		if (forwardReachableAnchors[i].size() != 1 && backwardReachableAnchors[i].size() != 1)
 		{
-			start = findBubbleEnd(unitigGraph, edges, start, 100);
-			if (start == std::numeric_limits<size_t>::max()) break;
-			if (anchor[start & maskUint64_t]) break;
-			std::cerr << "extended anchor from >" << i << " to " << (start & maskUint64_t) << std::endl;
-			anchor[start & maskUint64_t] = true;
+			continue;
 		}
-		start = i + firstBitUint64_t;
-		while (start != std::numeric_limits<size_t>::max())
+		if (forwardReachableAnchors[i].size() == 0 || backwardReachableAnchors[i].size() == 0) continue;
+		bool anyNotBlocked = false;
+		for (size_t j = 0; j < forwardReachableAnchors[i].size(); j++)
 		{
-			start = findBubbleEnd(unitigGraph, edges, start, 100);
-			if (start == std::numeric_limits<size_t>::max()) break;
-			if (anchor[start & maskUint64_t]) break;
-			std::cerr << "extended anchor from <" << i << " to " << (start & maskUint64_t) << std::endl;
-			anchor[start & maskUint64_t] = true;
+			for (size_t k = 0; k < backwardReachableAnchors[i].size(); k++)
+			{
+				if (!blocksGraphPath(unitigGraph, edges, backwardReachableAnchors[i][k], i, forwardReachableAnchors[i][j] ^ firstBitUint64_t))
+				{
+					anyNotBlocked = true;
+					break;
+				}
+			}
+			if (anyNotBlocked) break;
 		}
+		if (anyNotBlocked) continue;
+		anchor[i] = true;
 	}
 }
 
