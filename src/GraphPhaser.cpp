@@ -870,6 +870,49 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 			coreNodeLocator[anchorChains[i].nodes[j] & maskUint64_t] = std::make_pair(i, j);
 		}
 	}
+	phmap::flat_hash_map<size_t, std::tuple<size_t, size_t, size_t>> simpleBubbleAllele;
+	{
+		SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+		for (size_t i = 0; i < anchorChains.size(); i++)
+		{
+			for (size_t j = 1; j < anchorChains[i].nodes.size(); j++)
+			{
+				const uint64_t prevNode = anchorChains[i].nodes[j-1];
+				const uint64_t thisNode = anchorChains[i].nodes[j];
+				if (edges.getEdges(std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t)).size() != 2) continue;
+				if (edges.getEdges(std::make_pair(thisNode & maskUint64_t, (thisNode & firstBitUint64_t) ^ firstBitUint64_t)).size() != 2) continue;
+				bool valid = true;
+				for (auto edge : edges.getEdges(std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t)))
+				{
+					if (edges.getEdges(edge).size() != 1)
+					{
+						valid = false;
+						break;
+					}
+					if (edges.getEdges(reverse(edge)).size() != 1)
+					{
+						valid = false;
+						break;
+					}
+					if (edges.getEdges(edge)[0] != std::pair<size_t, bool>{ thisNode & maskUint64_t, thisNode & firstBitUint64_t })
+					{
+						valid = false;
+						break;
+					}
+				}
+				if (!valid) continue;
+				std::cerr << "found simple bubble between " << (prevNode & maskUint64_t) << " " << (thisNode & maskUint64_t) << std::endl;
+				for (auto edge : edges.getEdges(std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t)))
+				{
+					std::vector<uint64_t> allele;
+					allele.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+					size_t index = getAlleleIndex(allelesPerChain, i, j-1, allele);
+					assert(simpleBubbleAllele.count(edge.first) == 0);
+					simpleBubbleAllele[edge.first] = std::make_tuple(i, j-1, index);
+				}
+			}
+		}
+	}
 	for (size_t readi = 0; readi < readPaths.size(); readi++)
 	{
 		std::vector<std::tuple<size_t, int, size_t, size_t>> allelesInThisRead;
@@ -946,6 +989,71 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 				if (!fw) diagonal = (int)readPos + (int)anchorChains[curr.first].nodeOffsets[std::min(curr.second, prev.second)];
 				allelesInThisRead.emplace_back(curr.first + (fw ? firstBitUint64_t : 0), diagonal, std::min(curr.second, prev.second), index);
 				lastCore = k;
+			}
+		}
+		// simple bubble alleles
+		uint64_t lastAnchor = std::numeric_limits<size_t>::max();
+		int lastAnchorDiagonal = 0;
+		size_t lastAnchorJ = 0;
+		size_t lastSimpleBubble = std::numeric_limits<size_t>::max();
+		std::tuple<size_t, size_t, size_t> uniqueLastSimpleBubbleAllele { std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max() };
+		for (size_t j = 0; j < readPaths[readi].paths.size(); j++)
+		{
+			size_t readPos = readPaths[readi].paths[j].readStartPos;
+			for (size_t k = 0; k < readPaths[readi].paths[j].path.size(); k++)
+			{
+				const uint64_t node = readPaths[readi].paths[j].path[k];
+				readPos += unitigGraph.lengths[node & maskUint64_t];
+				if (k == 0) readPos -= readPaths[readi].paths[j].pathLeftClipKmers;
+				if (coreNodeLocator.count(node & maskUint64_t) == 0)
+				{
+					if (simpleBubbleAllele.count(node & maskUint64_t) == 1 && node != lastSimpleBubble)
+					{
+						if (std::get<0>(uniqueLastSimpleBubbleAllele) != std::numeric_limits<size_t>::max())
+						{
+							uniqueLastSimpleBubbleAllele = std::make_tuple(std::numeric_limits<size_t>::max()-1, std::numeric_limits<size_t>::max()-1, std::numeric_limits<size_t>::max()-1);
+						}
+						else
+						{
+							uniqueLastSimpleBubbleAllele = simpleBubbleAllele.at(node & maskUint64_t);
+						}
+						lastSimpleBubble = node;
+					}
+					continue;
+				}
+				std::pair<size_t, size_t> pos = coreNodeLocator.at(node & maskUint64_t);
+				assert((node & maskUint64_t) == (anchorChains[pos.first].nodes[pos.second] & maskUint64_t));
+				bool fw = (node & firstBitUint64_t) == (anchorChains[pos.first].nodes[pos.second] & firstBitUint64_t);
+				int diagonal = (int)readPos - (int)anchorChains[pos.first].nodeOffsets[pos.second];
+				if (!fw) diagonal = (int)readPos + (int)anchorChains[pos.first].nodeOffsets[pos.second];
+				if (lastAnchor == std::numeric_limits<size_t>::max() || lastAnchorJ == j || std::get<0>(uniqueLastSimpleBubbleAllele) != pos.first || (fw && std::get<1>(uniqueLastSimpleBubbleAllele)+1 != pos.second) || (!fw && std::get<1>(uniqueLastSimpleBubbleAllele) != pos.second))
+				{
+					lastAnchor = node;
+					lastAnchorJ = j;
+					uniqueLastSimpleBubbleAllele = std::make_tuple(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+					lastAnchorDiagonal = diagonal;
+					lastSimpleBubble = std::numeric_limits<size_t>::max();
+					continue;
+				}
+				std::pair<size_t, size_t> prevpos = coreNodeLocator.at(lastAnchor & maskUint64_t);
+				bool prevfw = (lastAnchor & firstBitUint64_t) == (anchorChains[prevpos.first].nodes[prevpos.second] & firstBitUint64_t);
+				if (fw != prevfw || prevpos.first != pos.first || (fw && prevpos.second+1 != pos.second) || (!fw && prevpos.second != pos.second+1) || diagonal > lastAnchorDiagonal + (int)anchorChains[pos.first].nodeOffsets.back()*0.5 || diagonal < lastAnchorDiagonal - (int)anchorChains[pos.first].nodeOffsets.back()*0.5)
+				{
+					lastAnchor = node;
+					lastAnchorJ = j;
+					uniqueLastSimpleBubbleAllele = std::make_tuple(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+					lastAnchorDiagonal = diagonal;
+					lastSimpleBubble = std::numeric_limits<size_t>::max();
+					continue;
+				}
+				assert(std::get<2>(uniqueLastSimpleBubbleAllele) < std::numeric_limits<size_t>::max()-1);
+				std::cerr << "added allele for read " << readi << " between simple bubble " << (lastAnchor & maskUint64_t) << " " << (node & maskUint64_t) << std::endl;
+				allelesInThisRead.emplace_back(pos.first + (fw ? firstBitUint64_t : 0), diagonal, std::min(pos.second, prevpos.second), std::get<2>(uniqueLastSimpleBubbleAllele));
+				lastAnchor = node;
+				lastAnchorJ = j;
+				uniqueLastSimpleBubbleAllele = std::make_tuple(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
+				lastAnchorDiagonal = diagonal;
+				lastSimpleBubble = std::numeric_limits<size_t>::max();
 			}
 		}
 		std::sort(allelesInThisRead.begin(), allelesInThisRead.end());
