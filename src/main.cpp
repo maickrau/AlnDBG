@@ -123,14 +123,17 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, 20);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, 20);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, 20);
-	unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
 //	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraph(unitigGraph, readUnitigGraphPaths, getGraphPhaseBlockNodes(unitigGraph, readUnitigGraphPaths, 17));
 //	forbidAlnsFromDifferentHaplotypes(unitigGraph, readUnitigGraphPaths, matches, readNames);
 //	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
-	auto nodeSequences  = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
+	auto nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	writeGraph(outputFileName, unitigGraph, nodeSequences, k);
 //	writeGraph(outputFileName, unitigGraph, k);
 	writePaths("paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
+	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
+	writeGraph("phased-graph.gfa", unitigGraph, nodeSequences, k);
+	writePaths("phased-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 }
 
 void doHaplofilter(std::vector<MatchGroup>& matches, const std::vector<size_t>& readLengths)
@@ -192,6 +195,10 @@ int main(int argc, char** argv)
 		readKmerLengths[i] = readBasepairLengths[i] + 1 - graphk;
 	}
 	const std::vector<std::string>& readNames = storage.getNames();
+	for (size_t i = 0; i < readNames.size(); i++)
+	{
+		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
+	}
 	std::mutex printMutex;
 	std::vector<MatchGroup> matches;
 	auto result = matchIndex.iterateMatchChains(numThreads, 2, 1000, 50, storage.getRawReadLengths(), [&printMutex, &matches, minAlignmentLength, k, graphd](const size_t left, const size_t leftstart, const size_t leftend, const bool leftFw, const size_t right, const size_t rightstart, const size_t rightend, const bool rightFw)
