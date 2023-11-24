@@ -1037,7 +1037,8 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 				}
 				std::pair<size_t, size_t> prevpos = coreNodeLocator.at(lastAnchor & maskUint64_t);
 				bool prevfw = (lastAnchor & firstBitUint64_t) == (anchorChains[prevpos.first].nodes[prevpos.second] & firstBitUint64_t);
-				if (fw != prevfw || prevpos.first != pos.first || (fw && prevpos.second+1 != pos.second) || (!fw && prevpos.second != pos.second+1) || diagonal > lastAnchorDiagonal + (int)anchorChains[pos.first].nodeOffsets.back()*0.5 || diagonal < lastAnchorDiagonal - (int)anchorChains[pos.first].nodeOffsets.back()*0.5)
+				int maxDiagonalDifference = (int)(anchorChains[pos.first].nodeOffsets.back() + unitigGraph.lengths[anchorChains[pos.first].nodes.back() & maskUint64_t])*0.5;
+				if (fw != prevfw || prevpos.first != pos.first || (fw && prevpos.second+1 != pos.second) || (!fw && prevpos.second != pos.second+1) || diagonal > lastAnchorDiagonal + maxDiagonalDifference || diagonal < lastAnchorDiagonal - maxDiagonalDifference)
 				{
 					lastAnchor = node;
 					lastAnchorJ = j;
@@ -1716,6 +1717,7 @@ std::vector<std::pair<size_t, size_t>> getNodeLocationsWithinChain(const UnitigG
 	{
 		for (size_t j = 1; j < anchorChains[i].nodes.size(); j++)
 		{
+			std::cerr << "mark from " << ((anchorChains[i].nodes[j-1] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[j-1] & maskUint64_t) << " to " << ((anchorChains[i].nodes[j] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[j] & maskUint64_t) << std::endl;
 			markNodePositions(result, anchorChains[i].nodes[j-1], anchorChains[i].nodes[j], edges, i, j-1);
 		}
 		result[anchorChains[i].nodes.back() & maskUint64_t] = std::make_pair(i, anchorChains[i].nodes.size()-1);
@@ -1754,7 +1756,7 @@ void iterateReadHaplotypeChunks(const std::vector<std::vector<std::tuple<size_t,
 
 void unzipPhaseBlock(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& resultPaths, const AnchorChain& anchorChain, const std::vector<std::vector<std::tuple<size_t, bool, int>>>& readsPerHaplotype, const std::vector<std::pair<size_t, size_t>>& nodeLocationInChain, const size_t chain, const size_t minSolvedIndex, const size_t maxSolvedIndex)
 {
-	int maxDiagonalDifference = ((int)anchorChain.nodeOffsets.back() * .5);
+	int maxDiagonalDifference = ((int)(anchorChain.nodeOffsets.back() + resultGraph.lengths[anchorChain.nodes.back() & maskUint64_t]) * .5);
 	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> nodeReplacement;
 	iterateReadHaplotypeChunks(readsPerHaplotype, [&resultGraph, &resultPaths, &anchorChain, &nodeLocationInChain, chain, &nodeReplacement, minSolvedIndex, maxSolvedIndex, maxDiagonalDifference](const size_t read, const std::vector<std::tuple<int, bool, size_t>>& haplotypeDiagonals)
 	{
@@ -1816,14 +1818,13 @@ void unzipPhaseBlock(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& resu
 				size_t prevhap = std::numeric_limits<size_t>::max();
 				for (auto t : haplotypeDiagonals)
 				{
-					std::cerr << std::get<0>(t) << " " << (std::get<1>(t) ? "+" : "-") << " " << std::get<2>(t) << " " << "node_" << (node & maskUint64_t) << " " << diagonal << " " << (fw ? "+" : "-") << " " << ((int)anchorChain.nodeOffsets.back() * .5) << std::endl;
 					if (std::get<1>(t) != fw) continue;
-					if (std::get<0>(t) < diagonal + (int)anchorChain.nodeOffsets.back() * .5 && std::get<0>(t) > diagonal - (int)anchorChain.nodeOffsets.back() * .5)
+					if (std::get<0>(t) < diagonal + maxDiagonalDifference && std::get<0>(t) > diagonal - maxDiagonalDifference)
 					{
 						assert(hap == std::numeric_limits<size_t>::max());
 						hap = std::get<2>(t);
 					}
-					if (std::get<0>(t) < lastDiagonal + (int)anchorChain.nodeOffsets.back() * .5 && std::get<0>(t) > lastDiagonal - (int)anchorChain.nodeOffsets.back() * .5)
+					if (std::get<0>(t) < lastDiagonal + maxDiagonalDifference && std::get<0>(t) > lastDiagonal - maxDiagonalDifference)
 					{
 						assert(prevhap == std::numeric_limits<size_t>::max());
 						prevhap = std::get<2>(t);
@@ -1967,6 +1968,14 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLinearizable(const
 {
 	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
+	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
+	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
+	{
+		for (auto chain : chainPositionsInReads[i])
+		{
+			std::cerr << "read " << i << " chain " << (chain.chain & maskUint64_t) << " " << ((chain.chain & firstBitUint64_t) ? "fw" : "bw") << " (" << (anchorChains[chain.chain].nodes[0] & maskUint64_t) << " " << (anchorChains[chain.chain].nodes.back() & maskUint64_t) << ") " << chain.chainStartPosInRead << " " << chain.chainEndPosInRead << std::endl;
+		}
+	}
 	std::vector<std::vector<std::vector<std::vector<uint64_t>>>> allelesPerChain;
 	std::vector<std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>> allelesPerReadPerChain;
 	std::tie(allelesPerChain, allelesPerReadPerChain) = getRawReadInfoPerChain(anchorChains, readPaths, unitigGraph);
