@@ -1708,17 +1708,59 @@ void markNodePositions(std::vector<std::pair<size_t, size_t>>& result, const uin
 	}
 }
 
+bool canUnambiguouslyMark(const SparseEdgeContainer& edges, const uint64_t startNode, const uint64_t endNode, const std::vector<bool>& anchor)
+{
+	std::vector<uint64_t> stack;
+	phmap::flat_hash_set<uint64_t> visited;
+	size_t anchorCount = 0;
+	stack.push_back(startNode);
+	while (stack.size() >= 1)
+	{
+		uint64_t top = stack.back();
+		stack.pop_back();
+		if (visited.count(top) == 1) continue;
+		visited.insert(top);
+		if (anchor[top & maskUint64_t])
+		{
+			anchorCount += 1;
+			if (anchorCount > 2) return false;
+		}
+		if (!anchor[top & maskUint64_t]) stack.push_back(top ^ firstBitUint64_t);
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			stack.push_back(edge.first + (edge.second ? 0 : firstBitUint64_t));
+		}
+	}
+	if (visited.count(endNode) == 0 && visited.count(endNode ^ firstBitUint64_t) == 0) return false;
+	if (anchorCount != 2) return false;
+	return true;
+}
+
 std::vector<std::pair<size_t, size_t>> getNodeLocationsWithinChain(const UnitigGraph& unitigGraph, const std::vector<AnchorChain>& anchorChains)
 {
 	SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
 	std::vector<std::pair<size_t, size_t>> result;
 	result.resize(unitigGraph.nodeCount(), std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()));
+	std::vector<bool> anchor;
+	anchor.resize(unitigGraph.nodeCount(), false);
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		for (size_t j = 0; j < anchorChains[i].nodes.size(); j++)
+		{
+			anchor[anchorChains[i].nodes[j] & maskUint64_t] = true;
+		}
+	}
 	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
 		for (size_t j = 1; j < anchorChains[i].nodes.size(); j++)
 		{
-			std::cerr << "mark from " << ((anchorChains[i].nodes[j-1] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[j-1] & maskUint64_t) << " to " << ((anchorChains[i].nodes[j] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[j] & maskUint64_t) << std::endl;
-			markNodePositions(result, anchorChains[i].nodes[j-1], anchorChains[i].nodes[j], edges, i, j-1);
+			if (canUnambiguouslyMark(edges, anchorChains[i].nodes[j-1], anchorChains[i].nodes[j], anchor))
+			{
+				std::cerr << "mark from " << ((anchorChains[i].nodes[j-1] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[j-1] & maskUint64_t) << " to " << ((anchorChains[i].nodes[j] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[j] & maskUint64_t) << std::endl;
+				markNodePositions(result, anchorChains[i].nodes[j-1], anchorChains[i].nodes[j], edges, i, j-1);
+			}
+			result[anchorChains[i].nodes[j-1] & maskUint64_t] = std::make_pair(i, j-1);
+			result[anchorChains[i].nodes[j] & maskUint64_t] = std::make_pair(i, j);
 		}
 		result[anchorChains[i].nodes.back() & maskUint64_t] = std::make_pair(i, anchorChains[i].nodes.size()-1);
 	}
