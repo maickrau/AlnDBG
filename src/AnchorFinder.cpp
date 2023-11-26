@@ -441,6 +441,9 @@ void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vecto
 					continue;
 				}
 				lastAnchor = node;
+				lastAnchorOffset = readOffset;
+				lastAnchorPlus = 0;
+				if (k == 0) lastAnchorPlus = readPaths[i].paths[j].pathLeftClipKmers;
 				readOffset += unitigGraph.lengths[node & maskUint64_t];
 				if (k == 0) readOffset -= readPaths[i].paths[j].pathLeftClipKmers;
 			}
