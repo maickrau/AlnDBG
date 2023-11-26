@@ -540,6 +540,7 @@ size_t UnitigGraph::nodeCount() const
 
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> filterUnitigGraph(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const RankBitvector& keptNodes)
 {
+	assert(keptNodes.size() == unitigGraph.nodeCount());
 	UnitigGraph result;
 	std::vector<ReadPathBundle> resultPaths;
 	std::vector<std::vector<uint64_t>> unitigs = getUnitigs(unitigGraph.nodeCount(), keptNodes, getUniqueEdges(readPaths, unitigGraph.nodeCount(), keptNodes));

@@ -54,7 +54,7 @@ bool isReachableWithoutNodeEvenBackwards(const uint64_t startNode, const uint64_
 		if (checked.count(top) == 1) continue;
 		if ((top & maskUint64_t) == (endNode & maskUint64_t)) return true;
 		checked.insert(top);
-		if ((top & maskUint64_t) != startNode && (top & maskUint64_t) != forbiddenNode && !anchor[top & maskUint64_t]) stack.push_back(top ^ firstBitUint64_t);
+		if ((top & maskUint64_t) != startNode && (top & maskUint64_t) != (forbiddenNode & maskUint64_t) && !anchor[top & maskUint64_t]) stack.push_back(top ^ firstBitUint64_t);
 		for (const auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
 		{
 			stack.push_back(edge.first + (edge.second ? 0 : firstBitUint64_t));
