@@ -2182,9 +2182,17 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 							if (validChainEdges.hasEdge(std::make_pair(lastChain, lastFw), std::make_pair(currChain, currFw)))
 							{
 								solveThisBlock = true;
-								solveLastAnchor = (solvedAnchors.count(std::make_pair(lastChain, lastOffset)) == 1);
-								if (previousAnchorSolved) solveLastAnchor = false;
-								solveCurrAnchor = (solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1);
+								solveLastAnchor = false;
+								solveCurrAnchor = false;
+								if (anchorChains[lastChain].nodes.size() == 1)
+								{
+									solveLastAnchor = (solvedAnchors.count(std::make_pair(lastChain, lastOffset)) == 1);
+									if (previousAnchorSolved) solveLastAnchor = false;
+								}
+								if (anchorChains[currChain].nodes.size() == 1)
+								{
+									solveCurrAnchor = (solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1);
+								}
 								auto keypair = canon(std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t), std::make_pair(currNode & maskUint64_t, currNode & firstBitUint64_t));
 								std::pair<uint64_t, uint64_t> key { keypair.first.first + (keypair.first.second ? firstBitUint64_t : 0), keypair.second.first + (keypair.second.second ? firstBitUint64_t : 0) };
 								size_t tangle = nodeLocationInInterchainTangles[std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t)];
