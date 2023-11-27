@@ -2182,8 +2182,9 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 							if (validChainEdges.hasEdge(std::make_pair(lastChain, lastFw), std::make_pair(currChain, currFw)))
 							{
 								solveThisBlock = true;
-								solveLastAnchor = false;
-								solveCurrAnchor = false;
+								solveLastAnchor = (solvedAnchors.count(std::make_pair(lastChain, lastOffset)) == 1);
+								if (previousAnchorSolved) solveLastAnchor = false;
+								solveCurrAnchor = (solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1);
 								auto keypair = canon(std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t), std::make_pair(currNode & maskUint64_t, currNode & firstBitUint64_t));
 								std::pair<uint64_t, uint64_t> key { keypair.first.first + (keypair.first.second ? firstBitUint64_t : 0), keypair.second.first + (keypair.second.second ? firstBitUint64_t : 0) };
 								size_t tangle = nodeLocationInInterchainTangles[std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t)];
@@ -2486,7 +2487,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 		for (size_t j = minSolvedIndex; j <= maxSolvedIndex; j++)
 		{
 			assert(solvedLocations.count(std::make_pair(chain, j)) == 0);
-			std::cerr << "solve " << chain << " " << j << " (" << (j > 0 ? (anchorChains[chain].nodes[j-1] & maskUint64_t) : -1) << " to " << (anchorChains[chain].nodes[j] & maskUint64_t) << ")" << std::endl;
+			std::cerr << "solve " << chain << " " << j << " (" << (j > 0 ? (anchorChains[chain].nodes[j-1] & maskUint64_t) : -1) << " to " << (j < anchorChains[chain].nodes.size() ? (anchorChains[chain].nodes[j] & maskUint64_t) : std::numeric_limits<size_t>::max()) << ")" << std::endl;
 			solvedLocations.emplace(chain, j);
 			if (j != maxSolvedIndex) solvedAnchors.emplace(chain, j);
 		}
