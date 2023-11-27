@@ -1034,8 +1034,8 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 			{
 				currDiagonal = chainPositionsInReads[readi][j].chainStartPosInRead + anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodeOffsets.back();
 			}
-			std::cerr << "tangleconnection insert allele read " << readi << " chain " << (chainPositionsInReads[readi][j-1].chain) << (prevFw ? "+" : "-") << " bubble " << (prevFw ? anchorChains[chainPositionsInReads[readi][j-1].chain & maskUint64_t].nodes.size() : 0) << " allele " << prevIndex << " diagonal " << prevDiagonal << std::endl;
-			std::cerr << "tangleconnection insert allele read " << readi << " chain " << (chainPositionsInReads[readi][j].chain) << (currFw ? "+" : "-") << " bubble " << (currFw ? 0 : anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodes.size()) << " allele " << currIndex << " diagonal " << currDiagonal << std::endl;
+			std::cerr << "tangleconnection insert allele read " << readi << " chain " << (chainPositionsInReads[readi][j-1].chain & maskUint64_t) << (prevFw ? "+" : "-") << " bubble " << (prevFw ? anchorChains[chainPositionsInReads[readi][j-1].chain & maskUint64_t].nodes.size() : 0) << " allele " << prevIndex << " diagonal " << prevDiagonal << std::endl;
+			std::cerr << "tangleconnection insert allele read " << readi << " chain " << (chainPositionsInReads[readi][j].chain & maskUint64_t) << (currFw ? "+" : "-") << " bubble " << (currFw ? 0 : anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodes.size()) << " allele " << currIndex << " diagonal " << currDiagonal << std::endl;
 			allelesInThisRead.emplace_back(chainPositionsInReads[readi][j-1].chain, prevDiagonal, prevFw ? anchorChains[chainPositionsInReads[readi][j-1].chain & maskUint64_t].nodes.size() : 0, prevIndex);
 			allelesInThisRead.emplace_back(chainPositionsInReads[readi][j].chain, currDiagonal, currFw ? 0 : anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodes.size(), currIndex);
 		}
@@ -1115,6 +1115,7 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 				std::get<1>(allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back()) = std::get<0>(allelesInThisRead[i]) & firstBitUint64_t;
 				std::get<2>(allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back()) = std::get<1>(allelesInThisRead[i]);
 			}
+			std::cerr << "has allele chain " << (std::get<0>(allelesInThisRead[i]) & maskUint64_t) << ((std::get<0>(allelesInThisRead[i]) & firstBitUint64_t) ? "+" : "-") << " read " << readi << " diagonal " << std::get<1>(allelesInThisRead[i]) << " bubble " << std::get<2>(allelesInThisRead[i]) << " allele " << std::get<3>(allelesInThisRead[i]) << std::endl;
 			std::get<3>(allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back()).emplace_back(std::get<2>(allelesInThisRead[i]), std::get<3>(allelesInThisRead[i]));
 		}
 	}
@@ -1157,40 +1158,38 @@ std::pair<std::vector<std::vector<size_t>>, size_t> getMostCoveredAlleles(const 
 	size_t estimatedTotalPloidy = 0;
 	for (size_t i = 0; i < coveragePerAllele.size(); i++)
 	{
-		estimatedTotalPloidy += (double)coveragePerAllele[i].second / approxOneHapCoverage + 0.5;
+		size_t ploidyHere = (double)coveragePerAllele[i].second / approxOneHapCoverage + 0.5;
+		std::cerr << i << " " << coveragePerAllele[i].second << " " << ploidyHere << std::endl;
+		estimatedTotalPloidy += ploidyHere;
 	}
 	std::vector<std::vector<size_t>> result;
-	if (estimatedTotalPloidy != ploidy)
+	std::cerr << "estimated total ploidy " << estimatedTotalPloidy << std::endl;
+	if (estimatedTotalPloidy < ploidy || estimatedTotalPloidy > ploidy+1) //loosely allow one more found ploidy just in case haplotype coverage hovers around 1.5x average
 	{
 		return std::make_pair(result, 0);
 	}
+	size_t minorCount = 0;
+	while (coveragePerAllele.size() >= 1)
+	{
+		size_t lastPloidy = (double)coveragePerAllele.back().second / approxOneHapCoverage + 0.5;
+		if (lastPloidy > 0) break;
+		minorCount += readsPerAllele[coveragePerAllele.back().first].size();
+		coveragePerAllele.pop_back();
+	}
 	size_t gotPloidy = 0;
-	size_t i = 0;
-	for (i = 0; i < coveragePerAllele.size(); i++)
+	for (size_t i = 0; i < coveragePerAllele.size(); i++)
 	{
 		gotPloidy += (double)coveragePerAllele[i].second / approxOneHapCoverage + 0.5;
 		result.emplace_back(readsPerAllele[coveragePerAllele[i].first]);
 		std::sort(result.back().begin(), result.back().end());
-		if (gotPloidy == estimatedTotalPloidy)
-		{
-			i += 1;
-			break;
-		}
 	}
-	size_t minorCount = 0;
-	if (i < coveragePerAllele.size())
-	{
-		for (; i < coveragePerAllele.size(); i++)
-		{
-			minorCount += readsPerAllele[coveragePerAllele[i].first].size();
-		}
-	}
+	assert(gotPloidy == estimatedTotalPloidy);
 	return std::make_pair(result, minorCount);
 }
 
 bool allelesCouldMatch(const std::vector<std::vector<size_t>>& bestAllelesLeft, const std::vector<std::vector<size_t>>& bestAllelesRight, const size_t ploidy, const double approxOneHapCoverage)
 {
-	assert(ploidy == 2);
+	assert(ploidy == 2); // needs to handle polyploidy
 	assert(bestAllelesLeft.size() >= 2);
 	assert(bestAllelesRight.size() >= 2);
 	size_t requiredCoverage = 4;
@@ -1204,21 +1203,25 @@ bool allelesCouldMatch(const std::vector<std::vector<size_t>>& bestAllelesLeft, 
 
 std::vector<bool> getPossiblyHaplotypeInformativeSites(const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const std::vector<size_t>& coreNodeChain, const size_t ploidy, const double approxOneHapCoverage)
 {
+	assert(ploidy == 2); // needs to handle polyploidy
 	std::vector<std::vector<std::vector<size_t>>> bestAlleles;
 	bestAlleles.resize(readsPerAllele.size());
 	std::vector<bool> notgood;
 	notgood.resize(readsPerAllele.size(), false);
 	for (size_t i = 0; i < readsPerAllele.size(); i++)
 	{
+		std::cerr << "bubble index " << i << "/" << readsPerAllele.size() << std::endl;
 		size_t minorCount = 0;
 		std::tie(bestAlleles[i], minorCount) = getMostCoveredAlleles(readsPerAllele[i], ploidy, approxOneHapCoverage);
 		if (bestAlleles[i].size() == 0)
 		{
+			std::cerr << "bubble index " << i << "/" << readsPerAllele.size() << " best alleles zero, not good" << std::endl;
 			notgood[i] = true;
 			continue;
 		}
 		if (bestAlleles[i].size() < ploidy)
 		{
+			std::cerr << "bubble index " << i << "/" << readsPerAllele.size() << " best alleles less than ploidy, not good" << std::endl;
 			notgood[i] = true;
 			continue;
 		}
@@ -1229,6 +1232,7 @@ std::vector<bool> getPossiblyHaplotypeInformativeSites(const std::vector<std::ve
 		}
 		if (minorCount*10 > totalCoverage)
 		{
+			std::cerr << "bubble index " << i << "/" << readsPerAllele.size() << " minor allele coverage too high, not good" << std::endl;
 			notgood[i] = true;
 			continue;
 		}
@@ -1771,10 +1775,13 @@ std::vector<PhaseBlock> getChainPhaseBlocks(const size_t coreNodeChainIndex, con
 		{
 			assert(pair.first < unfilteredReadsPerAllele.size());
 			while (pair.second >= unfilteredReadsPerAllele[pair.first].size()) unfilteredReadsPerAllele[pair.first].emplace_back();
+			assert(std::find(unfilteredReadsPerAllele[pair.first][pair.second].begin(), unfilteredReadsPerAllele[pair.first][pair.second].end(), readi) == unfilteredReadsPerAllele[pair.first][pair.second].end());
 			unfilteredReadsPerAllele[pair.first][pair.second].emplace_back(readi);
 		}
 	}
+	std::cerr << "check chain " << coreNodeChainIndex << std::endl;
 	std::vector<bool> maybeHaplotypeInformative = getPossiblyHaplotypeInformativeSites(unfilteredReadsPerAllele, coreNodeChain, ploidy, approxOneHapCoverage);
+	std::cerr << "first informative: " << (maybeHaplotypeInformative[0] ? "yes" : "no") << " last: " << (maybeHaplotypeInformative.back() ? "yes" : "no") << std::endl;
 	size_t countMaybeInformativeSites = 0;
 	for (size_t i = 0; i < maybeHaplotypeInformative.size(); i++)
 	{
