@@ -1147,6 +1147,27 @@ std::vector<size_t> getConsensusAlleles(const std::vector<std::tuple<size_t, int
 	return result;
 }
 
+std::pair<std::vector<std::vector<size_t>>, size_t> getTopNCoveredAlleles(const std::vector<std::vector<size_t>>& readsPerAllele, const size_t numAlleles)
+{
+	std::vector<std::pair<size_t, size_t>> coveragePerAllele;
+	for (size_t i = 0; i < readsPerAllele.size(); i++)
+	{
+		coveragePerAllele.emplace_back(i, readsPerAllele[i].size());
+	}
+	std::sort(coveragePerAllele.begin(), coveragePerAllele.end(), [](auto left, auto right) { return left.second > right.second; });
+	size_t numMinors = 0;
+	for (size_t i = numAlleles; i < coveragePerAllele.size(); i++)
+	{
+		numMinors += coveragePerAllele[i].second;
+	}
+	std::vector<std::vector<size_t>> result;
+	for (size_t i = 0; i < coveragePerAllele.size() && i < numAlleles; i++)
+	{
+		result.emplace_back(readsPerAllele[coveragePerAllele[i].first]);
+	}
+	return std::make_pair(result, numMinors);
+}
+
 std::pair<std::vector<std::vector<size_t>>, size_t> getMostCoveredAlleles(const std::vector<std::vector<size_t>>& readsPerAllele, const size_t ploidy, const double approxOneHapCoverage)
 {
 	std::vector<std::pair<size_t, size_t>> coveragePerAllele;
@@ -1187,6 +1208,19 @@ std::pair<std::vector<std::vector<size_t>>, size_t> getMostCoveredAlleles(const 
 	return std::make_pair(result, minorCount);
 }
 
+bool allelesCouldSomewhatMatch(const std::vector<std::vector<size_t>>& bestAllelesLeft, const std::vector<std::vector<size_t>>& bestAllelesRight, const size_t ploidy, const size_t extraNonMatchers)
+{
+	assert(ploidy == 2); // needs to handle polyploidy
+	if (bestAllelesLeft.size() != ploidy) return false;
+	if (bestAllelesRight.size() != ploidy) return false;
+	size_t requiredCoveragePerHap = 3;
+	size_t normalCounts = intersectSize(bestAllelesLeft[0], bestAllelesRight[0]) + intersectSize(bestAllelesLeft[1], bestAllelesRight[1]);
+	size_t crossCounts = intersectSize(bestAllelesLeft[0], bestAllelesRight[1]) + intersectSize(bestAllelesLeft[1], bestAllelesRight[0]);
+	if (intersectSize(bestAllelesLeft[0], bestAllelesRight[0]) >= requiredCoveragePerHap && intersectSize(bestAllelesLeft[1], bestAllelesRight[1]) >= requiredCoveragePerHap && normalCounts > (crossCounts+extraNonMatchers)*9) return true;
+	if (intersectSize(bestAllelesLeft[0], bestAllelesRight[1]) >= requiredCoveragePerHap && intersectSize(bestAllelesLeft[1], bestAllelesRight[0]) >= requiredCoveragePerHap && crossCounts > (normalCounts+extraNonMatchers)*9) return true;
+	return false;
+}
+
 bool allelesCouldMatch(const std::vector<std::vector<size_t>>& bestAllelesLeft, const std::vector<std::vector<size_t>>& bestAllelesRight, const size_t ploidy, const double approxOneHapCoverage)
 {
 	assert(ploidy == 2); // needs to handle polyploidy
@@ -1201,7 +1235,7 @@ bool allelesCouldMatch(const std::vector<std::vector<size_t>>& bestAllelesLeft, 
 	return false;
 }
 
-std::vector<bool> getPossiblyHaplotypeInformativeSites(const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const std::vector<size_t>& coreNodeChain, const size_t ploidy, const double approxOneHapCoverage)
+std::vector<bool> getVeryLikelyHaplotypeInformativeSites(const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const std::vector<size_t>& coreNodeChain, const size_t ploidy, const double approxOneHapCoverage)
 {
 	assert(ploidy == 2); // needs to handle polyploidy
 	std::vector<std::vector<std::vector<size_t>>> bestAlleles;
@@ -1253,6 +1287,41 @@ std::vector<bool> getPossiblyHaplotypeInformativeSites(const std::vector<std::ve
 		}
 	}
 	return result;
+}
+
+std::vector<bool> extendMaybeHaplotypeInformativeSites(const std::vector<bool>& veryLikelyHaplotypeInformative, const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const std::vector<size_t>& coreNodeChain, const size_t ploidy, const double approxOneHapCoverage)
+{
+	std::vector<bool> result = veryLikelyHaplotypeInformative;
+	std::vector<std::vector<std::vector<size_t>>> bestAlleles;
+	std::vector<size_t> minorCount;
+	bestAlleles.resize(readsPerAllele.size());
+	minorCount.resize(readsPerAllele.size(), 0);
+	for (size_t i = 0; i < readsPerAllele.size(); i++)
+	{
+		std::tie(bestAlleles[i], minorCount[i]) = getTopNCoveredAlleles(readsPerAllele[i], ploidy);
+	}
+	for (size_t i = 0; i < result.size(); i++)
+	{
+		if (result[i]) continue;
+		for (size_t j = 0; j < veryLikelyHaplotypeInformative.size(); j++)
+		{
+			if (!veryLikelyHaplotypeInformative[j]) continue;
+			if (allelesCouldSomewhatMatch(bestAlleles[i], bestAlleles[j], ploidy, minorCount[i]+minorCount[j]))
+			{
+				std::cerr << "extended haplotype informative to bubble index " << i << "/" << readsPerAllele.size() << std::endl;
+				result[i] = true;
+				break;
+			}
+		}
+	}
+	return result;
+}
+
+std::vector<bool> getPossiblyHaplotypeInformativeSites(const std::vector<std::vector<std::vector<size_t>>>& readsPerAllele, const std::vector<size_t>& coreNodeChain, const size_t ploidy, const double approxOneHapCoverage)
+{
+	std::vector<bool> veryLikelyHaplotypeInformative = getVeryLikelyHaplotypeInformativeSites(readsPerAllele, coreNodeChain, ploidy, approxOneHapCoverage);
+	std::vector<bool> maybeHaplotypeInformative = extendMaybeHaplotypeInformativeSites(veryLikelyHaplotypeInformative, readsPerAllele, coreNodeChain, ploidy, approxOneHapCoverage);
+	return maybeHaplotypeInformative;
 }
 
 std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t>& readAssignment, const size_t ploidy, const std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>& allelesPerRead, const std::vector<size_t>& numAllelesPerSite)
@@ -1359,7 +1428,7 @@ public:
 
 std::vector<size_t> getUnweightedHeuristicMEC(const std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>& allelesPerRead, const size_t ploidy, const std::vector<size_t>& numAllelesPerSite)
 {
-	const size_t beamWidth = 100;
+	const size_t beamWidth = 1000;
 	size_t addEverythingUntilHere = log(beamWidth)/log(ploidy+1);
 	assert(ploidy >= 2);
 	std::vector<ReadPartition> activeAssignments;
@@ -1619,6 +1688,15 @@ std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> mergeReadsPerAllele
 		if (std::get<0>(left[0]) > std::get<0>(right[0])) return false;
 		if (std::get<0>(left.back()) < std::get<0>(right.back())) return true;
 		if (std::get<0>(left.back()) > std::get<0>(right.back())) return false;
+		if (left.size() > right.size()) return true;
+		if (left.size() < right.size()) return false;
+		for (size_t i = 0; i < left.size(); i++)
+		{
+			if (std::get<0>(left[i]) < std::get<0>(right[i])) return true;
+			if (std::get<0>(left[i]) > std::get<0>(right[i])) return false;
+		}
+		if (std::get<2>(left[0]) > std::get<2>(right[0])) return true;
+		if (std::get<2>(left[0]) < std::get<2>(right[0])) return false;
 		return false;
 	});
 	return result;
@@ -2012,7 +2090,7 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 		std::cerr << "diagonals:";
 		for (auto t : haplotypeDiagonalsPerRead[i]) std::cerr << " " << std::get<0>(t) << "(" << chainHaplotypes[std::get<0>(t)].chainNumber << ")" << (std::get<1>(t) ? "+" : "-") << " " << std::get<2>(t) << " " << std::get<3>(t);
 		std::cerr << std::endl;
-		std::vector<std::tuple<size_t, size_t, size_t, uint64_t>> readToAnchorMatches;
+		std::vector<std::tuple<size_t, size_t, size_t, uint64_t>> readToAnchorMatches; // chain, bubble, readPos, diagonal
 		for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
 		{
 			size_t readPos = resultPaths[i].paths[j].readStartPos;
