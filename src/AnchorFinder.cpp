@@ -386,7 +386,7 @@ std::vector<uint64_t> getChain(std::vector<bool>& checked, const size_t startNod
 	return bwChain;
 }
 
-void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<size_t>>& distances, const std::vector<bool> anchor, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths)
+void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<int>>& distances, const std::vector<bool> anchor, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths)
 {
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
@@ -417,8 +417,10 @@ void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vecto
 				}
 				if (distances.count(std::make_pair(lastAnchor, node)) == 1)
 				{
-					distances.at(std::make_pair(lastAnchor, node)).emplace_back(readOffset - lastAnchorOffset + lastAnchorPlus);
-					if (k == 0) distances.at(std::make_pair(lastAnchor, node)).back() -= readPaths[i].paths[j].pathLeftClipKmers;
+					int distance = readOffset - lastAnchorOffset + lastAnchorPlus;
+					assert(distance >= 0);
+					if (k == 0) distance -= (int)readPaths[i].paths[j].pathLeftClipKmers;
+					distances.at(std::make_pair(lastAnchor, node)).emplace_back(distance);
 					lastAnchor = node;
 					lastAnchorOffset = readOffset;
 					lastAnchorPlus = 0;
@@ -429,9 +431,11 @@ void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vecto
 				}
 				if (distances.count(std::make_pair(node ^ firstBitUint64_t, lastAnchor ^ firstBitUint64_t)) == 1)
 				{
-					distances.at(std::make_pair(node ^ firstBitUint64_t, lastAnchor ^ firstBitUint64_t)).emplace_back(readOffset - lastAnchorOffset + lastAnchorPlus);
-					if (k == 0) distances.at(std::make_pair(node ^ firstBitUint64_t, lastAnchor ^ firstBitUint64_t)).back() -= readPaths[i].paths[j].pathLeftClipKmers;
-					distances.at(std::make_pair(node ^ firstBitUint64_t, lastAnchor ^ firstBitUint64_t)).back() += unitigGraph.lengths[node & maskUint64_t] - unitigGraph.lengths[lastAnchor & maskUint64_t];
+					int distance = readOffset - lastAnchorOffset + lastAnchorPlus;
+					assert(distance >= 0);
+					if (k == 0) distance -= (int)readPaths[i].paths[j].pathLeftClipKmers;
+					distance += (int)unitigGraph.lengths[node & maskUint64_t] - (int)unitigGraph.lengths[lastAnchor & maskUint64_t];
+					distances.at(std::make_pair(node ^ firstBitUint64_t, lastAnchor ^ firstBitUint64_t)).emplace_back(distance);
 					lastAnchor = node;
 					lastAnchorOffset = readOffset;
 					lastAnchorPlus = 0;
@@ -451,7 +455,7 @@ void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vecto
 	}
 }
 
-double average(const std::vector<size_t>& values)
+double average(const std::vector<int>& values)
 {
 	assert(values.size() >= 1);
 	double sum = 0;
@@ -464,7 +468,7 @@ double average(const std::vector<size_t>& values)
 
 void addOffsets(std::vector<AnchorChain>& chains, const std::vector<bool> anchor, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths)
 {
-	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<size_t>> distances;
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<int>> distances;
 	for (size_t i = 0; i < chains.size(); i++)
 	{
 		for (size_t j = 1; j < chains[i].nodes.size(); j++)
@@ -481,7 +485,11 @@ void addOffsets(std::vector<AnchorChain>& chains, const std::vector<bool> anchor
 		{
 			auto key = std::make_pair(chains[i].nodes[j-1], chains[i].nodes[j]);
 			assert(distances.at(key).size() >= 1);
-			chains[i].nodeOffsets.push_back(chains[i].nodeOffsets.back() + average(distances.at(key)));
+			size_t distance = average(distances.at(key));
+			std::cerr << "chain " << i << " anchor " << j << " (" << (chains[i].nodes[j] & maskUint64_t) << ") distance " << distance << std::endl;
+			assert(distance >= 0);
+			assert(distance < 100000000);
+			chains[i].nodeOffsets.push_back(chains[i].nodeOffsets.back() + distance);
 		}
 		assert(chains[i].nodeOffsets.size() == chains[i].nodes.size());
 	}
