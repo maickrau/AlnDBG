@@ -1193,9 +1193,12 @@ bool allelesCouldMatch(const std::vector<std::vector<size_t>>& bestAllelesLeft, 
 	assert(ploidy == 2);
 	assert(bestAllelesLeft.size() >= 2);
 	assert(bestAllelesRight.size() >= 2);
-	size_t requiredCoverage = (double)approxOneHapCoverage * ((double)ploidy - 0.5);
-	if (intersectSize(bestAllelesLeft[0], bestAllelesRight[0]) + intersectSize(bestAllelesLeft[1], bestAllelesRight[1]) >= requiredCoverage) return true;
-	if (intersectSize(bestAllelesLeft[0], bestAllelesRight[1]) + intersectSize(bestAllelesLeft[1], bestAllelesRight[0]) >= requiredCoverage) return true;
+	size_t requiredCoverage = 4;
+	// size_t requiredCoverage = (double)approxOneHapCoverage * ((double)ploidy - 0.5);
+	size_t normalCounts = intersectSize(bestAllelesLeft[0], bestAllelesRight[0]) + intersectSize(bestAllelesLeft[1], bestAllelesRight[1]);
+	size_t crossCounts = intersectSize(bestAllelesLeft[0], bestAllelesRight[1]) + intersectSize(bestAllelesLeft[1], bestAllelesRight[0]);
+	if (normalCounts >= requiredCoverage && normalCounts > crossCounts*9) return true;
+	if (crossCounts >= requiredCoverage && crossCounts > normalCounts*9) return true;
 	return false;
 }
 
@@ -1617,6 +1620,144 @@ std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> mergeReadsPerAllele
 	return result;
 }
 
+std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vector<size_t> readAssignment, const std::vector<std::vector<size_t>>& allelesPerHaplotype, const std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>& mergedAllelesPerRead, const size_t ploidy)
+{
+	assert(allelesPerHaplotype.size() == ploidy);
+	assert(mergedAllelesPerRead.size() == readAssignment.size());
+	std::vector<size_t> previousNonGarbageSite;
+	previousNonGarbageSite.resize(allelesPerHaplotype[0].size(), std::numeric_limits<size_t>::max());
+	size_t lastNonGarbage = std::numeric_limits<size_t>::max();
+	for (size_t i = 0; i < allelesPerHaplotype[0].size(); i++)
+	{
+		if (allelesPerHaplotype[0][i] == std::numeric_limits<size_t>::max()) continue;
+		previousNonGarbageSite[i] = lastNonGarbage;
+		lastNonGarbage = i;
+	}
+	std::cerr << "pre-split phased at start: " << raw.chainStartPhased << " end: " << raw.chainEndPhased << std::endl;
+	std::cerr << "bubble indices:";
+	for (size_t i = 0; i < raw.bubbleIndices.size(); i++) std::cerr << " " << raw.bubbleIndices[i];
+	std::cerr << std::endl;
+	std::cerr << "number of sites: " << raw.bubbleIndices.size() << std::endl;
+	{
+		std::vector<bool> notGarbageSite;
+		notGarbageSite.resize(raw.bubbleIndices.size(), true);
+		for (size_t i = 0; i < allelesPerHaplotype[0].size(); i++)
+		{
+			if (allelesPerHaplotype[0][i] == std::numeric_limits<size_t>::max())
+			{
+				notGarbageSite[i] = false;
+			}
+		}
+		for (size_t i = 0; i < notGarbageSite.size(); i++)
+		{
+			std::cerr << (notGarbageSite[i] ? "X" : "_");
+		}
+		std::cerr << " valid sites" << std::endl;
+	}
+	for (size_t i = 0; i < mergedAllelesPerRead.size(); i++)
+	{
+		if (readAssignment[i] == std::numeric_limits<size_t>::max()) continue;
+		std::vector<bool> hasAllele;
+		hasAllele.resize(raw.bubbleIndices.size(), false);
+		for (auto t : mergedAllelesPerRead[i])
+		{
+			hasAllele[std::get<0>(t)] = true;
+		}
+		for (size_t i = 0; i < hasAllele.size(); i++)
+		{
+			std::cerr << (hasAllele[i] ? "X" : "_");
+		}
+		std::cerr << " read " << i << " hap " << readAssignment[i] << std::endl;
+	}
+	std::vector<std::vector<bool>> haplotypeHasCrossingReads;
+	haplotypeHasCrossingReads.resize(ploidy);
+	for (size_t i = 0; i < ploidy; i++)
+	{
+		haplotypeHasCrossingReads[i].resize(raw.bubbleIndices.size(), false);
+	}
+	for (size_t i = 0; i < mergedAllelesPerRead.size(); i++)
+	{
+		if (readAssignment[i] == std::numeric_limits<size_t>::max()) continue;
+		for (size_t j = 1; j < mergedAllelesPerRead[i].size(); j++)
+		{
+			if (allelesPerHaplotype[0][std::get<0>(mergedAllelesPerRead[i][j])] == std::numeric_limits<size_t>::max()) continue;
+			for (size_t k = 0; k < j; k++)
+			{
+				if (allelesPerHaplotype[0][std::get<0>(mergedAllelesPerRead[i][k])] == std::numeric_limits<size_t>::max()) continue;
+				if (std::get<0>(mergedAllelesPerRead[i][k]) == previousNonGarbageSite[std::get<0>(mergedAllelesPerRead[i][j])])
+				{
+					haplotypeHasCrossingReads[readAssignment[i]][std::get<0>(mergedAllelesPerRead[i][j])] = true;
+				}
+			}
+		}
+	}
+	std::vector<PhaseBlock> result;
+	result.emplace_back();
+	result.back().chainNumber = raw.chainNumber;
+	result.back().chainStartPhased = raw.chainStartPhased;
+	result.back().allelesPerHaplotype.resize(ploidy);
+	bool lastPhased = raw.chainEndPhased;
+	size_t bubblei = 0;
+	for (size_t i = 0; i < allelesPerHaplotype[0].size(); i++)
+	{
+		if (allelesPerHaplotype[0][i] == std::numeric_limits<size_t>::max())
+		{
+			if (i == 0) result.back().chainStartPhased = false;
+			if (i == allelesPerHaplotype[0].size()-1) lastPhased = false;
+			continue;
+		}
+		if (previousNonGarbageSite[i] == std::numeric_limits<size_t>::max())
+		{
+			result.back().bubbleIndices.emplace_back(raw.bubbleIndices[bubblei]);
+			for (size_t k = 0; k < ploidy; k++)
+			{
+				assert(raw.allelesPerHaplotype[k][bubblei] != std::numeric_limits<size_t>::max());
+				result.back().allelesPerHaplotype[k].push_back(raw.allelesPerHaplotype[k][bubblei]);
+			}
+			// can't split before first site
+			bubblei += 1;
+			continue;
+		}
+		bool validSite = true;
+		for (size_t k = 0; k < ploidy; k++)
+		{
+			if (!haplotypeHasCrossingReads[k][i])
+			{
+				validSite = false;
+				break;
+			}
+		}
+		if (!validSite)
+		{
+			std::cerr << "split block at chain " << raw.chainNumber << " index " << i << std::endl;
+			result.emplace_back();
+			result.back().chainNumber = raw.chainNumber;
+			result.back().allelesPerHaplotype.resize(ploidy);
+		}
+		result.back().bubbleIndices.emplace_back(raw.bubbleIndices[bubblei]);
+		for (size_t k = 0; k < ploidy; k++)
+		{
+			assert(raw.allelesPerHaplotype[k][bubblei] != std::numeric_limits<size_t>::max());
+			result.back().allelesPerHaplotype[k].push_back(raw.allelesPerHaplotype[k][bubblei]);
+		}
+		bubblei += 1;
+	}
+	assert(bubblei == raw.bubbleIndices.size());
+	result.back().chainEndPhased = lastPhased;
+	for (size_t i = result.size()-1; i < result.size(); i--)
+	{
+		assert(result[i].bubbleIndices.size() == result[i].allelesPerHaplotype[0].size());
+		if (result[i].bubbleIndices.size() < 2)
+		{
+			std::cerr << "remove too small block " << std::endl;
+			std::swap(result[i], result.back());
+			result.pop_back();
+		}
+	}
+	std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) { return left.bubbleIndices[0] < right.bubbleIndices[0]; });
+	return result;
+}
+
 std::vector<PhaseBlock> getChainPhaseBlocks(const size_t coreNodeChainIndex, const std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
 {
 	assert(ploidy >= 2);
@@ -1671,16 +1812,15 @@ std::vector<PhaseBlock> getChainPhaseBlocks(const size_t coreNodeChainIndex, con
 	}
 	std::vector<size_t> readAssignments = getUnweightedHeuristicMEC(mergedAllelesPerRead, ploidy, numAllelesPerSite);
 	std::vector<std::vector<size_t>> allelesPerHaplotype = getAllelesPerHaplotype(readAssignments, ploidy, mergedAllelesPerRead, numAllelesPerSite);
-	std::vector<PhaseBlock> result;
-	result.emplace_back();
-	result.back().chainStartPhased = false;
-	result.back().chainEndPhased = false;
-	if (maybeHaplotypeInformative[0]) result.back().chainStartPhased = true;
-	if (maybeHaplotypeInformative.back()) result.back().chainEndPhased = true;
-	result.back().chainNumber = coreNodeChainIndex;
+	PhaseBlock rawResult;
+	rawResult.chainStartPhased = false;
+	rawResult.chainEndPhased = false;
+	if (maybeHaplotypeInformative[0]) rawResult.chainStartPhased = true;
+	if (maybeHaplotypeInformative.back()) rawResult.chainEndPhased = true;
+	rawResult.chainNumber = coreNodeChainIndex;
 	for (size_t i = 0; i < ploidy; i++)
 	{
-		result.back().allelesPerHaplotype.emplace_back();
+		rawResult.allelesPerHaplotype.emplace_back();
 	}
 	// todo split across haplo block boundaries
 	size_t bubblei = 0;
@@ -1692,15 +1832,15 @@ std::vector<PhaseBlock> getChainPhaseBlocks(const size_t coreNodeChainIndex, con
 			bubblei += 1;
 			continue;
 		}
-		result.back().bubbleIndices.push_back(i);
+		rawResult.bubbleIndices.push_back(i);
 		for (size_t j = 0; j < ploidy; j++)
 		{
-			result.back().allelesPerHaplotype[j].push_back(allelesPerHaplotype[j][bubblei]);
+			rawResult.allelesPerHaplotype[j].push_back(allelesPerHaplotype[j][bubblei]);
 		}
 		bubblei += 1;
 	}
 	assert(bubblei == allelesPerHaplotype[0].size());
-	return result;
+	return splitPhaseBlocks(rawResult, readAssignments, allelesPerHaplotype, mergedAllelesPerRead, ploidy);
 }
 
 std::vector<PhaseBlock> phaseCoreChains(const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>>& allelesPerReadPerChain, const double approxOneHapCoverage)
@@ -1719,8 +1859,23 @@ std::vector<PhaseBlock> phaseCoreChains(const std::vector<AnchorChain>& anchorCh
 		{
 			auto phaseBlocks = getChainPhaseBlocks(i, allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()+1, approxOneHapCoverage);
 			if (phaseBlocks.size() == 0) continue;
-			std::cerr << "phased. start: " << (phaseBlocks[0].chainStartPhased ? "yes" : "no") << ", end: " << (phaseBlocks[0].chainEndPhased ? "yes" : "no") << std::endl;
+			std::cerr << "phased with " << phaseBlocks.size() << " blocks. start: " << (phaseBlocks[0].chainStartPhased ? "yes" : "no") << ", end: " << (phaseBlocks.back().chainEndPhased ? "yes" : "no") << std::endl;
 			result.insert(result.end(), phaseBlocks.begin(), phaseBlocks.end());
+			for (size_t j = 0; j < phaseBlocks.size(); j++)
+			{
+				for (size_t sitei = 0; sitei < phaseBlocks[j].allelesPerHaplotype[0].size(); sitei++)
+				{
+					phmap::flat_hash_set<size_t> foundAlleles;
+					for (size_t k = 0; k < anchorChains[i].ploidy; k++)
+					{
+						foundAlleles.insert(phaseBlocks[j].allelesPerHaplotype[k][sitei]);
+					}
+					if (foundAlleles.size() != anchorChains[i].ploidy)
+					{
+						std::cerr << "red flag: allele shared between haps, ploidy " << anchorChains[i].ploidy << ", num distinct alleles: " << foundAlleles.size() << std::endl;
+					}
+				}
+			}
 		}
 		else
 		{
@@ -2263,14 +2418,20 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 		const size_t chain = chainHaplotypes[i].chainNumber;
 		const size_t ploidy = anchorChains[chain].ploidy;
 		readsPerHaplotypePerChain[i].resize(ploidy);
-		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> alleleBelongsToHaplotype;
+		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> alleleBelongsToUniqueHaplotype;
 		for (size_t j = 0; j < chainHaplotypes[i].bubbleIndices.size(); j++)
 		{
 			for (size_t k = 0; k < ploidy; k++)
 			{
 				auto key = std::make_pair(chainHaplotypes[i].bubbleIndices[j], chainHaplotypes[i].allelesPerHaplotype[k][j]);
-				assert(alleleBelongsToHaplotype.count(key) == 0);
-				alleleBelongsToHaplotype[key] = k;
+				if (alleleBelongsToUniqueHaplotype.count(key) == 1)
+				{
+					alleleBelongsToUniqueHaplotype[key] = std::numeric_limits<size_t>::max();
+				}
+				else
+				{
+					alleleBelongsToUniqueHaplotype[key] = k;
+				}
 				std::cerr << "block " << i << " chain " << chain << " bubble " << chainHaplotypes[i].bubbleIndices[j] << " allele " << chainHaplotypes[i].allelesPerHaplotype[k][j] << " belongs to hap " << k << std::endl;
 			}
 		}
@@ -2281,8 +2442,9 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 			size_t totalMatches = 0;
 			for (auto pair : std::get<3>(allelesPerReadPerChain[chain][j]))
 			{
-				if (alleleBelongsToHaplotype.count(pair) == 0) continue;
-				countMatches[alleleBelongsToHaplotype[pair]] += 1;
+				if (alleleBelongsToUniqueHaplotype.count(pair) == 0) continue;
+				if (alleleBelongsToUniqueHaplotype.at(pair) == std::numeric_limits<size_t>::max()) continue;
+				countMatches[alleleBelongsToUniqueHaplotype.at(pair)] += 1;
 				totalMatches += 1;
 			}
 			if (totalMatches == 0)
@@ -2318,7 +2480,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 		for (size_t j = minSolvedIndex; j <= maxSolvedIndex; j++)
 		{
 			assert(solvedLocations.count(std::make_pair(chain, j)) == 0);
-			std::cerr << "solve " << chain << " " << j << " (" << (anchorChains[chain].nodes[j-1] & maskUint64_t) << " to " << (anchorChains[chain].nodes[j] & maskUint64_t) << ")" << std::endl;
+			std::cerr << "solve " << chain << " " << j << " (" << (j > 0 ? (anchorChains[chain].nodes[j-1] & maskUint64_t) : -1) << " to " << (anchorChains[chain].nodes[j] & maskUint64_t) << ")" << std::endl;
 			solvedLocations.emplace(chain, j);
 			if (j != maxSolvedIndex) solvedAnchors.emplace(chain, j);
 		}
