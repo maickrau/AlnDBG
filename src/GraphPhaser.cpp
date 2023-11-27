@@ -1028,11 +1028,11 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 			}
 			if (currFw)
 			{
-				currDiagonal = chainPositionsInReads[readi][j].chainStartPosInRead;
+				currDiagonal = chainPositionsInReads[readi][j].chainStartPosInRead + unitigGraph.lengths[anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodes[0]];
 			}
 			else
 			{
-				currDiagonal = chainPositionsInReads[readi][j].chainStartPosInRead + anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodeOffsets.back();
+				currDiagonal = chainPositionsInReads[readi][j].chainStartPosInRead + anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodeOffsets.back() + unitigGraph.lengths[anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodes.back()];
 			}
 			std::cerr << "tangleconnection insert allele read " << readi << " chain " << (chainPositionsInReads[readi][j-1].chain & maskUint64_t) << (prevFw ? "+" : "-") << " bubble " << (prevFw ? anchorChains[chainPositionsInReads[readi][j-1].chain & maskUint64_t].nodes.size() : 0) << " allele " << prevIndex << " diagonal " << prevDiagonal << std::endl;
 			std::cerr << "tangleconnection insert allele read " << readi << " chain " << (chainPositionsInReads[readi][j].chain & maskUint64_t) << (currFw ? "+" : "-") << " bubble " << (currFw ? 0 : anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodes.size()) << " allele " << currIndex << " diagonal " << currDiagonal << std::endl;
@@ -1856,7 +1856,6 @@ std::vector<PhaseBlock> phaseCoreChains(const std::vector<AnchorChain>& anchorCh
 	std::vector<PhaseBlock> result;
 	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
-		if (anchorChains[i].nodes.size() < 2) continue;
 		std::cerr << "check chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << " ploidy " << anchorChains[i].ploidy << std::endl;
 		if (anchorChains[i].ploidy == 1)
 		{
