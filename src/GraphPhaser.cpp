@@ -2449,7 +2449,7 @@ phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_s
 		{
 			size_t uniqueStartHap = std::numeric_limits<size_t>::max();
 			size_t uniqueEndHap = std::numeric_limits<size_t>::max();
-			size_t chain = chainPositionsInReads[i][j].chain;
+			size_t chain = chainPositionsInReads[i][j].chain & maskUint64_t;
 			bool fw = (chainPositionsInReads[i][j].chain & firstBitUint64_t);
 			int startDiagonal = chainPositionsInReads[i][j].chainStartPosInRead + (int)unitigGraph.lengths[anchorChains[chain].nodes[0]];
 			int endDiagonal = chainPositionsInReads[i][j].chainEndPosInRead - (int)anchorChains[chain].nodeOffsets.back();
@@ -2458,7 +2458,7 @@ phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_s
 				startDiagonal = chainPositionsInReads[i][j].chainStartPosInRead + (int)unitigGraph.lengths[anchorChains[chain].nodes.back()] + (int)anchorChains[chain].nodeOffsets.back();
 				endDiagonal = chainPositionsInReads[i][j].chainEndPosInRead;
 			}
-			for (size_t k = 0; k < haplotypeDiagonalsPerRead[j].size(); k++)
+			for (size_t k = 0; k < haplotypeDiagonalsPerRead[i].size(); k++)
 			{
 				if (chainHaplotypes[std::get<0>(haplotypeDiagonalsPerRead[i][k])].chainNumber != chain) continue;
 				if (std::get<1>(haplotypeDiagonalsPerRead[i][k]) != fw) continue;
