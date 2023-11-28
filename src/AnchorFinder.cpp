@@ -512,6 +512,210 @@ std::vector<AnchorChain> getAnchorChains(const std::vector<bool>& anchor, const 
 	return result;
 }
 
+SparseEdgeContainer getAnchorChainEdges(const std::vector<AnchorChain>& anchorChains, const SparseEdgeContainer& anchorEdges)
+{
+	SparseEdgeContainer result;
+	result.resize(anchorChains.size());
+	phmap::flat_hash_map<uint64_t, uint64_t> anchorStart;
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		assert(anchorStart.count(anchorChains[i].nodes[0]) == 0);
+		anchorStart[anchorChains[i].nodes[0]] = i + firstBitUint64_t;
+		assert(anchorStart.count(anchorChains[i].nodes.back() ^ firstBitUint64_t) == 0);
+		anchorStart[anchorChains[i].nodes.back() ^ firstBitUint64_t] = i;
+	}
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		std::pair<size_t, bool> fw { anchorChains[i].nodes.back() & maskUint64_t, anchorChains[i].nodes.back() & firstBitUint64_t };
+		for (auto edge : anchorEdges.getEdges(fw))
+		{
+			assert(anchorStart.count(edge.first + (edge.second ? firstBitUint64_t : 0)));
+			uint64_t target = anchorStart.at(edge.first + (edge.second ? firstBitUint64_t : 0));
+			result.addEdge(std::make_pair(i, true), std::make_pair(target & maskUint64_t, target & firstBitUint64_t));
+		}
+		std::pair<size_t, bool> bw { anchorChains[i].nodes[0] & maskUint64_t, (anchorChains[i].nodes[0] & firstBitUint64_t) ^ firstBitUint64_t };
+		for (auto edge : anchorEdges.getEdges(bw))
+		{
+			assert(anchorStart.count(edge.first + (edge.second ? firstBitUint64_t : 0)));
+			uint64_t target = anchorStart.at(edge.first + (edge.second ? firstBitUint64_t : 0));
+			result.addEdge(std::make_pair(i, false), std::make_pair(target & maskUint64_t, target & firstBitUint64_t));
+		}
+	}
+	return result;
+}
+
+uint64_t getBubble(const uint64_t startPos, const SparseEdgeContainer& edges)
+{
+	std::vector<std::pair<size_t, bool>> S;
+	phmap::flat_hash_set<std::pair<size_t, bool>> seen;
+	phmap::flat_hash_set<std::pair<size_t, bool>> visited;
+	S.emplace_back(startPos & maskUint64_t, startPos & firstBitUint64_t);
+	seen.emplace(startPos & maskUint64_t, startPos & firstBitUint64_t);
+	while (S.size() > 0)
+	{
+		auto v = S.back();
+		S.pop_back();
+		assert(seen.count(v) == 1);
+		seen.erase(v);
+		assert(visited.count(v) == 0);
+		visited.insert(v);
+		if (edges.getEdges(v).size() == 0) return std::numeric_limits<size_t>::max();
+		for (auto u : edges.getEdges(v))
+		{
+			if (u.first == v.first) return std::numeric_limits<size_t>::max();
+			if (u.first + (u.second ? firstBitUint64_t : 0) == startPos) return std::numeric_limits<size_t>::max();
+			assert(visited.count(u) == 0);
+			seen.insert(u);
+			bool hasNonvisitedParent = false;
+			assert(edges.getEdges(reverse(u)).size() >= 1);
+			for (auto edge : edges.getEdges(reverse(u)))
+			{
+				if (visited.count(reverse(edge)) == 0) hasNonvisitedParent = true;
+			}
+			if (!hasNonvisitedParent) S.push_back(u);
+		}
+		if (S.size() == 1 && seen.size() == 1 && S[0] == *seen.begin())
+		{
+			auto t = S[0];
+			for (auto edge : edges.getEdges(t))
+			{
+				if (edge.first + (edge.second ? firstBitUint64_t : 0) == startPos) return std::numeric_limits<size_t>::max();
+			}
+			return t.first + (t.second ? firstBitUint64_t : 0);
+		}
+	}
+	return std::numeric_limits<size_t>::max();
+}
+
+std::vector<uint64_t> getChainOfChains(const uint64_t start, const SparseEdgeContainer& anchorEdges)
+{
+	uint64_t pos = start;
+	while (true)
+	{
+		uint64_t next = getBubble(pos, anchorEdges);
+		if (next == std::numeric_limits<size_t>::max()) break;
+		if ((next & maskUint64_t) == (pos & maskUint64_t)) break;
+		if (next == start) break;
+		pos = next;
+	}
+	pos = pos ^ firstBitUint64_t;
+	const uint64_t resultStart = pos;
+	std::vector<uint64_t> result;
+	result.emplace_back(pos);
+	while (true)
+	{
+		uint64_t next = getBubble(pos, anchorEdges);
+		if (next == std::numeric_limits<size_t>::max()) break;
+		if ((next & maskUint64_t) == (pos & maskUint64_t)) break;
+		if (next == resultStart) break;
+		pos = next;
+		result.emplace_back(pos);
+	}
+	return result;
+}
+
+std::vector<uint64_t> getSimpleBubble(const uint64_t bubbleStart, const uint64_t bubbleEnd, const SparseEdgeContainer& edges)
+{
+	std::vector<uint64_t> result;
+	for (auto edge : edges.getEdges(std::make_pair(bubbleStart & maskUint64_t, bubbleStart & firstBitUint64_t)))
+	{
+		if (edges.getEdges(edge).size() != 1) return std::vector<uint64_t>{};
+		if (edges.getEdges(edge)[0] != std::make_pair<size_t, bool>(bubbleEnd & maskUint64_t, bubbleEnd & firstBitUint64_t)) return std::vector<uint64_t>{};
+		if (edges.getEdges(reverse(edge)).size() != 1) return std::vector<uint64_t>{};
+		result.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+	}
+	return result;
+}
+
+void refineAnchorChainPloidies(std::vector<AnchorChain>& anchorChains, const SparseEdgeContainer& anchorEdges, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+{
+	SparseEdgeContainer anchorChainEdges = getAnchorChainEdges(anchorChains, anchorEdges);
+	std::vector<bool> checked;
+	std::vector<bool> refined;
+	refined.resize(anchorChains.size(), false);
+	checked.resize(anchorChains.size(), false);
+	std::vector<std::vector<uint64_t>> chainsOfChains;
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		if (checked[i]) continue;
+		auto chain = getChainOfChains(i, anchorChainEdges);
+		for (auto node : chain)
+		{
+			assert((node & maskUint64_t) < checked.size());
+			assert(!checked[node & maskUint64_t]);
+			checked[node & maskUint64_t] = true;
+		}
+		chainsOfChains.emplace_back(chain);
+	}
+	std::sort(chainsOfChains.begin(), chainsOfChains.end(), [](const auto& left, const auto& right) { return left.size() > right.size(); });
+	for (size_t i = 0; i < chainsOfChains.size(); i++)
+	{
+		if (chainsOfChains[i].size() == 1 && refined[chainsOfChains[i][0] & maskUint64_t]) continue;
+		double coverageSum = 0;
+		size_t coverageDivisor = 0;
+		for (const uint64_t chain : chainsOfChains[i])
+		{
+			for (const uint64_t node : anchorChains[chain & maskUint64_t].nodes)
+			{
+				coverageSum += unitigGraph.coverages[node & maskUint64_t] * unitigGraph.lengths[node & maskUint64_t];
+				coverageDivisor += unitigGraph.lengths[node & maskUint64_t];
+			}
+		}
+		size_t refinedPloidy = coverageSum / (double)coverageDivisor / approxOneHapCoverage + 0.5;
+		for (const uint64_t chain : chainsOfChains[i])
+		{
+			if (anchorChains[chain & maskUint64_t].ploidy != refinedPloidy)
+			{
+				std::cerr << "refined chain of chains core chain " << (anchorChains[chain & maskUint64_t].nodes[0] & maskUint64_t) << "-" << (anchorChains[chain & maskUint64_t].nodes.back() & maskUint64_t) << " ploidy from " << anchorChains[chain & maskUint64_t].ploidy << " to " << refinedPloidy << std::endl;
+			}
+			anchorChains[chain & maskUint64_t].ploidy = refinedPloidy;
+			refined[chain & maskUint64_t] = true;
+		}
+		for (size_t j = 0; j+1 < chainsOfChains[i].size(); j++)
+		{
+			auto bubbleChains = getSimpleBubble(chainsOfChains[i][j], chainsOfChains[i][j+1], anchorChainEdges);
+			if (bubbleChains.size() == 0)
+			{
+				std::cerr << "could not make a refined coverage estimate for chain of anchor chains bubble between chains " << (anchorChains[chainsOfChains[i][j-1]].nodes[0] & maskUint64_t) << "-" << (anchorChains[chainsOfChains[i][j-1]].nodes.back() & maskUint64_t) << " and " << (anchorChains[chainsOfChains[i][j]].nodes[0] & maskUint64_t) << "-" << (anchorChains[chainsOfChains[i][j]].nodes.back() & maskUint64_t) << std::endl;
+			}
+			else
+			{
+				if (bubbleChains.size() == refinedPloidy)
+				{
+					for (const uint64_t chain : bubbleChains)
+					{
+						if (anchorChains[chain & maskUint64_t].ploidy != 1)
+						{
+							std::cerr << "refined chain of chains bubble chain " << (anchorChains[chain & maskUint64_t].nodes[0] & maskUint64_t) << "-" << (anchorChains[chain & maskUint64_t].nodes.back() & maskUint64_t) << " ploidy from " << anchorChains[chain & maskUint64_t].ploidy << " to " << 1 << std::endl;
+						}
+						anchorChains[chain & maskUint64_t].ploidy = 1;
+						refined[chain & maskUint64_t] = true;
+					}
+				}
+				else if (bubbleChains.size() > refinedPloidy)
+				{
+					std::cerr << "could not distribute ploidy between too many chains (ploidy " << refinedPloidy << " vs chain count" << bubbleChains.size() << ")";
+					for (const uint64_t chain : bubbleChains)
+					{
+						std::cerr << " " << (anchorChains[chain & maskUint64_t].nodes[0] & maskUint64_t) << "-" << (anchorChains[chain & maskUint64_t].nodes.back() & maskUint64_t);
+					}
+					std::cerr << std::endl;
+				}
+				else
+				{
+					assert(bubbleChains.size() < refinedPloidy);
+					std::cerr << "todo implement: could not distribute ploidy between too few chains (ploidy " << refinedPloidy << " vs chain count" << bubbleChains.size() << ")";
+					for (const uint64_t chain : bubbleChains)
+					{
+						std::cerr << " " << (anchorChains[chain & maskUint64_t].nodes[0] & maskUint64_t) << "-" << (anchorChains[chain & maskUint64_t].nodes.back() & maskUint64_t);
+					}
+					std::cerr << std::endl;
+				}
+			}
+		}
+	}
+}
+
 std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
 	std::vector<bool> anchor;
@@ -556,6 +760,7 @@ std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const s
 	}
 	edges = getAnchorEdges(unitigGraph, readPaths, anchor, approxOneHapCoverage);
 	auto result = getAnchorChains(anchor, edges, unitigGraph, readPaths, approxOneHapCoverage);
+	refineAnchorChainPloidies(result, edges, unitigGraph, readPaths, approxOneHapCoverage);
 	return result;
 }
 
