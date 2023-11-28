@@ -1108,7 +1108,7 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 		std::sort(allelesInThisRead.begin(), allelesInThisRead.end());
 		for (size_t i = 0; i < allelesInThisRead.size(); i++)
 		{
-			if (i == 0 || std::get<0>(allelesInThisRead[i]) != std::get<0>(allelesInThisRead[i-1]) || std::get<1>(allelesInThisRead[i]) > std::get<1>(allelesInThisRead[i-1]) + (int)anchorChains[std::get<0>(allelesInThisRead[i])].nodeOffsets.back()/2)
+			if (i == 0 || std::get<0>(allelesInThisRead[i]) != std::get<0>(allelesInThisRead[i-1]) || std::get<1>(allelesInThisRead[i]) > std::get<1>(allelesInThisRead[i-1]) + (int)(anchorChains[std::get<0>(allelesInThisRead[i])].nodeOffsets.back() + unitigGraph.lengths[anchorChains[std::get<0>(allelesInThisRead[i])].nodes.back() & maskUint64_t])/2)
 			{
 				allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].emplace_back();
 				std::get<0>(allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back()) = readi;
