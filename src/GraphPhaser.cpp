@@ -1871,8 +1871,16 @@ std::vector<PhaseBlock> getChainPhaseBlocks(const size_t coreNodeChainIndex, con
 			assert(pair.first < unfilteredReadsPerAllele.size());
 			while (pair.second >= unfilteredReadsPerAllele[pair.first].size()) unfilteredReadsPerAllele[pair.first].emplace_back();
 			assert(pair.second < unfilteredReadsPerAllele[pair.first].size());
-			assert(std::find(unfilteredReadsPerAllele[pair.first][pair.second].begin(), unfilteredReadsPerAllele[pair.first][pair.second].end(), readi) == unfilteredReadsPerAllele[pair.first][pair.second].end());
 			unfilteredReadsPerAllele[pair.first][pair.second].emplace_back(readi);
+		}
+	}
+	for (size_t i = 0; i < unfilteredReadsPerAllele.size(); i++)
+	{
+		for (size_t j = 0; j < unfilteredReadsPerAllele[i].size(); j++)
+		{
+			phmap::flat_hash_set<size_t> unique { unfilteredReadsPerAllele[i][j].begin(), unfilteredReadsPerAllele[i][j].end() };
+			unfilteredReadsPerAllele[i][j].clear();
+			unfilteredReadsPerAllele[i][j].insert(unfilteredReadsPerAllele[i][j].end(), unique.begin(), unique.end());
 		}
 	}
 	std::cerr << "check chain " << coreNodeChainIndex << std::endl;
