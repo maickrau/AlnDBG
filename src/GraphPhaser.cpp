@@ -2090,7 +2090,7 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 		std::cerr << "diagonals:";
 		for (auto t : haplotypeDiagonalsPerRead[i]) std::cerr << " " << std::get<0>(t) << "(" << chainHaplotypes[std::get<0>(t)].chainNumber << ")" << (std::get<1>(t) ? "+" : "-") << " " << std::get<2>(t) << " " << std::get<3>(t);
 		std::cerr << std::endl;
-		std::vector<std::tuple<size_t, size_t, size_t, uint64_t>> readToAnchorMatches; // chain, bubble, readPos, diagonal
+		std::vector<std::tuple<size_t, size_t, size_t, size_t, int, uint64_t>> readToAnchorMatches; // chain, bubble, readPos (extrapolated node end), haplotype, diagonal, node
 		for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
 		{
 			size_t readPos = resultPaths[i].paths[j].readStartPos;
@@ -2107,19 +2107,46 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 				{
 					continue;
 				}
-				readToAnchorMatches.emplace_back(j, k, readPos, node);
+				bool fw = (node & firstBitUint64_t) == (anchorChains[chain].nodes[offset] & firstBitUint64_t);
+				int diagonal = (int)readPos - (int)anchorChains[chain].nodeOffsets[offset];
+				if (!fw) diagonal = (int)readPos + (int)anchorChains[chain].nodeOffsets[offset];
+				size_t uniqueHap = std::numeric_limits<size_t>::max();
+				if (anchorChains[chain].ploidy == 1)
+				{
+					uniqueHap = 0;
+				}
+				else
+				{
+					for (auto t : haplotypeDiagonalsPerRead[i])
+					{
+						if (chainHaplotypes[std::get<0>(t)].chainNumber != chain) continue;
+						if (std::get<1>(t) != fw) continue;
+						if (std::get<2>(t) > diagonal + (int)maxDiagonalDifferences[chain]) continue;
+						if (std::get<2>(t) < diagonal - (int)maxDiagonalDifferences[chain]) continue;
+						if (uniqueHap == std::numeric_limits<size_t>::max())
+						{
+							uniqueHap = std::get<3>(t);
+						}
+						else if (uniqueHap != std::get<3>(t))
+						{
+							uniqueHap = std::numeric_limits<size_t>::max()-1;
+						}
+					}
+				}
+				if (uniqueHap == std::numeric_limits<size_t>::max()-1) uniqueHap = std::numeric_limits<size_t>::max();
+				readToAnchorMatches.emplace_back(j, k, readPos, uniqueHap, diagonal, node);
 			}
 		}
 		bool previousAnchorSolved = false;
 		for (size_t m = 1; m < readToAnchorMatches.size(); m++)
 		{
 			// assert(std::get<2>(readToAnchorMatches[m]) > std::get<2>(readToAnchorMatches[m-1]));
-			uint64_t lastNode = std::get<3>(readToAnchorMatches[m-1]);
+			uint64_t lastNode = std::get<5>(readToAnchorMatches[m-1]);
 			size_t lastChain = nodeLocationInChain[lastNode & maskUint64_t].first;
 			size_t lastOffset = nodeLocationInChain[lastNode & maskUint64_t].second;
 			assert((anchorChains[lastChain].nodes[lastOffset] & maskUint64_t) == (lastNode & maskUint64_t));
 			bool lastFw = (lastNode & firstBitUint64_t) == (anchorChains[lastChain].nodes[lastOffset] & firstBitUint64_t);
-			uint64_t currNode = std::get<3>(readToAnchorMatches[m]);
+			uint64_t currNode = std::get<5>(readToAnchorMatches[m]);
 			size_t currChain = nodeLocationInChain[currNode & maskUint64_t].first;
 			size_t currOffset = nodeLocationInChain[currNode & maskUint64_t].second;
 			assert((anchorChains[currChain].nodes[currOffset] & maskUint64_t) == (currNode & maskUint64_t));
@@ -2128,106 +2155,19 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 			bool solveLastAnchor = false;
 			bool solveCurrAnchor = false;
 			size_t solutionHap = std::numeric_limits<size_t>::max();
-			std::cerr << "check " << m << " " << lastChain << " " << lastOffset << " " << (lastFw ? "fw" : "bw") << " " << currChain << " " << currOffset << " " << (currFw ? "fw" : "bw") << std::endl;
-			if (currChain == lastChain && currFw == lastFw && currOffset == lastOffset)
-			{
-				std::cerr << "has self match" << std::endl;
-				int lastDiagonal = (int)std::get<2>(readToAnchorMatches[m-1]) - (int)anchorChains[lastChain].nodeOffsets[lastOffset];
-				if (!lastFw) lastDiagonal = (int)std::get<2>(readToAnchorMatches[m-1]) + (int)anchorChains[lastChain].nodeOffsets[lastOffset];
-				int currDiagonal = (int)std::get<2>(readToAnchorMatches[m]) - (int)anchorChains[currChain].nodeOffsets[currOffset];
-				if (!currFw) currDiagonal = (int)std::get<2>(readToAnchorMatches[m]) + (int)anchorChains[currChain].nodeOffsets[currOffset];
-				if (lastDiagonal > currDiagonal - maxDiagonalDifferences[currChain] && lastDiagonal < currDiagonal + maxDiagonalDifferences[currChain])
-				{
-					std::cerr << "has curr last diagonal" << std::endl;
-					size_t uniqueHap = std::numeric_limits<size_t>::max();
-					for (auto t : haplotypeDiagonalsPerRead[i])
-					{
-						if (chainHaplotypes[std::get<0>(t)].chainNumber != currChain) continue;
-						if (std::get<1>(t) != currFw) continue;
-						if (std::get<2>(t) < currDiagonal + maxDiagonalDifferences[currChain] && std::get<2>(t) > currDiagonal - maxDiagonalDifferences[currChain])
-						{
-							std::cerr << "has curr hap " << std::get<3>(t) << std::endl;
-							if (uniqueHap == std::numeric_limits<size_t>::max())
-							{
-								uniqueHap = std::get<3>(t);
-							}
-							else if (uniqueHap != std::get<3>(t))
-							{
-								uniqueHap = std::numeric_limits<size_t>::max()-1;
-							}
-						}
-						if (std::get<2>(t) < lastDiagonal + maxDiagonalDifferences[lastChain] && std::get<2>(t) > lastDiagonal - maxDiagonalDifferences[lastChain])
-						{
-							std::cerr << "has last hap " << std::get<3>(t) << std::endl;
-							if (uniqueHap == std::numeric_limits<size_t>::max())
-							{
-								uniqueHap = std::get<3>(t);
-							}
-							else if (uniqueHap != std::get<3>(t))
-							{
-								uniqueHap = std::numeric_limits<size_t>::max()-1;
-							}
-						}
-					}
-					if (uniqueHap < std::numeric_limits<size_t>::max()-1)
-					{
-						std::cerr << "has unique hap " << uniqueHap << " check solved location " << currChain << " " << std::min(lastOffset, currOffset) << std::endl;
-						if (solvedLocations.count(std::make_pair(currChain, std::min(lastOffset, currOffset))) == 1)
-						{
-							std::cerr << "has solved location" << std::endl;
-							solveThisBlock = true;
-							solveLastAnchor = (solvedAnchors.count(std::make_pair(lastChain, lastOffset)) == 1);
-							if (previousAnchorSolved) solveLastAnchor = false;
-							solveCurrAnchor = (solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1);
-							solutionHap = uniqueHap;
-						}
-					}
-				}
-			}
-			if (currChain == lastChain && currFw == lastFw && ((currFw && currOffset == lastOffset+1) || (!currFw && currOffset+1 == lastOffset)))
+			std::cerr << "check " << m << " " << lastChain << " " << lastOffset << " " << (lastFw ? "fw" : "bw") << " " << std::get<3>(readToAnchorMatches[m-1]) << " " << currChain << " " << currOffset << " " << (currFw ? "fw" : "bw") << std::get<3>(readToAnchorMatches[m]) << std::endl;
+			if (currChain == lastChain && currFw == lastFw && ((currFw && currOffset == lastOffset+1) || (!currFw && currOffset+1 == lastOffset) || (currOffset == lastOffset)))
 			{
 				std::cerr << "has chain match" << std::endl;
-				int lastDiagonal = (int)std::get<2>(readToAnchorMatches[m-1]) - (int)anchorChains[lastChain].nodeOffsets[lastOffset];
-				if (!lastFw) lastDiagonal = (int)std::get<2>(readToAnchorMatches[m-1]) + (int)anchorChains[lastChain].nodeOffsets[lastOffset];
-				int currDiagonal = (int)std::get<2>(readToAnchorMatches[m]) - (int)anchorChains[currChain].nodeOffsets[currOffset];
-				if (!currFw) currDiagonal = (int)std::get<2>(readToAnchorMatches[m]) + (int)anchorChains[currChain].nodeOffsets[currOffset];
+				int lastDiagonal = std::get<4>(readToAnchorMatches[m-1]);
+				int currDiagonal = std::get<4>(readToAnchorMatches[m]);
 				std::cerr << "diagonals " << lastDiagonal << " " << currDiagonal << std::endl;
 				if (lastDiagonal > currDiagonal - maxDiagonalDifferences[currChain] && lastDiagonal < currDiagonal + maxDiagonalDifferences[currChain])
 				{
 					std::cerr << "has curr last diagonal" << std::endl;
-					size_t uniqueHap = std::numeric_limits<size_t>::max();
-					for (auto t : haplotypeDiagonalsPerRead[i])
+					if (std::get<3>(readToAnchorMatches[m-1]) == std::get<3>(readToAnchorMatches[m]) && std::get<3>(readToAnchorMatches[m]) != std::numeric_limits<size_t>::max())
 					{
-						if (chainHaplotypes[std::get<0>(t)].chainNumber != currChain) continue;
-						if (std::get<1>(t) != currFw) continue;
-						if (std::get<2>(t) < currDiagonal + maxDiagonalDifferences[currChain] && std::get<2>(t) > currDiagonal - maxDiagonalDifferences[currChain])
-						{
-							std::cerr << "has curr hap " << std::get<3>(t) << std::endl;
-							if (uniqueHap == std::numeric_limits<size_t>::max())
-							{
-								uniqueHap = std::get<3>(t);
-							}
-							else if (uniqueHap != std::get<3>(t))
-							{
-								uniqueHap = std::numeric_limits<size_t>::max()-1;
-							}
-						}
-						if (std::get<2>(t) < lastDiagonal + maxDiagonalDifferences[lastChain] && std::get<2>(t) > lastDiagonal - maxDiagonalDifferences[lastChain])
-						{
-							std::cerr << "has last hap " << std::get<3>(t) << std::endl;
-							if (uniqueHap == std::numeric_limits<size_t>::max())
-							{
-								uniqueHap = std::get<3>(t);
-							}
-							else if (uniqueHap != std::get<3>(t))
-							{
-								uniqueHap = std::numeric_limits<size_t>::max()-1;
-							}
-						}
-					}
-					if (uniqueHap < std::numeric_limits<size_t>::max()-1)
-					{
-						std::cerr << "has unique hap " << uniqueHap << " check solved location " << currChain << " " << std::min(lastOffset, currOffset) << std::endl;
+						std::cerr << "has unique hap " << std::get<3>(readToAnchorMatches[m]) << " check solved location " << currChain << " " << std::min(lastOffset, currOffset) << std::endl;
 						if (solvedLocations.count(std::make_pair(currChain, std::min(lastOffset, currOffset))) == 1)
 						{
 							std::cerr << "has solved location" << std::endl;
@@ -2235,7 +2175,7 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 							solveLastAnchor = (solvedAnchors.count(std::make_pair(lastChain, lastOffset)) == 1);
 							if (previousAnchorSolved) solveLastAnchor = false;
 							solveCurrAnchor = (solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1);
-							solutionHap = uniqueHap;
+							solutionHap = std::get<3>(readToAnchorMatches[m]);
 						}
 					}
 				}
@@ -2252,7 +2192,7 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 							size_t lastOffset = nodeLocationInChain[lastNode & maskUint64_t].second;
 							assert((anchorChains[lastChain].nodes[lastOffset] & maskUint64_t) == (lastNode & maskUint64_t));
 							bool lastFw = (lastNode & firstBitUint64_t) == (anchorChains[lastChain].nodes[lastOffset] & firstBitUint64_t);
-							uint64_t currNode = std::get<3>(readToAnchorMatches[m]);
+							uint64_t currNode = std::get<5>(readToAnchorMatches[m]);
 							size_t currChain = nodeLocationInChain[currNode & maskUint64_t].first;
 							size_t currOffset = nodeLocationInChain[currNode & maskUint64_t].second;
 							assert((anchorChains[currChain].nodes[currOffset] & maskUint64_t) == (currNode & maskUint64_t));
@@ -2292,8 +2232,8 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 			if (solveThisBlock)
 			{
 				std::cerr << "read " << i << " solve from " << std::get<0>(readToAnchorMatches[m-1]) << "," << std::get<1>(readToAnchorMatches[m-1]) << " to " << std::get<0>(readToAnchorMatches[m]) << "," << std::get<1>(readToAnchorMatches[m]) << std::endl;
-				if (solveLastAnchor) std::cerr << "read " << i << " solve anchor " << std::get<0>(readToAnchorMatches[m-1]) << " " << std::get<1>(readToAnchorMatches[m-1]) << " " << (std::get<3>(readToAnchorMatches[m-1]) & maskUint64_t) << std::endl;
-				if (solveCurrAnchor) std::cerr << "read " << i << " solve anchor " << std::get<0>(readToAnchorMatches[m]) << " " << std::get<1>(readToAnchorMatches[m]) << " " << (std::get<3>(readToAnchorMatches[m]) & maskUint64_t) << std::endl;
+				if (solveLastAnchor) std::cerr << "read " << i << " solve anchor " << std::get<0>(readToAnchorMatches[m-1]) << " " << std::get<1>(readToAnchorMatches[m-1]) << " " << (std::get<5>(readToAnchorMatches[m-1]) & maskUint64_t) << std::endl;
+				if (solveCurrAnchor) std::cerr << "read " << i << " solve anchor " << std::get<0>(readToAnchorMatches[m]) << " " << std::get<1>(readToAnchorMatches[m]) << " " << (std::get<5>(readToAnchorMatches[m]) & maskUint64_t) << std::endl;
 				for (size_t j = std::get<0>(readToAnchorMatches[m-1]); j <= std::get<0>(readToAnchorMatches[m]); j++)
 				{
 					for (size_t k = (j == std::get<0>(readToAnchorMatches[m-1]) ? std::get<1>(readToAnchorMatches[m-1]) : 0); k < (j == std::get<0>(readToAnchorMatches[m]) ? std::get<1>(readToAnchorMatches[m])+1 : resultPaths[i].paths[j].path.size()); k++)
