@@ -2057,7 +2057,7 @@ std::vector<std::pair<size_t, size_t>> getNodeLocationsWithinChain(const UnitigG
 	return result;
 }
 
-void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& resultPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes, const std::vector<std::vector<std::vector<std::tuple<size_t, bool, int>>>>& readsPerHaplotypePerChain, const std::vector<std::pair<size_t, size_t>>& nodeLocationInChain, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedLocations, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedAnchors, const phmap::flat_hash_set<size_t>& solvedInterchainTangles, const VectorWithDirection<size_t>& nodeLocationInInterchainTangles, const size_t tangleCount, const SparseEdgeContainer& validChainEdges)
+void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& resultPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes, const std::vector<std::vector<std::vector<std::tuple<size_t, bool, int>>>>& readsPerHaplotypePerChain, const std::vector<std::pair<size_t, size_t>>& nodeLocationInChain, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedLocations, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedAnchors, const phmap::flat_hash_set<size_t>& solvedInterchainTangles, const VectorWithDirection<size_t>& nodeLocationInInterchainTangles, const size_t tangleCount, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>>& haplotypeDiagonalsPerRead, const phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>>& validHaplotypeConnectionsPerChainEdge)
 {
 	std::vector<int> maxDiagonalDifferences;
 	maxDiagonalDifferences.resize(anchorChains.size());
@@ -2066,22 +2066,6 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 		maxDiagonalDifferences[i] = ((int)(anchorChains[i].nodeOffsets.back() + resultGraph.lengths[anchorChains[i].nodes.back() & maskUint64_t]) * .5);
 	}
 	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> nodeReplacement;
-	std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>> haplotypeDiagonalsPerRead;
-	haplotypeDiagonalsPerRead.resize(resultPaths.size());
-	for (size_t block = 0; block < readsPerHaplotypePerChain.size(); block++)
-	{
-		for (size_t hap = 0; hap < readsPerHaplotypePerChain[block].size(); hap++)
-		{
-			for (auto t : readsPerHaplotypePerChain[block][hap])
-			{
-				size_t read = std::get<0>(t);
-				bool fw = std::get<1>(t);
-				int diagonal = std::get<2>(t);
-				haplotypeDiagonalsPerRead[read].emplace_back(block, fw, diagonal, hap);
-				std::cerr << "readhap " << read << " " << block << (fw ? "+" : "-") << " " << diagonal << " " << hap << std::endl;
-			}
-		}
-	}
 	std::vector<phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> interchainTangleConnectionHap;
 	interchainTangleConnectionHap.resize(tangleCount);
 	for (size_t i = 0; i < resultPaths.size(); i++)
@@ -2155,7 +2139,7 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 			bool solveLastAnchor = false;
 			bool solveCurrAnchor = false;
 			size_t solutionHap = std::numeric_limits<size_t>::max();
-			std::cerr << "check " << m << " " << lastChain << " " << lastOffset << " " << (lastFw ? "fw" : "bw") << " " << std::get<3>(readToAnchorMatches[m-1]) << " " << currChain << " " << currOffset << " " << (currFw ? "fw" : "bw") << std::get<3>(readToAnchorMatches[m]) << std::endl;
+			std::cerr << "check " << m << " " << lastChain << " " << lastOffset << " " << (lastFw ? "fw" : "bw") << " " << (lastNode & maskUint64_t) << " " << std::get<3>(readToAnchorMatches[m-1]) << " " << currChain << " " << currOffset << " " << (currFw ? "fw" : "bw") << " " << (currNode & maskUint64_t) << " " << std::get<3>(readToAnchorMatches[m]) << std::endl;
 			if (currChain == lastChain && currFw == lastFw && ((currFw && currOffset == lastOffset+1) || (!currFw && currOffset+1 == lastOffset) || (currOffset == lastOffset)))
 			{
 				std::cerr << "has chain match" << std::endl;
@@ -2186,43 +2170,56 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 				{
 					if (nodeLocationInInterchainTangles[std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t)] != std::numeric_limits<size_t>::max())
 					{
-						if (solvedInterchainTangles.count(nodeLocationInInterchainTangles[std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t)]) == 1)
+						size_t lastChain = nodeLocationInChain[lastNode & maskUint64_t].first;
+						size_t lastOffset = nodeLocationInChain[lastNode & maskUint64_t].second;
+						assert((anchorChains[lastChain].nodes[lastOffset] & maskUint64_t) == (lastNode & maskUint64_t));
+						bool lastFw = (lastNode & firstBitUint64_t) == (anchorChains[lastChain].nodes[lastOffset] & firstBitUint64_t);
+						size_t lastHap = std::get<3>(readToAnchorMatches[m-1]);
+						uint64_t currNode = std::get<5>(readToAnchorMatches[m]);
+						size_t currChain = nodeLocationInChain[currNode & maskUint64_t].first;
+						size_t currOffset = nodeLocationInChain[currNode & maskUint64_t].second;
+						assert((anchorChains[currChain].nodes[currOffset] & maskUint64_t) == (currNode & maskUint64_t));
+						bool currFw = (currNode & firstBitUint64_t) == (anchorChains[currChain].nodes[currOffset] & firstBitUint64_t);
+						size_t currHap = std::get<3>(readToAnchorMatches[m]);
+						std::cerr << "has interchain nodes" << std::endl;
+						if (validChainEdges.hasEdge(std::make_pair(lastChain, lastFw), std::make_pair(currChain, currFw)))
 						{
-							size_t lastChain = nodeLocationInChain[lastNode & maskUint64_t].first;
-							size_t lastOffset = nodeLocationInChain[lastNode & maskUint64_t].second;
-							assert((anchorChains[lastChain].nodes[lastOffset] & maskUint64_t) == (lastNode & maskUint64_t));
-							bool lastFw = (lastNode & firstBitUint64_t) == (anchorChains[lastChain].nodes[lastOffset] & firstBitUint64_t);
-							uint64_t currNode = std::get<5>(readToAnchorMatches[m]);
-							size_t currChain = nodeLocationInChain[currNode & maskUint64_t].first;
-							size_t currOffset = nodeLocationInChain[currNode & maskUint64_t].second;
-							assert((anchorChains[currChain].nodes[currOffset] & maskUint64_t) == (currNode & maskUint64_t));
-							bool currFw = (currNode & firstBitUint64_t) == (anchorChains[currChain].nodes[currOffset] & firstBitUint64_t);
-							if (validChainEdges.hasEdge(std::make_pair(lastChain, lastFw), std::make_pair(currChain, currFw)))
+							std::cerr << "has interchain edge" << std::endl;
+							if (validHaplotypeConnectionsPerChainEdge.count(lastChain + (lastFw ? firstBitUint64_t : 0)) == 1 && validHaplotypeConnectionsPerChainEdge.at(lastChain + (lastFw ? firstBitUint64_t : 0)).count(currChain + (currFw ? firstBitUint64_t : 0)) == 1)
 							{
-								solveThisBlock = true;
-								solveLastAnchor = false;
-								solveCurrAnchor = false;
-								if (anchorChains[lastChain].nodes.size() == 1)
+								std::cerr << "has some valid haplotypes" << std::endl;
+								if (validHaplotypeConnectionsPerChainEdge.at(lastChain + (lastFw ? firstBitUint64_t : 0)).at(currChain + (currFw ? firstBitUint64_t : 0)).count(std::make_pair(lastHap, currHap)) == 1)
 								{
-									solveLastAnchor = (solvedAnchors.count(std::make_pair(lastChain, lastOffset)) == 1);
-									if (previousAnchorSolved) solveLastAnchor = false;
-								}
-								if (anchorChains[currChain].nodes.size() == 1)
-								{
-									solveCurrAnchor = (solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1);
-								}
-								auto keypair = canon(std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t), std::make_pair(currNode & maskUint64_t, currNode & firstBitUint64_t));
-								std::pair<uint64_t, uint64_t> key { keypair.first.first + (keypair.first.second ? firstBitUint64_t : 0), keypair.second.first + (keypair.second.second ? firstBitUint64_t : 0) };
-								size_t tangle = nodeLocationInInterchainTangles[std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t)];
-								assert(tangle < interchainTangleConnectionHap.size());
-								if (interchainTangleConnectionHap[tangle].count(key) == 0)
-								{
-									solutionHap = interchainTangleConnectionHap[tangle].size();
-									interchainTangleConnectionHap[tangle][key] = solutionHap;
-								}
-								else
-								{
-									solutionHap = interchainTangleConnectionHap[tangle].at(key);
+									std::cerr << "has valid haplotype" << std::endl;
+									if (solvedInterchainTangles.count(nodeLocationInInterchainTangles[std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t)]) == 1)
+									{
+										std::cerr << "is in solved tangle" << std::endl;
+										solveThisBlock = true;
+										solveLastAnchor = false;
+										solveCurrAnchor = false;
+										if (anchorChains[lastChain].nodes.size() == 1)
+										{
+											solveLastAnchor = (solvedAnchors.count(std::make_pair(lastChain, lastOffset)) == 1);
+											if (previousAnchorSolved) solveLastAnchor = false;
+										}
+										if (anchorChains[currChain].nodes.size() == 1)
+										{
+											solveCurrAnchor = (solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1);
+										}
+										auto keypair = canon(std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t), std::make_pair(currNode & maskUint64_t, currNode & firstBitUint64_t));
+										std::pair<uint64_t, uint64_t> key { keypair.first.first + (keypair.first.second ? firstBitUint64_t : 0), keypair.second.first + (keypair.second.second ? firstBitUint64_t : 0) };
+										size_t tangle = nodeLocationInInterchainTangles[std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t)];
+										assert(tangle < interchainTangleConnectionHap.size());
+										if (interchainTangleConnectionHap[tangle].count(key) == 0)
+										{
+											solutionHap = interchainTangleConnectionHap[tangle].size();
+											interchainTangleConnectionHap[tangle][key] = solutionHap;
+										}
+										else
+										{
+											solutionHap = interchainTangleConnectionHap[tangle].at(key);
+										}
+									}
 								}
 							}
 						}
@@ -2328,7 +2325,7 @@ VectorWithDirection<size_t> getNodeLocationsWithinInterchainTangles(const Unitig
 	return result;
 }
 
-std::pair<std::vector<bool>, std::vector<bool>> getUnzippableChainEnds(const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges)
+std::pair<std::vector<bool>, std::vector<bool>> getUnzippableChainEnds(const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges, const phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>>& validHaplotypeConnectionsPerChainEdge)
 {
 	std::vector<bool> canUnzipStart;
 	std::vector<bool> canUnzipEnd;
@@ -2346,6 +2343,45 @@ std::pair<std::vector<bool>, std::vector<bool>> getUnzippableChainEnds(const std
 	{
 		if (chainHaplotypes[i].chainStartPhased) canUnzipStart[chainHaplotypes[i].chainNumber] = true;
 		if (chainHaplotypes[i].chainEndPhased) canUnzipEnd[chainHaplotypes[i].chainNumber] = true;
+	}
+	for (size_t i = 0; i < chainHaplotypes.size(); i++)
+	{
+		for (auto edge : validChainEdges.getEdges(std::make_pair(i, true)))
+		{
+			if (validHaplotypeConnectionsPerChainEdge.count(i + firstBitUint64_t) == 0)
+			{
+				canUnzipEnd[i] = false;
+				break;
+			}
+			if (validHaplotypeConnectionsPerChainEdge.at(i + firstBitUint64_t).count(edge.first + (edge.second ? firstBitUint64_t : 0)) == 0)
+			{
+				canUnzipEnd[i] = false;
+				break;
+			}
+			if (validHaplotypeConnectionsPerChainEdge.at(i + firstBitUint64_t).at(edge.first + (edge.second ? firstBitUint64_t : 0)).size() == 0)
+			{
+				canUnzipEnd[i] = false;
+				break;
+			}
+		}
+		for (auto edge : validChainEdges.getEdges(std::make_pair(i, false)))
+		{
+			if (validHaplotypeConnectionsPerChainEdge.count(i) == 0)
+			{
+				canUnzipStart[i] = false;
+				break;
+			}
+			if (validHaplotypeConnectionsPerChainEdge.at(i).count(edge.first + (edge.second ? firstBitUint64_t : 0)) == 0)
+			{
+				canUnzipStart[i] = false;
+				break;
+			}
+			if (validHaplotypeConnectionsPerChainEdge.at(i).at(edge.first + (edge.second ? firstBitUint64_t : 0)).size() == 0)
+			{
+				canUnzipStart[i] = false;
+				break;
+			}
+		}
 	}
 	// could do smartly, but naive method is good enough
 	while (true)
@@ -2391,7 +2427,108 @@ std::pair<std::vector<bool>, std::vector<bool>> getUnzippableChainEnds(const std
 	return std::make_pair(canUnzipStart, canUnzipEnd);
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>>& allelesPerReadPerChain, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges)
+phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>> getValidHaplotypeConnectionsPerChainEdge(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>>& haplotypeDiagonalsPerRead, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
+{
+	std::vector<int> maxDiagonalDifferences;
+	maxDiagonalDifferences.resize(anchorChains.size());
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		maxDiagonalDifferences[i] = ((int)(anchorChains[i].nodeOffsets.back() + unitigGraph.lengths[anchorChains[i].nodes.back() & maskUint64_t]) * .5);
+	}
+	assert(chainPositionsInReads.size() == readPaths.size());
+	assert(readPaths.size() == haplotypeDiagonalsPerRead.size());
+	std::vector<std::vector<size_t>> chainStartHaplotypeInRead;
+	std::vector<std::vector<size_t>> chainEndHaplotypeInRead;
+	chainStartHaplotypeInRead.resize(chainPositionsInReads.size());
+	chainEndHaplotypeInRead.resize(chainPositionsInReads.size());
+	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
+	{
+		chainStartHaplotypeInRead[i].resize(chainPositionsInReads[i].size(), std::numeric_limits<size_t>::max());
+		chainEndHaplotypeInRead[i].resize(chainPositionsInReads[i].size(), std::numeric_limits<size_t>::max());
+		for (size_t j = 0; j < chainPositionsInReads[i].size(); j++)
+		{
+			size_t uniqueStartHap = std::numeric_limits<size_t>::max();
+			size_t uniqueEndHap = std::numeric_limits<size_t>::max();
+			size_t chain = chainPositionsInReads[i][j].chain;
+			bool fw = (chainPositionsInReads[i][j].chain & firstBitUint64_t);
+			int startDiagonal = chainPositionsInReads[i][j].chainStartPosInRead + (int)unitigGraph.lengths[anchorChains[chain].nodes[0]];
+			int endDiagonal = chainPositionsInReads[i][j].chainEndPosInRead - (int)anchorChains[chain].nodeOffsets.back();
+			if (!fw)
+			{
+				startDiagonal = chainPositionsInReads[i][j].chainStartPosInRead + (int)unitigGraph.lengths[anchorChains[chain].nodes.back()] + (int)anchorChains[chain].nodeOffsets.back();
+				endDiagonal = chainPositionsInReads[i][j].chainEndPosInRead;
+			}
+			for (size_t k = 0; k < haplotypeDiagonalsPerRead[j].size(); k++)
+			{
+				if (chainHaplotypes[std::get<0>(haplotypeDiagonalsPerRead[i][k])].chainNumber != chain) continue;
+				if (std::get<1>(haplotypeDiagonalsPerRead[i][k]) != fw) continue;
+				if (std::get<2>(haplotypeDiagonalsPerRead[i][k]) > startDiagonal - maxDiagonalDifferences[chain] && std::get<2>(haplotypeDiagonalsPerRead[i][k]) < startDiagonal + maxDiagonalDifferences[chain])
+				{
+					if (uniqueStartHap == std::numeric_limits<size_t>::max())
+					{
+						uniqueStartHap = std::get<3>(haplotypeDiagonalsPerRead[i][k]);
+					}
+					else if (uniqueStartHap != std::get<3>(haplotypeDiagonalsPerRead[i][k]))
+					{
+						uniqueStartHap = std::numeric_limits<size_t>::max()-1;
+					}
+				}
+				if (std::get<2>(haplotypeDiagonalsPerRead[i][k]) > endDiagonal - maxDiagonalDifferences[chain] && std::get<2>(haplotypeDiagonalsPerRead[i][k]) < endDiagonal + maxDiagonalDifferences[chain])
+				{
+					if (uniqueEndHap == std::numeric_limits<size_t>::max())
+					{
+						uniqueEndHap = std::get<3>(haplotypeDiagonalsPerRead[i][k]);
+					}
+					else if (uniqueEndHap != std::get<3>(haplotypeDiagonalsPerRead[i][k]))
+					{
+						uniqueEndHap = std::numeric_limits<size_t>::max()-1;
+					}
+				}
+			}
+			if (anchorChains[chain].ploidy == 1)
+			{
+				assert(uniqueStartHap == std::numeric_limits<size_t>::max());
+				assert(uniqueEndHap == std::numeric_limits<size_t>::max());
+				uniqueStartHap = 0;
+				uniqueEndHap = 0;
+			}
+			if (uniqueStartHap < std::numeric_limits<size_t>::max()-1) chainStartHaplotypeInRead[i][j] = uniqueStartHap;
+			if (uniqueEndHap < std::numeric_limits<size_t>::max()-1) chainEndHaplotypeInRead[i][j] = uniqueEndHap;
+		}
+	}
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<std::pair<size_t, size_t>, size_t>>> edgeHapCoverage;
+	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
+	{
+		for (size_t j = 1; j < chainPositionsInReads[i].size(); j++)
+		{
+			uint64_t prevChain = chainPositionsInReads[i][j-1].chain;
+			uint64_t currChain = chainPositionsInReads[i][j].chain;
+			size_t prevHap = chainEndHaplotypeInRead[i][j-1];
+			size_t currHap = chainStartHaplotypeInRead[i][j];
+			if (prevHap == std::numeric_limits<size_t>::max()) continue;
+			if (currHap == std::numeric_limits<size_t>::max()) continue;
+			if (!validChainEdges.hasEdge(std::make_pair(prevChain & maskUint64_t, prevChain & firstBitUint64_t), std::make_pair(currChain & maskUint64_t, currChain & firstBitUint64_t))) continue;
+			edgeHapCoverage[prevChain][currChain][std::make_pair(prevHap, currHap)] += 1;
+			edgeHapCoverage[currChain ^ firstBitUint64_t][prevChain ^firstBitUint64_t][std::make_pair(currHap, prevHap)] += 1;
+		}
+	}
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>> result;
+	for (const auto& pair : edgeHapCoverage)
+	{
+		for (const auto& pair2 : pair.second)
+		{
+			for (const auto& pair3 : pair2.second)
+			{
+				std::cerr << "hap check chain " << (pair.first & maskUint64_t) << ((pair.first & firstBitUint64_t) ? "+" : "-") << " to chain " << (pair2.first & maskUint64_t) << ((pair2.first & firstBitUint64_t) ? "+" : "-") << " haps " << pair3.first.first << " " << pair3.first.second << " coverage " << pair3.second << std::endl;
+				if (pair3.second < approxOneHapCoverage * 0.5) continue;
+				result[pair.first][pair2.first].insert(pair3.first);
+			}
+		}
+	}
+	return result;
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>>& allelesPerReadPerChain, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
 {
 	UnitigGraph resultGraph = unitigGraph;
 	std::vector<ReadPathBundle> resultPaths = readPaths;
@@ -2417,35 +2554,8 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 		}
 	}
 	tangleCount += 1;
-	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedLocations;
-	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedAnchors;
 	std::vector<std::vector<std::vector<std::tuple<size_t, bool, int>>>> readsPerHaplotypePerChain;
 	readsPerHaplotypePerChain.resize(chainHaplotypes.size());
-	std::vector<bool> canUnzipStart;
-	std::vector<bool> canUnzipEnd;
-	std::tie(canUnzipStart, canUnzipEnd) = getUnzippableChainEnds(anchorChains, chainHaplotypes, validChainEdges);
-	for (size_t i = 0; i < anchorChains.size(); i++)
-	{
-		std::cerr << "anchor chain " << i << " (" << (anchorChains[i].nodes[0] & maskUint64_t) << " to " << (anchorChains[i].nodes.back() & maskUint64_t) << ") unzippable at start: " << (canUnzipStart[i] ? "yes" : "no") << " at end: " << (canUnzipEnd[i] ? "yes" : "no") << std::endl;
-	}
-	phmap::flat_hash_set<size_t> solvedInterchainTangles;
-	for (size_t i = 0; i < anchorChains.size(); i++)
-	{
-		// canUnzipStart[i] = false;
-		// canUnzipEnd[i] = false;
-		if (canUnzipStart[i])
-		{
-			std::pair<size_t, bool> key { anchorChains[i].nodes[0] & maskUint64_t, (anchorChains[i].nodes[0] ^ firstBitUint64_t) & firstBitUint64_t };
-			assert(nodeLocationInInterchainTangles[key] != std::numeric_limits<size_t>::max());
-			solvedInterchainTangles.insert(nodeLocationInInterchainTangles[key]);
-		}
-		if (canUnzipEnd[i])
-		{
-			std::pair<size_t, bool> key { anchorChains[i].nodes.back() & maskUint64_t, anchorChains[i].nodes.back() & firstBitUint64_t };
-			assert(nodeLocationInInterchainTangles[key] != std::numeric_limits<size_t>::max());
-			solvedInterchainTangles.insert(nodeLocationInInterchainTangles[key]);
-		}
-	}
 	for (size_t i = 0; i < chainHaplotypes.size(); i++)
 	{
 		const size_t chain = chainHaplotypes[i].chainNumber;
@@ -2503,6 +2613,54 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 			std::sort(readsPerHaplotypePerChain[i][j].begin(), readsPerHaplotypePerChain[i][j].end());
 			assert(readsPerHaplotypePerChain[i][j].size() >= 1);
 		}
+	}
+	std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>> haplotypeDiagonalsPerRead;
+	haplotypeDiagonalsPerRead.resize(resultPaths.size());
+	for (size_t block = 0; block < readsPerHaplotypePerChain.size(); block++)
+	{
+		for (size_t hap = 0; hap < readsPerHaplotypePerChain[block].size(); hap++)
+		{
+			for (auto t : readsPerHaplotypePerChain[block][hap])
+			{
+				size_t read = std::get<0>(t);
+				bool fw = std::get<1>(t);
+				int diagonal = std::get<2>(t);
+				haplotypeDiagonalsPerRead[read].emplace_back(block, fw, diagonal, hap);
+				std::cerr << "readhap " << read << " " << block << " (" << (chainHaplotypes[block].chainNumber & maskUint64_t) << ")" << (fw ? "+" : "-") << " " << diagonal << " " << hap << std::endl;
+			}
+		}
+	}
+	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedLocations;
+	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedAnchors;
+	std::vector<bool> canUnzipStart;
+	std::vector<bool> canUnzipEnd;
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>> validHaplotypeConnectionsPerChainEdge = getValidHaplotypeConnectionsPerChainEdge(unitigGraph, readPaths, anchorChains, haplotypeDiagonalsPerRead, chainHaplotypes, validChainEdges, chainPositionsInReads, approxOneHapCoverage);
+	std::tie(canUnzipStart, canUnzipEnd) = getUnzippableChainEnds(anchorChains, chainHaplotypes, validChainEdges, validHaplotypeConnectionsPerChainEdge);
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		std::cerr << "anchor chain " << i << " (" << (anchorChains[i].nodes[0] & maskUint64_t) << " to " << (anchorChains[i].nodes.back() & maskUint64_t) << ") unzippable at start: " << (canUnzipStart[i] ? "yes" : "no") << " at end: " << (canUnzipEnd[i] ? "yes" : "no") << std::endl;
+	}
+	phmap::flat_hash_set<size_t> solvedInterchainTangles;
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		// canUnzipStart[i] = false;
+		// canUnzipEnd[i] = false;
+		if (canUnzipStart[i])
+		{
+			std::pair<size_t, bool> key { anchorChains[i].nodes[0] & maskUint64_t, (anchorChains[i].nodes[0] ^ firstBitUint64_t) & firstBitUint64_t };
+			assert(nodeLocationInInterchainTangles[key] != std::numeric_limits<size_t>::max());
+			solvedInterchainTangles.insert(nodeLocationInInterchainTangles[key]);
+		}
+		if (canUnzipEnd[i])
+		{
+			std::pair<size_t, bool> key { anchorChains[i].nodes.back() & maskUint64_t, anchorChains[i].nodes.back() & firstBitUint64_t };
+			assert(nodeLocationInInterchainTangles[key] != std::numeric_limits<size_t>::max());
+			solvedInterchainTangles.insert(nodeLocationInInterchainTangles[key]);
+		}
+	}
+	for (size_t i = 0; i < chainHaplotypes.size(); i++)
+	{
+		const size_t chain = chainHaplotypes[i].chainNumber;
 		size_t minSolvedIndex = chainHaplotypes[i].bubbleIndices[0];
 		size_t maxSolvedIndex = chainHaplotypes[i].bubbleIndices.back();
 		assert(chainHaplotypes[i].bubbleIndices.size() >= 2);
@@ -2519,7 +2677,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 		}
 		if (minSolvedIndex > 0) solvedLocations.emplace(chain, minSolvedIndex-1);
 	}
-	unzipPhaseBlocks(resultGraph, resultPaths, anchorChains, chainHaplotypes, readsPerHaplotypePerChain, nodeLocationInChain, solvedLocations, solvedAnchors, solvedInterchainTangles, nodeLocationInInterchainTangles, tangleCount, validChainEdges);
+	unzipPhaseBlocks(resultGraph, resultPaths, anchorChains, chainHaplotypes, readsPerHaplotypePerChain, nodeLocationInChain, solvedLocations, solvedAnchors, solvedInterchainTangles, nodeLocationInInterchainTangles, tangleCount, validChainEdges, haplotypeDiagonalsPerRead, validHaplotypeConnectionsPerChainEdge);
 	RankBitvector kept;
 	kept.resize(resultGraph.nodeCount());
 	for (size_t i = 0; i < kept.size(); i++)
@@ -2599,6 +2757,6 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLinearizable(const
 	std::vector<PhaseBlock> chainHaplotypes = phaseCoreChains(anchorChains, allelesPerReadPerChain, approxOneHapCoverage);
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
-	std::tie(unzippedGraph, unzippedReadPaths) = unzipPhaseBlocks(unitigGraph, readPaths, anchorChains, allelesPerReadPerChain, chainHaplotypes, validChainEdges);
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipPhaseBlocks(unitigGraph, readPaths, anchorChains, allelesPerReadPerChain, chainHaplotypes, validChainEdges, chainPositionsInReads, approxOneHapCoverage);
 	return std::make_pair(std::move(unzippedGraph), std::move(unzippedReadPaths));
 }
