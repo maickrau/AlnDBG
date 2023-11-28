@@ -1326,6 +1326,7 @@ std::vector<bool> getPossiblyHaplotypeInformativeSites(const std::vector<std::ve
 
 std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t>& readAssignment, const size_t ploidy, const std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>& allelesPerRead, const std::vector<size_t>& numAllelesPerSite)
 {
+	assert(readAssignment.size() <= allelesPerRead.size());
 	assert(ploidy >= 2);
 	std::vector<std::vector<std::vector<size_t>>> alleleCoveragePerHaplotype;
 	alleleCoveragePerHaplotype.resize(ploidy);
@@ -1345,6 +1346,9 @@ std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t
 			size_t site = std::get<0>(t);
 			size_t allele = std::get<1>(t);
 			size_t weight = std::get<2>(t);
+			assert(readAssignment[i] < alleleCoveragePerHaplotype.size());
+			assert(site < alleleCoveragePerHaplotype[readAssignment[i]].size());
+			assert(allele < alleleCoveragePerHaplotype[readAssignment[i]][site].size());
 			alleleCoveragePerHaplotype[readAssignment[i]][site][allele] += weight;
 		}
 	}
@@ -1388,6 +1392,7 @@ std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t
 
 size_t getHaplotypeScore(const std::vector<size_t>& readAssignment, const size_t ploidy, const std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>& allelesPerRead, const std::vector<size_t>& numAllelesPerSite)
 {
+	assert(readAssignment.size() <= allelesPerRead.size());
 	assert(ploidy >= 2);
 	size_t score = 0;
 	std::vector<std::vector<size_t>> allelesPerHaplotype = getAllelesPerHaplotype(readAssignment, ploidy, allelesPerRead, numAllelesPerSite);
@@ -1485,6 +1490,7 @@ std::vector<size_t> getUnweightedHeuristicMEC(const std::vector<std::vector<std:
 		}
 		activeAssignments = nextActiveAssignments;
 	}
+	assert(activeAssignments.size() >= 2);
 	assert(activeAssignments[0].readAssignment.size() == allelesPerRead.size());
 	std::cerr << "MEC best scores:";
 	for (size_t i = 0; i < 10 && i < activeAssignments.size(); i++)
@@ -1644,6 +1650,7 @@ std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> mergeReadsPerAllele
 		{
 			for (size_t read : readsPerAllele[site][allele])
 			{
+				assert(read < allelesPerRead.size());
 				allelesPerRead[read].emplace_back(site, allele);
 			}
 		}
@@ -1680,6 +1687,7 @@ std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> mergeReadsPerAllele
 	}
 	for (size_t i = 0; i < result.size(); i++)
 	{
+		assert(result[i].size() >= 1);
 		std::sort(result[i].begin(), result[i].end());
 	}
 	std::sort(result.begin(), result.end(), [](const auto& left, const auto& right)
@@ -1704,8 +1712,14 @@ std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> mergeReadsPerAllele
 
 std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vector<size_t> readAssignment, const std::vector<std::vector<size_t>>& allelesPerHaplotype, const std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>& mergedAllelesPerRead, const size_t ploidy)
 {
+	assert(ploidy >= 2);
 	assert(allelesPerHaplotype.size() == ploidy);
 	assert(mergedAllelesPerRead.size() == readAssignment.size());
+	assert(raw.allelesPerHaplotype.size() == ploidy);
+	assert(raw.bubbleIndices.size() == raw.allelesPerHaplotype[0].size());
+	assert(raw.bubbleIndices.size() <= allelesPerHaplotype[0].size());
+	assert(raw.bubbleIndices.size() >= 2);
+	assert(allelesPerHaplotype[0].size() >= 2);
 	std::vector<size_t> previousNonGarbageSite;
 	previousNonGarbageSite.resize(allelesPerHaplotype[0].size(), std::numeric_limits<size_t>::max());
 	size_t lastNonGarbage = std::numeric_limits<size_t>::max();
@@ -1722,7 +1736,7 @@ std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vecto
 	std::cerr << "number of sites: " << raw.bubbleIndices.size() << std::endl;
 	{
 		std::vector<bool> notGarbageSite;
-		notGarbageSite.resize(raw.bubbleIndices.size(), true);
+		notGarbageSite.resize(allelesPerHaplotype[0].size(), true);
 		for (size_t i = 0; i < allelesPerHaplotype[0].size(); i++)
 		{
 			if (allelesPerHaplotype[0][i] == std::numeric_limits<size_t>::max())
@@ -1740,9 +1754,10 @@ std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vecto
 	{
 		if (readAssignment[i] == std::numeric_limits<size_t>::max()) continue;
 		std::vector<bool> hasAllele;
-		hasAllele.resize(raw.bubbleIndices.size(), false);
+		hasAllele.resize(allelesPerHaplotype[0].size(), false);
 		for (auto t : mergedAllelesPerRead[i])
 		{
+			assert(std::get<0>(t) < hasAllele.size());
 			hasAllele[std::get<0>(t)] = true;
 		}
 		for (size_t i = 0; i < hasAllele.size(); i++)
@@ -1755,7 +1770,7 @@ std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vecto
 	haplotypeHasCrossingReads.resize(ploidy);
 	for (size_t i = 0; i < ploidy; i++)
 	{
-		haplotypeHasCrossingReads[i].resize(raw.bubbleIndices.size(), false);
+		haplotypeHasCrossingReads[i].resize(allelesPerHaplotype[0].size(), false);
 	}
 	for (size_t i = 0; i < mergedAllelesPerRead.size(); i++)
 	{
@@ -1812,7 +1827,9 @@ std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vecto
 		if (!validSite)
 		{
 			std::cerr << "split block at chain " << raw.chainNumber << " index " << i << std::endl;
+			result.back().chainEndPhased = false;
 			result.emplace_back();
+			result.back().chainStartPhased = false;
 			result.back().chainNumber = raw.chainNumber;
 			result.back().allelesPerHaplotype.resize(ploidy);
 		}
@@ -1853,17 +1870,9 @@ std::vector<PhaseBlock> getChainPhaseBlocks(const size_t coreNodeChainIndex, con
 		{
 			assert(pair.first < unfilteredReadsPerAllele.size());
 			while (pair.second >= unfilteredReadsPerAllele[pair.first].size()) unfilteredReadsPerAllele[pair.first].emplace_back();
-			// assert(std::find(unfilteredReadsPerAllele[pair.first][pair.second].begin(), unfilteredReadsPerAllele[pair.first][pair.second].end(), readi) == unfilteredReadsPerAllele[pair.first][pair.second].end());
+			assert(pair.second < unfilteredReadsPerAllele[pair.first].size());
+			assert(std::find(unfilteredReadsPerAllele[pair.first][pair.second].begin(), unfilteredReadsPerAllele[pair.first][pair.second].end(), readi) == unfilteredReadsPerAllele[pair.first][pair.second].end());
 			unfilteredReadsPerAllele[pair.first][pair.second].emplace_back(readi);
-		}
-	}
-	for (size_t i = 0; i < unfilteredReadsPerAllele.size(); i++)
-	{
-		for (size_t j = 0; j < unfilteredReadsPerAllele[i].size(); j++)
-		{
-			phmap::flat_hash_set<size_t> reads { unfilteredReadsPerAllele[i][j].begin(), unfilteredReadsPerAllele[i][j].end() };
-			unfilteredReadsPerAllele[i][j].clear();
-			unfilteredReadsPerAllele[i][j].insert(unfilteredReadsPerAllele[i][j].end(), reads.begin(), reads.end());
 		}
 	}
 	std::cerr << "check chain " << coreNodeChainIndex << std::endl;
@@ -1916,13 +1925,14 @@ std::vector<PhaseBlock> getChainPhaseBlocks(const size_t coreNodeChainIndex, con
 	{
 		rawResult.allelesPerHaplotype.emplace_back();
 	}
-	// todo split across haplo block boundaries
 	size_t bubblei = 0;
 	for (size_t i = 0; i < maybeHaplotypeInformative.size(); i++)
 	{
 		if (!maybeHaplotypeInformative[i]) continue;
 		if (allelesPerHaplotype[0][bubblei] == std::numeric_limits<size_t>::max())
 		{
+			if (i == 0) rawResult.chainStartPhased = false;
+			if (i == maybeHaplotypeInformative.size()-1) rawResult.chainEndPhased = false;
 			bubblei += 1;
 			continue;
 		}
@@ -1934,6 +1944,7 @@ std::vector<PhaseBlock> getChainPhaseBlocks(const size_t coreNodeChainIndex, con
 		bubblei += 1;
 	}
 	assert(bubblei == allelesPerHaplotype[0].size());
+	if (rawResult.bubbleIndices.size() < 2) return std::vector<PhaseBlock> {};
 	return splitPhaseBlocks(rawResult, readAssignments, allelesPerHaplotype, mergedAllelesPerRead, ploidy);
 }
 
