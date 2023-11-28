@@ -2122,6 +2122,7 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 			}
 		}
 		bool previousAnchorSolved = false;
+		std::vector<std::pair<size_t, size_t>> breakBeforeHere;
 		for (size_t m = 1; m < readToAnchorMatches.size(); m++)
 		{
 			// assert(std::get<2>(readToAnchorMatches[m]) > std::get<2>(readToAnchorMatches[m-1]));
@@ -2182,18 +2183,21 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 						bool currFw = (currNode & firstBitUint64_t) == (anchorChains[currChain].nodes[currOffset] & firstBitUint64_t);
 						size_t currHap = std::get<3>(readToAnchorMatches[m]);
 						std::cerr << "has interchain nodes" << std::endl;
+						bool shouldBreakThis = false;
 						if (validChainEdges.hasEdge(std::make_pair(lastChain, lastFw), std::make_pair(currChain, currFw)))
 						{
 							std::cerr << "has interchain edge" << std::endl;
-							if (validHaplotypeConnectionsPerChainEdge.count(lastChain + (lastFw ? firstBitUint64_t : 0)) == 1 && validHaplotypeConnectionsPerChainEdge.at(lastChain + (lastFw ? firstBitUint64_t : 0)).count(currChain + (currFw ? firstBitUint64_t : 0)) == 1)
+							if (solvedInterchainTangles.count(nodeLocationInInterchainTangles[std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t)]) == 1)
 							{
-								std::cerr << "has some valid haplotypes" << std::endl;
-								if (validHaplotypeConnectionsPerChainEdge.at(lastChain + (lastFw ? firstBitUint64_t : 0)).at(currChain + (currFw ? firstBitUint64_t : 0)).count(std::make_pair(lastHap, currHap)) == 1)
+								shouldBreakThis = true;
+								std::cerr << "is in solved tangle" << std::endl;
+								if (validHaplotypeConnectionsPerChainEdge.count(lastChain + (lastFw ? firstBitUint64_t : 0)) == 1 && validHaplotypeConnectionsPerChainEdge.at(lastChain + (lastFw ? firstBitUint64_t : 0)).count(currChain + (currFw ? firstBitUint64_t : 0)) == 1)
 								{
-									std::cerr << "has valid haplotype" << std::endl;
-									if (solvedInterchainTangles.count(nodeLocationInInterchainTangles[std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t)]) == 1)
+									std::cerr << "has some valid haplotypes" << std::endl;
+									if (validHaplotypeConnectionsPerChainEdge.at(lastChain + (lastFw ? firstBitUint64_t : 0)).at(currChain + (currFw ? firstBitUint64_t : 0)).count(std::make_pair(lastHap, currHap)) == 1)
 									{
-										std::cerr << "is in solved tangle" << std::endl;
+										std::cerr << "has valid haplotype" << std::endl;
+										shouldBreakThis = false;
 										solveThisBlock = true;
 										solveLastAnchor = false;
 										solveCurrAnchor = false;
@@ -2222,6 +2226,10 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 									}
 								}
 							}
+						}
+						if (shouldBreakThis && std::get<0>(readToAnchorMatches[m-1]) == std::get<0>(readToAnchorMatches[m]) && std::get<1>(readToAnchorMatches[m-1])+1 == std::get<1>(readToAnchorMatches[m]))
+						{
+							breakBeforeHere.emplace_back(std::get<0>(readToAnchorMatches[m]), std::get<1>(readToAnchorMatches[m]));
 						}
 					}
 				}
@@ -2252,6 +2260,30 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 				}
 			}
 			previousAnchorSolved = solveCurrAnchor;
+		}
+		if (breakBeforeHere.size() > 0)
+		{
+			for (size_t j = breakBeforeHere.size()-1; j < breakBeforeHere.size(); j--)
+			{
+				std::cerr << "break read " << i << " index " << breakBeforeHere[j].first << " " << breakBeforeHere[j].second << " (" << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second-1] & maskUint64_t) << " " << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second] & maskUint64_t) << ")" << std::endl;
+				assert(breakBeforeHere[j].first < resultPaths[i].paths.size());
+				assert(breakBeforeHere[j].second < resultPaths[i].paths[breakBeforeHere[j].first].path.size());
+				assert(breakBeforeHere[j].second > 0);
+				resultPaths[i].paths.emplace_back();
+				resultPaths[i].paths.back().pathLeftClipKmers = 0;
+				resultPaths[i].paths.back().pathRightClipKmers = resultPaths[i].paths[breakBeforeHere[j].first].pathRightClipKmers;
+				size_t startPos = resultPaths[i].paths[breakBeforeHere[j].first].readStartPos;
+				for (size_t k = 0; k < breakBeforeHere[j].second; k++)
+				{
+					startPos += resultGraph.lengths[resultPaths[i].paths[breakBeforeHere[j].first].path[k] & maskUint64_t];
+					if (k == 0) startPos -= resultPaths[i].paths[breakBeforeHere[j].first].pathLeftClipKmers;
+				}
+				resultPaths[i].paths.back().readStartPos = startPos;
+				resultPaths[i].paths.back().path.insert(resultPaths[i].paths.back().path.end(), resultPaths[i].paths[breakBeforeHere[j].first].path.begin() + breakBeforeHere[j].second, resultPaths[i].paths[breakBeforeHere[j].first].path.end());
+				resultPaths[i].paths[breakBeforeHere[j].first].path.erase(resultPaths[i].paths[breakBeforeHere[j].first].path.begin() + breakBeforeHere[j].second, resultPaths[i].paths[breakBeforeHere[j].first].path.end());
+				resultPaths[i].paths[breakBeforeHere[j].first].pathRightClipKmers = 0;
+			}
+			std::sort(resultPaths[i].paths.begin(), resultPaths[i].paths.end(), [](const auto& left, const auto& right) { return left.readStartPos < right.readStartPos; });
 		}
 	}
 }
