@@ -1364,7 +1364,7 @@ std::vector<std::vector<size_t>> getAllelesPerHaplotype(const std::vector<size_t
 		size_t totalMismatchesInSite = 0;
 		for (size_t hap = 0; hap < ploidy; hap++)
 		{
-			std::pair<size_t, size_t> bestHere { std::numeric_limits<size_t>::max(), 0 };
+			std::pair<size_t, size_t> bestHere { std::numeric_limits<size_t>::max()-1, 0 };
 			size_t totalCount = 0;
 			for (size_t allele = 0; allele < alleleCoveragePerHaplotype[hap][site].size(); allele++)
 			{
@@ -1409,6 +1409,7 @@ size_t getHaplotypeScore(const std::vector<size_t>& readAssignment, const size_t
 				continue;
 			}
 			size_t haplotypeAllele = allelesPerHaplotype[readAssignment[i]][site];
+			assert(haplotypeAllele != std::numeric_limits<size_t>::max()-1);
 			if (haplotypeAllele == std::numeric_limits<size_t>::max())
 			{
 				score += weight;
@@ -1532,6 +1533,10 @@ std::vector<size_t> getUnweightedHeuristicMEC(const std::vector<std::vector<std:
 			if (allelesPerHaplotype[i][j] == std::numeric_limits<size_t>::max())
 			{
 				std::cerr << "_,";
+			}
+			else if (allelesPerHaplotype[i][j] == std::numeric_limits<size_t>::max()-1)
+			{
+				std::cerr << ".,";
 			}
 			else
 			{
@@ -1755,16 +1760,41 @@ std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vecto
 		if (readAssignment[i] == std::numeric_limits<size_t>::max()) continue;
 		std::vector<bool> hasAllele;
 		hasAllele.resize(allelesPerHaplotype[0].size(), false);
+		std::vector<size_t> allele;
+		allele.resize(allelesPerHaplotype[0].size(), std::numeric_limits<size_t>::max());
 		for (auto t : mergedAllelesPerRead[i])
 		{
 			assert(std::get<0>(t) < hasAllele.size());
 			hasAllele[std::get<0>(t)] = true;
+			if (allele[std::get<0>(t)] == std::numeric_limits<size_t>::max())
+			{
+				allele[std::get<0>(t)] = std::get<1>(t);
+			}
+			else if (allele[std::get<0>(t)] != std::get<1>(t))
+			{
+				allele[std::get<0>(t)] = std::numeric_limits<size_t>::max()-1;
+			}
 		}
 		for (size_t i = 0; i < hasAllele.size(); i++)
 		{
-			std::cerr << (hasAllele[i] ? "X" : "_");
+			if (!hasAllele[i])
+			{
+				std::cerr << "_";
+			}
+			else if (allele[i] <= 9)
+			{
+				std::cerr << allele[i];
+			}
+			else if (allele[i] == std::numeric_limits<size_t>::max()-1)
+			{
+				std::cerr << "X";
+			}
+			else
+			{
+				std::cerr << "A";
+			}
 		}
-		std::cerr << " read " << i << " hap " << readAssignment[i] << std::endl;
+		std::cerr << " read " << i << " hap " << readAssignment[i] << " weight " << std::get<2>(mergedAllelesPerRead[i][0]) << std::endl;
 	}
 	std::vector<std::vector<bool>> haplotypeHasCrossingReads;
 	haplotypeHasCrossingReads.resize(ploidy);
@@ -1836,6 +1866,8 @@ std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vecto
 		result.back().bubbleIndices.emplace_back(raw.bubbleIndices[bubblei]);
 		for (size_t k = 0; k < ploidy; k++)
 		{
+			if (i == 0 && raw.allelesPerHaplotype[k][bubblei] == std::numeric_limits<size_t>::max()-1) result[0].chainStartPhased = false;
+			if (i == allelesPerHaplotype[0].size()-1 && raw.allelesPerHaplotype[k][bubblei] == std::numeric_limits<size_t>::max()-1) lastPhased = false;
 			assert(raw.allelesPerHaplotype[k][bubblei] != std::numeric_limits<size_t>::max());
 			result.back().allelesPerHaplotype[k].push_back(raw.allelesPerHaplotype[k][bubblei]);
 		}
@@ -1947,6 +1979,7 @@ std::vector<PhaseBlock> getChainPhaseBlocks(const size_t coreNodeChainIndex, con
 		rawResult.bubbleIndices.push_back(i);
 		for (size_t j = 0; j < ploidy; j++)
 		{
+			assert(allelesPerHaplotype[j][bubblei] != std::numeric_limits<size_t>::max());
 			rawResult.allelesPerHaplotype[j].push_back(allelesPerHaplotype[j][bubblei]);
 		}
 		bubblei += 1;
