@@ -2759,12 +2759,32 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 			solvedInterchainTangles.insert(nodeLocationInInterchainTangles[key]);
 		}
 	}
+	for (size_t chain = 0; chain < anchorChains.size(); chain++)
+	{
+		if (anchorChains[chain].ploidy != 1) continue;
+		size_t minSolvedIndex = 0;
+		size_t maxSolvedIndex = anchorChains[chain].nodes.size();
+		std::cerr << "haploid chain " << chain << " indices " << minSolvedIndex << " " << maxSolvedIndex << " (" << anchorChains[chain].nodes.size() << ")" << std::endl;
+		if (!canUnzipStart[chain] && minSolvedIndex == 0) minSolvedIndex = 1;
+		if (!canUnzipEnd[chain] && maxSolvedIndex == anchorChains[chain].nodes.size()) maxSolvedIndex = anchorChains[chain].nodes.size();
+		std::cerr << "haploid chain " << chain << " indices " << minSolvedIndex << " " << maxSolvedIndex << std::endl;
+		if (maxSolvedIndex < minSolvedIndex) continue;
+		for (size_t j = minSolvedIndex; j <= maxSolvedIndex; j++)
+		{
+			assert(solvedLocations.count(std::make_pair(chain, j)) == 0);
+			std::cerr << "solve " << chain << " " << j << " (" << (j > 0 ? (anchorChains[chain].nodes[j-1] & maskUint64_t) : -1) << " to " << (j < anchorChains[chain].nodes.size() ? (anchorChains[chain].nodes[j] & maskUint64_t) : std::numeric_limits<size_t>::max()) << ")" << std::endl;
+			solvedLocations.emplace(chain, j);
+			if (j != maxSolvedIndex) solvedAnchors.emplace(chain, j);
+		}
+		if (minSolvedIndex > 0) solvedLocations.emplace(chain, minSolvedIndex-1);
+	}
 	for (size_t i = 0; i < chainHaplotypes.size(); i++)
 	{
 		const size_t chain = chainHaplotypes[i].chainNumber;
 		size_t minSolvedIndex = chainHaplotypes[i].bubbleIndices[0];
 		size_t maxSolvedIndex = chainHaplotypes[i].bubbleIndices.back();
 		assert(chainHaplotypes[i].bubbleIndices.size() >= 2);
+		assert(anchorChains[chainHaplotypes[i].chainNumber].ploidy >= 2);
 		std::cerr << "block " << i << " chain " << chain << " indices " << minSolvedIndex << " " << maxSolvedIndex << " (" << anchorChains[chain].nodes.size() << ")" << std::endl;
 		if (!canUnzipStart[chain] && minSolvedIndex == 0) minSolvedIndex = chainHaplotypes[i].bubbleIndices[1];
 		if (!canUnzipEnd[chain] && maxSolvedIndex == anchorChains[chain].nodes.size()) maxSolvedIndex = chainHaplotypes[i].bubbleIndices[chainHaplotypes[i].bubbleIndices.size()-2];
