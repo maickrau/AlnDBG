@@ -1757,7 +1757,6 @@ std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vecto
 	}
 	for (size_t i = 0; i < mergedAllelesPerRead.size(); i++)
 	{
-		if (readAssignment[i] == std::numeric_limits<size_t>::max()) continue;
 		std::vector<bool> hasAllele;
 		hasAllele.resize(allelesPerHaplotype[0].size(), false);
 		std::vector<size_t> allele;
@@ -1794,7 +1793,9 @@ std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vecto
 				std::cerr << "A";
 			}
 		}
-		std::cerr << " read " << i << " hap " << readAssignment[i] << " weight " << std::get<2>(mergedAllelesPerRead[i][0]) << std::endl;
+		std::cerr << " read " << i << " hap " << (readAssignment[i] < std::numeric_limits<size_t>::max() ? std::to_string(readAssignment[i]) : "-") << " weight " << std::get<2>(mergedAllelesPerRead[i][0]);
+		if (readAssignment[i] == std::numeric_limits<size_t>::max()) std::cerr << " (GARBAGE READ)";
+		std::cerr << std::endl;
 	}
 	std::vector<std::vector<bool>> haplotypeHasCrossingReads;
 	haplotypeHasCrossingReads.resize(ploidy);
