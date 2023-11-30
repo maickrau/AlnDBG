@@ -779,7 +779,7 @@ std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph&
 	result.resize(readPaths.size());
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
-		std::vector<std::tuple<size_t, bool, int, size_t, int, int>> impliedPositions;
+		std::vector<std::tuple<size_t, bool, int, size_t, int, int>> impliedPositions; // chain, fw, diagonal, readPos, readChainStartPos, readChainEndPos
 		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
 		{
 			size_t readPos = readPaths[i].paths[j].readStartPos;
@@ -793,7 +793,7 @@ std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph&
 				const size_t offset = anchorLocator[node & maskUint64_t].second;
 				assert((node & maskUint64_t) == (anchorChains[chain].nodes[offset] & maskUint64_t));
 				const bool fw = (node & firstBitUint64_t) == (anchorChains[chain].nodes[offset] & firstBitUint64_t);
-				int diagonal = (int)readPos - (int)anchorChains[chain].nodeOffsets[offset];
+				int diagonal = (int)readPos - (int)anchorChains[chain].nodeOffsets[offset] - (int)unitigGraph.lengths[anchorChains[chain].nodes[offset] & maskUint64_t];
 				if (!fw) diagonal = (int)readPos + (int)anchorChains[chain].nodeOffsets[offset];
 				if (fw)
 				{

@@ -994,7 +994,7 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 				size_t index = getAlleleIndex(allelesPerChain, curr.first, std::min(curr.second, prev.second)+1, allele);
 				assert(curr.first < anchorChains.size());
 				assert(curr.second < anchorChains[curr.first].nodeOffsets.size());
-				int diagonal = (int)readPos - (int)anchorChains[curr.first].nodeOffsets[curr.second];
+				int diagonal = (int)readPos - (int)anchorChains[curr.first].nodeOffsets[curr.second] - (int)unitigGraph.lengths[anchorChains[curr.first].nodes[curr.second] & maskUint64_t];
 				if (!fw) diagonal = (int)readPos + (int)anchorChains[curr.first].nodeOffsets[curr.second];
 				std::cerr << "insert allele read " << readi << " chain " << (curr.first & maskUint64_t) << (fw ? "+" : "-") << " bubble " << (std::min(curr.second, prev.second)+1) << " allele " << index << " diagonal " << diagonal << std::endl;
 				assert(diagonal > -(int)(anchorChains[curr.first].nodeOffsets.back()*2+readPos*2));
@@ -1020,7 +1020,7 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 			int prevDiagonal, currDiagonal;
 			if (prevFw)
 			{
-				prevDiagonal = chainPositionsInReads[readi][j-1].chainEndPosInRead - anchorChains[chainPositionsInReads[readi][j-1].chain & maskUint64_t].nodeOffsets.back();
+				prevDiagonal = chainPositionsInReads[readi][j-1].chainEndPosInRead - (int)anchorChains[chainPositionsInReads[readi][j-1].chain & maskUint64_t].nodeOffsets.back() -  (int)unitigGraph.lengths[anchorChains[chainPositionsInReads[readi][j-1].chain & maskUint64_t].nodes.back() & maskUint64_t];
 			}
 			else
 			{
@@ -1028,11 +1028,11 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 			}
 			if (currFw)
 			{
-				currDiagonal = chainPositionsInReads[readi][j].chainStartPosInRead + unitigGraph.lengths[anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodes[0]];
+				currDiagonal = chainPositionsInReads[readi][j].chainStartPosInRead;
 			}
 			else
 			{
-				currDiagonal = chainPositionsInReads[readi][j].chainStartPosInRead + anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodeOffsets.back() + unitigGraph.lengths[anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodes.back()];
+				currDiagonal = chainPositionsInReads[readi][j].chainStartPosInRead + (int)anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodeOffsets.back() + (int)unitigGraph.lengths[anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodes.back()];
 			}
 			std::cerr << "tangleconnection insert allele read " << readi << " chain " << (chainPositionsInReads[readi][j-1].chain & maskUint64_t) << (prevFw ? "+" : "-") << " bubble " << (prevFw ? anchorChains[chainPositionsInReads[readi][j-1].chain & maskUint64_t].nodes.size() : 0) << " allele " << prevIndex << " diagonal " << prevDiagonal << std::endl;
 			std::cerr << "tangleconnection insert allele read " << readi << " chain " << (chainPositionsInReads[readi][j].chain & maskUint64_t) << (currFw ? "+" : "-") << " bubble " << (currFw ? 0 : anchorChains[chainPositionsInReads[readi][j].chain & maskUint64_t].nodes.size()) << " allele " << currIndex << " diagonal " << currDiagonal << std::endl;
@@ -1072,7 +1072,7 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 				std::pair<size_t, size_t> pos = coreNodeLocator.at(node & maskUint64_t);
 				assert((node & maskUint64_t) == (anchorChains[pos.first].nodes[pos.second] & maskUint64_t));
 				bool fw = (node & firstBitUint64_t) == (anchorChains[pos.first].nodes[pos.second] & firstBitUint64_t);
-				int diagonal = (int)readPos - (int)anchorChains[pos.first].nodeOffsets[pos.second];
+				int diagonal = (int)readPos - (int)anchorChains[pos.first].nodeOffsets[pos.second] - (int)unitigGraph.lengths[anchorChains[pos.first].nodes[pos.second] & maskUint64_t];
 				if (!fw) diagonal = (int)readPos + (int)anchorChains[pos.first].nodeOffsets[pos.second];
 				if (lastAnchor == std::numeric_limits<size_t>::max() || lastAnchorJ == j || std::get<0>(uniqueLastSimpleBubbleAllele) != pos.first || (fw && std::get<1>(uniqueLastSimpleBubbleAllele)+1 != pos.second) || (!fw && std::get<1>(uniqueLastSimpleBubbleAllele) != pos.second))
 				{
@@ -2154,7 +2154,7 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 					continue;
 				}
 				bool fw = (node & firstBitUint64_t) == (anchorChains[chain].nodes[offset] & firstBitUint64_t);
-				int diagonal = (int)readPos - (int)anchorChains[chain].nodeOffsets[offset];
+				int diagonal = (int)readPos - (int)anchorChains[chain].nodeOffsets[offset] - (int)resultGraph.lengths[anchorChains[chain].nodes[offset] & maskUint64_t];
 				if (!fw) diagonal = (int)readPos + (int)anchorChains[chain].nodeOffsets[offset];
 				size_t uniqueHap = std::numeric_limits<size_t>::max();
 				if (anchorChains[chain].ploidy == 1)
@@ -2552,8 +2552,8 @@ phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_s
 			size_t uniqueEndHap = std::numeric_limits<size_t>::max();
 			size_t chain = chainPositionsInReads[i][j].chain & maskUint64_t;
 			bool fw = (chainPositionsInReads[i][j].chain & firstBitUint64_t);
-			int startDiagonal = chainPositionsInReads[i][j].chainStartPosInRead + (int)unitigGraph.lengths[anchorChains[chain].nodes[0]];
-			int endDiagonal = chainPositionsInReads[i][j].chainEndPosInRead - (int)anchorChains[chain].nodeOffsets.back();
+			int startDiagonal = chainPositionsInReads[i][j].chainStartPosInRead;
+			int endDiagonal = chainPositionsInReads[i][j].chainEndPosInRead - (int)anchorChains[chain].nodeOffsets.back() - (int)unitigGraph.lengths[anchorChains[chain].nodes.back() & maskUint64_t];
 			if (!fw)
 			{
 				startDiagonal = chainPositionsInReads[i][j].chainStartPosInRead + (int)unitigGraph.lengths[anchorChains[chain].nodes.back()] + (int)anchorChains[chain].nodeOffsets.back();
