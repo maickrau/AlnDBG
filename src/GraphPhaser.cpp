@@ -2127,7 +2127,7 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 	{
 		maxDiagonalDifferences[i] = ((int)(anchorChains[i].nodeOffsets.back() + resultGraph.lengths[anchorChains[i].nodes.back() & maskUint64_t]) * .5);
 	}
-	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> nodeReplacement;
+	phmap::flat_hash_map<std::tuple<size_t, size_t, size_t, size_t>, size_t> nodeReplacement; // node, chain, offset, hap
 	std::vector<phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> interchainTangleConnectionHap;
 	interchainTangleConnectionHap.resize(tangleCount);
 	for (size_t i = 0; i < resultPaths.size(); i++)
@@ -2183,7 +2183,6 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 				readToAnchorMatches.emplace_back(j, k, readPos, uniqueHap, diagonal, node);
 			}
 		}
-		bool previousAnchorSolved = false;
 		std::vector<std::pair<size_t, size_t>> breakBeforeHere;
 		for (size_t m = 1; m < readToAnchorMatches.size(); m++)
 		{
@@ -2198,9 +2197,9 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 			assert((anchorChains[currChain].nodes[currOffset] & maskUint64_t) == (currNode & maskUint64_t));
 			bool currFw = (currNode & firstBitUint64_t) == (anchorChains[currChain].nodes[currOffset] & firstBitUint64_t);
 			bool solveThisBlock = false;
-			bool solveLastAnchor = false;
-			bool solveCurrAnchor = false;
 			size_t solutionHap = std::numeric_limits<size_t>::max();
+			size_t solutionChain = std::numeric_limits<size_t>::max();
+			size_t solutionOffset = std::numeric_limits<size_t>::max();
 			// std::cerr << "check " << m << " " << lastChain << " " << lastOffset << " " << (lastFw ? "fw" : "bw") << " " << (lastNode & maskUint64_t) << " " << std::get<3>(readToAnchorMatches[m-1]) << " " << currChain << " " << currOffset << " " << (currFw ? "fw" : "bw") << " " << (currNode & maskUint64_t) << " " << std::get<3>(readToAnchorMatches[m]) << std::endl;
 			if (currChain == lastChain && currFw == lastFw && ((currFw && currOffset == lastOffset+1) || (!currFw && currOffset+1 == lastOffset) || (currOffset == lastOffset)))
 			{
@@ -2218,10 +2217,9 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 						{
 							// std::cerr << "has solved location" << std::endl;
 							solveThisBlock = true;
-							solveLastAnchor = (solvedAnchors.count(std::make_pair(lastChain, lastOffset)) == 1);
-							if (previousAnchorSolved) solveLastAnchor = false;
-							solveCurrAnchor = (solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1);
 							solutionHap = std::get<3>(readToAnchorMatches[m]);
+							solutionChain = currChain;
+							solutionOffset = std::min(currOffset, lastOffset);
 						}
 					}
 				}
@@ -2260,17 +2258,6 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 										// std::cerr << "has valid haplotype" << std::endl;
 										shouldBreakThis = false;
 										solveThisBlock = true;
-										solveLastAnchor = false;
-										solveCurrAnchor = false;
-										if (anchorChains[lastChain].nodes.size() == 1)
-										{
-											solveLastAnchor = (solvedAnchors.count(std::make_pair(lastChain, lastOffset)) == 1);
-											if (previousAnchorSolved) solveLastAnchor = false;
-										}
-										if (anchorChains[currChain].nodes.size() == 1)
-										{
-											solveCurrAnchor = (solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1);
-										}
 										auto keypair = canon(std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t), std::make_pair(currNode & maskUint64_t, currNode & firstBitUint64_t));
 										std::pair<uint64_t, uint64_t> key { keypair.first.first + (keypair.first.second ? firstBitUint64_t : 0), keypair.second.first + (keypair.second.second ? firstBitUint64_t : 0) };
 										size_t tangle = nodeLocationInInterchainTangles[std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t)];
@@ -2302,25 +2289,46 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 				// if (solveCurrAnchor) std::cerr << "read " << i << " solve anchor " << std::get<0>(readToAnchorMatches[m]) << " " << std::get<1>(readToAnchorMatches[m]) << " " << (std::get<5>(readToAnchorMatches[m]) & maskUint64_t) << std::endl;
 				for (size_t j = std::get<0>(readToAnchorMatches[m-1]); j <= std::get<0>(readToAnchorMatches[m]); j++)
 				{
-					for (size_t k = (j == std::get<0>(readToAnchorMatches[m-1]) ? std::get<1>(readToAnchorMatches[m-1]) : 0); k < (j == std::get<0>(readToAnchorMatches[m]) ? std::get<1>(readToAnchorMatches[m])+1 : resultPaths[i].paths[j].path.size()); k++)
+					for (size_t k = (j == std::get<0>(readToAnchorMatches[m-1]) ? std::get<1>(readToAnchorMatches[m-1])+1 : 0); k < (j == std::get<0>(readToAnchorMatches[m]) ? std::get<1>(readToAnchorMatches[m]) : resultPaths[i].paths[j].path.size()); k++)
 					{
-						if (!solveLastAnchor && j == std::get<0>(readToAnchorMatches[m-1]) && k == std::get<1>(readToAnchorMatches[m-1])) continue;
-						if (!solveCurrAnchor && j == std::get<0>(readToAnchorMatches[m]) && k == std::get<1>(readToAnchorMatches[m])) continue;
 						uint64_t node = resultPaths[i].paths[j].path[k];
 						assert((node & maskUint64_t) < nodeLocationInChain.size());
-						if (nodeReplacement.count(std::make_pair(node & maskUint64_t, solutionHap)) == 0)
+						if (nodeReplacement.count(std::make_tuple(node & maskUint64_t, solutionChain, solutionOffset, solutionHap)) == 0)
 						{
-							nodeReplacement[std::make_pair(node & maskUint64_t, solutionHap)] = resultGraph.lengths.size();
+							nodeReplacement[std::make_tuple(node & maskUint64_t, solutionChain, solutionOffset, solutionHap)] = resultGraph.lengths.size();
 							resultGraph.lengths.push_back(resultGraph.lengths[node & maskUint64_t]);
 							resultGraph.coverages.emplace_back();
 						}
-						assert(nodeReplacement.count(std::make_pair(node & maskUint64_t, solutionHap)) == 1);
+						assert(nodeReplacement.count(std::make_tuple(node & maskUint64_t, solutionChain, solutionOffset, solutionHap)) == 1);
 						// std::cerr << "read " << i << " " << j << " " << k << " replace " << (node & maskUint64_t) << " with " << nodeReplacement.at(std::make_pair(node & maskUint64_t, solutionHap)) << std::endl;
-						resultPaths[i].paths[j].path[k] = nodeReplacement.at(std::make_pair(node & maskUint64_t, solutionHap)) + (node & firstBitUint64_t);
+						resultPaths[i].paths[j].path[k] = nodeReplacement.at(std::make_tuple(node & maskUint64_t, solutionChain, solutionOffset, solutionHap)) + (node & firstBitUint64_t);
 					}
 				}
 			}
-			previousAnchorSolved = solveCurrAnchor;
+		}
+		for (size_t m = 0; m < readToAnchorMatches.size(); m++)
+		{
+			uint64_t currNode = std::get<5>(readToAnchorMatches[m]);
+			size_t currChain = nodeLocationInChain[currNode & maskUint64_t].first;
+			size_t currOffset = nodeLocationInChain[currNode & maskUint64_t].second;
+			assert((anchorChains[currChain].nodes[currOffset] & maskUint64_t) == (currNode & maskUint64_t));
+			size_t hap = std::get<3>(readToAnchorMatches[m]);
+			size_t j = std::get<0>(readToAnchorMatches[m]);
+			size_t k = std::get<1>(readToAnchorMatches[m]);
+			if (hap != std::numeric_limits<size_t>::max() && solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1)
+			{
+				uint64_t node = resultPaths[i].paths[j].path[k];
+				assert((node & maskUint64_t) < nodeLocationInChain.size());
+				if (nodeReplacement.count(std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)) == 0)
+				{
+					nodeReplacement[std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)] = resultGraph.lengths.size();
+					resultGraph.lengths.push_back(resultGraph.lengths[node & maskUint64_t]);
+					resultGraph.coverages.emplace_back();
+				}
+				assert(nodeReplacement.count(std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)) == 1);
+				// std::cerr << "read " << i << " " << j << " " << k << " replace " << (node & maskUint64_t) << " with " << nodeReplacement.at(std::make_pair(node & maskUint64_t, hap)) << std::endl;
+				resultPaths[i].paths[j].path[k] = nodeReplacement.at(std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)) + (node & firstBitUint64_t);
+			}
 		}
 		if (breakBeforeHere.size() > 0)
 		{
