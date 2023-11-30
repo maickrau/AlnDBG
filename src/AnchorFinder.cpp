@@ -14,6 +14,17 @@ std::tuple<uint64_t, uint64_t, uint64_t> canon(std::pair<size_t, bool> first, st
 	return std::min(fw, bw);
 }
 
+std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> canon(std::pair<size_t, bool> first, std::pair<size_t, bool> second, std::pair<size_t, bool> third, std::pair<size_t, bool> fourth)
+{
+	uint64_t one = first.first + (first.second ? firstBitUint64_t : 0);
+	uint64_t two = second.first + (second.second ? firstBitUint64_t : 0);
+	uint64_t three = third.first + (third.second ? firstBitUint64_t : 0);
+	uint64_t four = fourth.first + (fourth.second ? firstBitUint64_t : 0);
+	std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> fw { one, two, three, four };
+	std::tuple<uint64_t, uint64_t, uint64_t, uint64_t> bw { four ^ firstBitUint64_t, three ^ firstBitUint64_t, two ^ firstBitUint64_t, one ^ firstBitUint64_t };
+	return std::min(fw, bw);
+}
+
 std::vector<std::tuple<uint64_t, uint64_t, uint64_t>> getPossiblyTransitiveTriplets(const SparseEdgeContainer& rawEdgesWithTransitiveEdges)
 {
 	phmap::flat_hash_set<std::tuple<uint64_t, uint64_t, uint64_t>> result;
@@ -39,6 +50,40 @@ std::vector<std::tuple<uint64_t, uint64_t, uint64_t>> getPossiblyTransitiveTripl
 		}
 	}
 	std::vector<std::tuple<uint64_t, uint64_t, uint64_t>> resultvec { result.begin(), result.end() };
+	return resultvec;
+}
+
+std::vector<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>> getPossiblyTransitiveQuadruplets(const SparseEdgeContainer& rawEdgesWithTransitiveEdges)
+{
+	phmap::flat_hash_set<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>> result;
+	for (size_t i = 0; i < rawEdgesWithTransitiveEdges.size(); i++)
+	{
+		std::pair<size_t, bool> fw { i, true };
+		for (auto edge : rawEdgesWithTransitiveEdges.getEdges(fw))
+		{
+			for (auto edge2 : rawEdgesWithTransitiveEdges.getEdges(edge))
+			{
+				for (auto edge3 : rawEdgesWithTransitiveEdges.getEdges(edge2))
+				{
+					if (!rawEdgesWithTransitiveEdges.hasEdge(fw, edge3)) continue;
+					result.emplace(canon(fw, edge, edge2, edge3));
+				}
+			}
+		}
+		std::pair<size_t, bool> bw { i, false };
+		for (auto edge : rawEdgesWithTransitiveEdges.getEdges(bw))
+		{
+			for (auto edge2 : rawEdgesWithTransitiveEdges.getEdges(edge))
+			{
+				for (auto edge3 : rawEdgesWithTransitiveEdges.getEdges(edge2))
+				{
+					if (!rawEdgesWithTransitiveEdges.hasEdge(bw, edge3)) continue;
+					result.emplace(canon(bw, edge, edge2, edge3));
+				}
+			}
+		}
+	}
+	std::vector<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>> resultvec { result.begin(), result.end() };
 	return resultvec;
 }
 
@@ -74,12 +119,12 @@ bool blocksGraphPath(const UnitigGraph& unitigGraph, const SparseEdgeContainer& 
 	return true;
 }
 
-SparseEdgeContainer getEdgesWithoutTransitiveEdges(const SparseEdgeContainer& rawEdgesWithTransitiveEdges, const std::vector<std::tuple<uint64_t, uint64_t, uint64_t>>& maybeTransitiveEdges, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, std::vector<bool>& anchor, const double approxOneHapCoverage)
+SparseEdgeContainer getEdgesWithoutTransitiveEdges(const SparseEdgeContainer& rawEdgesWithTransitiveEdges, const std::vector<std::tuple<uint64_t, uint64_t, uint64_t>>& maybeTransitiveTriplets, const std::vector<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>>& maybeTransitiveQuadruplets, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, std::vector<bool>& anchor, const double approxOneHapCoverage)
 {
-	if (maybeTransitiveEdges.size() == 0) return rawEdgesWithTransitiveEdges;
+	if (maybeTransitiveTriplets.size() == 0 && maybeTransitiveQuadruplets.size() == 0) return rawEdgesWithTransitiveEdges;
 	SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
 	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> forbiddenTransitiveEdges;
-	for (auto t : maybeTransitiveEdges)
+	for (auto t : maybeTransitiveTriplets)
 	{
 		assert(anchor[std::get<1>(t) & maskUint64_t]);
 		anchor[std::get<1>(t) & maskUint64_t] = false;
@@ -91,6 +136,29 @@ SparseEdgeContainer getEdgesWithoutTransitiveEdges(const SparseEdgeContainer& ra
 		anchor[std::get<1>(t) & maskUint64_t] = true;
 		forbiddenTransitiveEdges.emplace(std::get<0>(t), std::get<2>(t));
 		std::cerr << "forbid transitive edge " << ((std::get<0>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(t) & maskUint64_t) << " " << ((std::get<2>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(t) & maskUint64_t) << std::endl;
+	}
+	for (auto t : maybeTransitiveQuadruplets)
+	{
+		assert(anchor[std::get<1>(t) & maskUint64_t]);
+		assert(anchor[std::get<2>(t) & maskUint64_t]);
+		anchor[std::get<1>(t) & maskUint64_t] = false;
+		anchor[std::get<2>(t) & maskUint64_t] = false;
+		if (!blocksGraphPath(unitigGraph, edges, std::get<0>(t), std::get<1>(t), std::get<3>(t), anchor))
+		{
+			anchor[std::get<1>(t) & maskUint64_t] = true;
+			anchor[std::get<2>(t) & maskUint64_t] = true;
+			continue;
+		}
+		if (!blocksGraphPath(unitigGraph, edges, std::get<0>(t), std::get<2>(t), std::get<3>(t), anchor))
+		{
+			anchor[std::get<1>(t) & maskUint64_t] = true;
+			anchor[std::get<2>(t) & maskUint64_t] = true;
+			continue;
+		}
+		anchor[std::get<1>(t) & maskUint64_t] = true;
+		anchor[std::get<2>(t) & maskUint64_t] = true;
+		forbiddenTransitiveEdges.emplace(std::get<0>(t), std::get<3>(t));
+		std::cerr << "forbid transitive edge " << ((std::get<0>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(t) & maskUint64_t) << " " << ((std::get<3>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<3>(t) & maskUint64_t) << std::endl;
 	}
 	if (forbiddenTransitiveEdges.size() == 0) return rawEdgesWithTransitiveEdges;
 	SparseEdgeContainer result;
@@ -218,13 +286,19 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 		}
 	}
 	auto maybeTransitiveEdges = getPossiblyTransitiveTriplets(rawEdgesWithTransitiveEdges);
-	std::cerr << maybeTransitiveEdges.size() << " maybe transitive edges" << std::endl;
+	std::cerr << maybeTransitiveEdges.size() << " maybe transitive triplet edges" << std::endl;
 	for (auto t : maybeTransitiveEdges)
 	{
 		std::cerr << "transitive triplet " << ((std::get<0>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(t) & maskUint64_t) << " "  << ((std::get<1>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<1>(t) & maskUint64_t) << " "  << ((std::get<2>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(t) & maskUint64_t) << std::endl;
 	}
+	auto maybeTransitiveQuadrupletEdges = getPossiblyTransitiveQuadruplets(rawEdgesWithTransitiveEdges);
+	std::cerr << maybeTransitiveQuadrupletEdges.size() << " maybe transitive quadruplet edges" << std::endl;
+	for (auto t : maybeTransitiveQuadrupletEdges)
+	{
+		std::cerr << "transitive quadruplet " << ((std::get<0>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(t) & maskUint64_t) << " "  << ((std::get<1>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<1>(t) & maskUint64_t) << " "  << ((std::get<2>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(t) & maskUint64_t) << " "  << ((std::get<3>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<3>(t) & maskUint64_t) << std::endl;
+	}
 	// return rawEdgesWithTransitiveEdges;
-	return getEdgesWithoutTransitiveEdges(rawEdgesWithTransitiveEdges, maybeTransitiveEdges, unitigGraph, readPaths, anchor, approxOneHapCoverage);
+	return getEdgesWithoutTransitiveEdges(rawEdgesWithTransitiveEdges, maybeTransitiveEdges, maybeTransitiveQuadrupletEdges, unitigGraph, readPaths, anchor, approxOneHapCoverage);
 	// SparseEdgeContainer edges = getEdgesWithoutTransitiveEdges(rawEdgesWithTransitiveEdges, maybeTransitiveEdges, unitigGraph, readPaths, anchor, approxOneHapCoverage);
 	// return edges;
 }
