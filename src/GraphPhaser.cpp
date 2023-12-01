@@ -16,6 +16,21 @@ public:
 	bool chainEndPhased;
 };
 
+class ReadDiagonalAlleles
+{
+public:
+	class AlleleMatch
+	{
+	public:
+		size_t site;
+		size_t allele;
+	};
+	size_t readId;
+	bool fw;
+	int diagonal;
+	std::vector<AlleleMatch> alleles;
+};
+
 size_t getAlleleIndex(std::vector<std::vector<std::vector<std::vector<uint64_t>>>>& allelesPerChain, const size_t i, const size_t j, const std::vector<uint64_t>& allele)
 {
 	for (size_t k = 0; k < allelesPerChain[i][j].size(); k++)
@@ -26,10 +41,10 @@ size_t getAlleleIndex(std::vector<std::vector<std::vector<std::vector<uint64_t>>
 	return allelesPerChain[i][j].size()-1;
 }
 
-std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vector<std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>>> getRawReadInfoPerChain(const std::vector<AnchorChain>& anchorChains, const std::vector<ReadPathBundle>& readPaths, const UnitigGraph& unitigGraph, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads)
+std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vector<std::vector<ReadDiagonalAlleles>>> getRawReadInfoPerChain(const std::vector<AnchorChain>& anchorChains, const std::vector<ReadPathBundle>& readPaths, const UnitigGraph& unitigGraph, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads)
 {
 	std::vector<std::vector<std::vector<std::vector<uint64_t>>>> allelesPerChain;
-	std::vector<std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>> allelesPerReadPerChain;
+	std::vector<std::vector<ReadDiagonalAlleles>> allelesPerReadPerChain;
 	phmap::flat_hash_map<uint64_t, std::pair<size_t, size_t>> coreNodeLocator;
 	allelesPerChain.resize(anchorChains.size());
 	allelesPerReadPerChain.resize(anchorChains.size());
@@ -280,12 +295,14 @@ std::pair<std::vector<std::vector<std::vector<std::vector<uint64_t>>>>, std::vec
 			if (i == 0 || std::get<0>(allelesInThisRead[i]) != std::get<0>(allelesInThisRead[i-1]) || std::get<1>(allelesInThisRead[i]) > std::get<1>(allelesInThisRead[i-1]) + (int)(anchorChains[std::get<0>(allelesInThisRead[i])].nodeOffsets.back() + unitigGraph.lengths[anchorChains[std::get<0>(allelesInThisRead[i])].nodes.back() & maskUint64_t])/2)
 			{
 				allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].emplace_back();
-				std::get<0>(allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back()) = readi;
-				std::get<1>(allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back()) = std::get<0>(allelesInThisRead[i]) & firstBitUint64_t;
-				std::get<2>(allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back()) = std::get<1>(allelesInThisRead[i]);
+				allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back().readId = readi;
+				allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back().fw = std::get<0>(allelesInThisRead[i]) & firstBitUint64_t;
+				allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back().diagonal = std::get<1>(allelesInThisRead[i]);
 			}
 			std::cerr << "has allele chain " << (std::get<0>(allelesInThisRead[i]) & maskUint64_t) << ((std::get<0>(allelesInThisRead[i]) & firstBitUint64_t) ? "+" : "-") << " read " << readi << " diagonal " << std::get<1>(allelesInThisRead[i]) << " bubble " << std::get<2>(allelesInThisRead[i]) << " allele " << std::get<3>(allelesInThisRead[i]) << std::endl;
-			std::get<3>(allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back()).emplace_back(std::get<2>(allelesInThisRead[i]), std::get<3>(allelesInThisRead[i]));
+			allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back().alleles.emplace_back();
+			allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back().alleles.back().site = std::get<2>(allelesInThisRead[i]);
+			allelesPerReadPerChain[std::get<0>(allelesInThisRead[i]) & maskUint64_t].back().alleles.back().allele = std::get<3>(allelesInThisRead[i]);
 		}
 	}
 	return std::make_pair(std::move(allelesPerChain), std::move(allelesPerReadPerChain));
@@ -1076,7 +1093,7 @@ std::vector<PhaseBlock> splitPhaseBlocks(const PhaseBlock& raw, const std::vecto
 	return result;
 }
 
-std::tuple<std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>,std::vector<bool>,std::vector<size_t>> getPhasingTableInformation(const size_t coreNodeChainIndex, const std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
+std::tuple<std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>,std::vector<bool>,std::vector<size_t>> getPhasingTableInformation(const size_t coreNodeChainIndex, const std::vector<ReadDiagonalAlleles>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
 {
 	assert(ploidy >= 2);
 	assert(alleleCount >= 1);
@@ -1085,12 +1102,12 @@ std::tuple<std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>,std::vec
 	unfilteredReadsPerAllele.resize(alleleCount);
 	for (size_t readi = 0; readi < allelesPerRead.size(); readi++)
 	{
-		for (auto pair : std::get<3>(allelesPerRead[readi]))
+		for (auto pair : allelesPerRead[readi].alleles)
 		{
-			assert(pair.first < unfilteredReadsPerAllele.size());
-			while (pair.second >= unfilteredReadsPerAllele[pair.first].size()) unfilteredReadsPerAllele[pair.first].emplace_back();
-			assert(pair.second < unfilteredReadsPerAllele[pair.first].size());
-			unfilteredReadsPerAllele[pair.first][pair.second].emplace_back(readi);
+			assert(pair.site < unfilteredReadsPerAllele.size());
+			while (pair.allele >= unfilteredReadsPerAllele[pair.site].size()) unfilteredReadsPerAllele[pair.site].emplace_back();
+			assert(pair.allele < unfilteredReadsPerAllele[pair.site].size());
+			unfilteredReadsPerAllele[pair.site][pair.allele].emplace_back(readi);
 		}
 	}
 	for (size_t i = 0; i < unfilteredReadsPerAllele.size(); i++)
@@ -1143,7 +1160,7 @@ std::tuple<std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>,std::vec
 	return std::make_tuple(std::move(mergedAllelesPerRead), std::move(maybeHaplotypeInformative), std::move(numAllelesPerSite));
 }
 
-std::vector<PhaseBlock> getChainPhaseBlocksMEC(const size_t coreNodeChainIndex, const std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
+std::vector<PhaseBlock> getChainPhaseBlocksMEC(const size_t coreNodeChainIndex, const std::vector<ReadDiagonalAlleles>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
 {
 	assert(ploidy == 2);
 	assert(alleleCount >= 1);
@@ -1211,7 +1228,7 @@ void merge(std::vector<std::vector<std::pair<size_t, size_t>>>& parent, std::pai
 	parent[right.first][right.second] = left;
 }
 
-std::vector<PhaseBlock> getChainPhaseBlocksSpanners(const size_t coreNodeChainIndex, const std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
+std::vector<PhaseBlock> getChainPhaseBlocksSpanners(const size_t coreNodeChainIndex, const std::vector<ReadDiagonalAlleles>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
 {
 	std::cerr << "try spanning read phase chain " << coreNodeChainIndex << std::endl;
 	phmap::flat_hash_map<std::pair<size_t, size_t>, std::vector<size_t>> spannerReads;
@@ -1219,26 +1236,26 @@ std::vector<PhaseBlock> getChainPhaseBlocksSpanners(const size_t coreNodeChainIn
 	{
 		size_t startAllele = std::numeric_limits<size_t>::max();
 		size_t endAllele = std::numeric_limits<size_t>::max();
-		for (auto pair : std::get<3>(allelesPerRead[i]))
+		for (auto pair : allelesPerRead[i].alleles)
 		{
-			if (pair.first == 0)
+			if (pair.site == 0)
 			{
 				if (startAllele == std::numeric_limits<size_t>::max())
 				{
-					startAllele = pair.second;
+					startAllele = pair.allele;
 				}
-				else if (startAllele != pair.second)
+				else if (startAllele != pair.allele)
 				{
 					startAllele = std::numeric_limits<size_t>::max()-1;
 				}
 			}
-			if (pair.first == alleleCount-1)
+			if (pair.site == alleleCount-1)
 			{
 				if (endAllele == std::numeric_limits<size_t>::max())
 				{
-					endAllele = pair.second;
+					endAllele = pair.allele;
 				}
-				else if (endAllele != pair.second)
+				else if (endAllele != pair.allele)
 				{
 					endAllele = std::numeric_limits<size_t>::max()-1;
 				}
@@ -1285,7 +1302,7 @@ std::vector<PhaseBlock> getChainPhaseBlocksSpanners(const size_t coreNodeChainIn
 	return std::vector<PhaseBlock> { result };
 }
 
-std::vector<PhaseBlock> getChainPhaseBlocksTransitiveClosure(const size_t coreNodeChainIndex, const std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
+std::vector<PhaseBlock> getChainPhaseBlocksTransitiveClosure(const size_t coreNodeChainIndex, const std::vector<ReadDiagonalAlleles>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
 {
 	std::cerr << "try transitive closure phase chain " << coreNodeChainIndex << std::endl;
 	assert(ploidy >= 2);
@@ -1456,7 +1473,7 @@ std::vector<PhaseBlock> getChainPhaseBlocksTransitiveClosure(const size_t coreNo
 	return std::vector<PhaseBlock> { result };
 }
 
-std::vector<PhaseBlock> phaseCoreChains(const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>>& allelesPerReadPerChain, const double approxOneHapCoverage)
+std::vector<PhaseBlock> phaseCoreChains(const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ReadDiagonalAlleles>>& allelesPerReadPerChain, const double approxOneHapCoverage)
 {
 	assert(anchorChains.size() == allelesPerReadPerChain.size());
 	std::vector<PhaseBlock> result;
@@ -1592,7 +1609,7 @@ std::vector<std::pair<size_t, size_t>> getNodeLocationsWithinChain(const UnitigG
 	return result;
 }
 
-void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& resultPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes, const std::vector<std::vector<std::vector<std::tuple<size_t, bool, int>>>>& readsPerHaplotypePerChain, const std::vector<std::pair<size_t, size_t>>& nodeLocationInChain, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedLocations, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedAnchors, const phmap::flat_hash_set<size_t>& solvedInterchainTangles, const VectorWithDirection<size_t>& nodeLocationInInterchainTangles, const size_t tangleCount, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>>& haplotypeDiagonalsPerRead, const phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>>& validHaplotypeConnectionsPerChainEdge)
+void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& resultPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes, const std::vector<std::pair<size_t, size_t>>& nodeLocationInChain, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedLocations, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedAnchors, const phmap::flat_hash_set<size_t>& solvedInterchainTangles, const VectorWithDirection<size_t>& nodeLocationInInterchainTangles, const size_t tangleCount, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>>& haplotypeDiagonalsPerRead, const phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>>& validHaplotypeConnectionsPerChainEdge)
 {
 	std::vector<int> maxDiagonalDifferences;
 	maxDiagonalDifferences.resize(anchorChains.size());
@@ -2233,7 +2250,7 @@ std::tuple<phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::
 	return std::make_tuple(std::move(result), std::move(canUnzipStart), std::move(canUnzipEnd));
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>>& allelesPerReadPerChain, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ReadDiagonalAlleles>>& allelesPerReadPerChain, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
 {
 	UnitigGraph resultGraph = unitigGraph;
 	std::vector<ReadPathBundle> resultPaths = readPaths;
@@ -2319,17 +2336,17 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 			std::vector<size_t> countMatches;
 			countMatches.resize(ploidy);
 			size_t totalMatches = 0;
-			for (auto pair : std::get<3>(allelesPerReadPerChain[chain][j]))
+			for (auto pair : allelesPerReadPerChain[chain][j].alleles)
 			{
 				bool hasMatch = false;
-				if (alleleBelongsToUniqueHaplotype.count(pair) == 1 && alleleBelongsToUniqueHaplotype.at(pair) != std::numeric_limits<size_t>::max())
+				if (alleleBelongsToUniqueHaplotype.count(std::make_pair(pair.site, pair.allele)) == 1 && alleleBelongsToUniqueHaplotype.at(std::make_pair(pair.site, pair.allele)) != std::numeric_limits<size_t>::max())
 				{
-					countMatches[alleleBelongsToUniqueHaplotype.at(pair)] += 1;
+					countMatches[alleleBelongsToUniqueHaplotype.at(std::make_pair(pair.site, pair.allele))] += 1;
 					hasMatch = true;
 				}
-				if (alleleBelongsToNonuniqueHaplotypes.count(pair) == 1)
+				if (alleleBelongsToNonuniqueHaplotypes.count(std::make_pair(pair.site, pair.allele)) == 1)
 				{
-					for (size_t k : alleleBelongsToNonuniqueHaplotypes.at(pair))
+					for (size_t k : alleleBelongsToNonuniqueHaplotypes.at(std::make_pair(pair.site, pair.allele)))
 					{
 						countMatches[k] += 1;
 					}
@@ -2339,7 +2356,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 			}
 			if (totalMatches == 0)
 			{
-				std::cerr << "read " << std::get<0>(allelesPerReadPerChain[chain][j]) << " diagonal " << std::get<2>(allelesPerReadPerChain[chain][j]) << " has no het matches in block " << i << " chain " << chain << std::endl;
+				std::cerr << "read " << allelesPerReadPerChain[chain][j].readId << " diagonal " << allelesPerReadPerChain[chain][j].diagonal << " has no het matches in block " << i << " chain " << chain << std::endl;
 				continue;
 			}
 			size_t bestHap = 0;
@@ -2355,16 +2372,16 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 			}
 			if (countMatches[bestHap] <= totalMatches * 0.9)
 			{
-				std::cerr << "read " << std::get<0>(allelesPerReadPerChain[chain][j]) << " diagonal " << std::get<2>(allelesPerReadPerChain[chain][j]) << " is ambiguous (" << countMatches[bestHap] << " vs " << totalMatches << ") in block " << i << " chain " << chain << std::endl;
+				std::cerr << "read " << allelesPerReadPerChain[chain][j].readId << " diagonal " << allelesPerReadPerChain[chain][j].diagonal << " is ambiguous (" << countMatches[bestHap] << " vs " << totalMatches << ") in block " << i << " chain " << chain << std::endl;
 				continue;
 			}
 			if (ambiguous)
 			{
-				std::cerr << "read " << std::get<0>(allelesPerReadPerChain[chain][j]) << " diagonal " << std::get<2>(allelesPerReadPerChain[chain][j]) << " is ambiguous (same number) in block " << i << " chain " << chain << std::endl;
+				std::cerr << "read " << allelesPerReadPerChain[chain][j].readId << " diagonal " << allelesPerReadPerChain[chain][j].diagonal << " is ambiguous (same number) in block " << i << " chain " << chain << std::endl;
 				continue;
 			}
-			readsPerHaplotypePerChain[i][bestHap].emplace_back(std::get<0>(allelesPerReadPerChain[chain][j]), std::get<1>(allelesPerReadPerChain[chain][j]), std::get<2>(allelesPerReadPerChain[chain][j]));
-			std::cerr << "read " << std::get<0>(allelesPerReadPerChain[chain][j]) << " diagonal " << std::get<2>(allelesPerReadPerChain[chain][j]) << " has hap " << bestHap << " in block " << i << " chain " << chain << std::endl;
+			readsPerHaplotypePerChain[i][bestHap].emplace_back(allelesPerReadPerChain[chain][j].readId, allelesPerReadPerChain[chain][j].fw, allelesPerReadPerChain[chain][j].diagonal);
+			std::cerr << "read " << allelesPerReadPerChain[chain][j].readId << " diagonal " << allelesPerReadPerChain[chain][j].diagonal << " has hap " << bestHap << " in block " << i << " chain " << chain << std::endl;
 		}
 		for (size_t j = 0; j < ploidy; j++)
 		{
@@ -2455,7 +2472,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 		}
 		if (minSolvedIndex > 0) solvedLocations.emplace(chain, minSolvedIndex-1);
 	}
-	unzipPhaseBlocks(resultGraph, resultPaths, anchorChains, chainHaplotypes, readsPerHaplotypePerChain, nodeLocationInChain, solvedLocations, solvedAnchors, solvedInterchainTangles, nodeLocationInInterchainTangles, tangleCount, validChainEdges, haplotypeDiagonalsPerRead, validHaplotypeConnectionsPerChainEdge);
+	unzipPhaseBlocks(resultGraph, resultPaths, anchorChains, chainHaplotypes, nodeLocationInChain, solvedLocations, solvedAnchors, solvedInterchainTangles, nodeLocationInInterchainTangles, tangleCount, validChainEdges, haplotypeDiagonalsPerRead, validHaplotypeConnectionsPerChainEdge);
 	RankBitvector kept;
 	kept.resize(resultGraph.nodeCount());
 	for (size_t i = 0; i < kept.size(); i++)
@@ -2530,7 +2547,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLinearizable(const
 	}
 	SparseEdgeContainer validChainEdges = getValidChainEdges(chainPositionsInReads, approxOneHapCoverage);
 	std::vector<std::vector<std::vector<std::vector<uint64_t>>>> allelesPerChain;
-	std::vector<std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>> allelesPerReadPerChain;
+	std::vector<std::vector<ReadDiagonalAlleles>> allelesPerReadPerChain;
 	std::tie(allelesPerChain, allelesPerReadPerChain) = getRawReadInfoPerChain(anchorChains, readPaths, unitigGraph, validChainEdges, chainPositionsInReads);
 	std::vector<PhaseBlock> chainHaplotypes = phaseCoreChains(anchorChains, allelesPerReadPerChain, approxOneHapCoverage);
 	UnitigGraph unzippedGraph;
