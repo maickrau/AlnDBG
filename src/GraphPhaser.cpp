@@ -2043,6 +2043,80 @@ void merge(std::vector<std::vector<std::pair<size_t, size_t>>>& parent, std::pai
 	parent[right.first][right.second] = left;
 }
 
+std::vector<PhaseBlock> getChainPhaseBlocksSpanners(const size_t coreNodeChainIndex, const std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
+{
+	std::cerr << "try spanning read phase chain " << coreNodeChainIndex << std::endl;
+	phmap::flat_hash_map<std::pair<size_t, size_t>, std::vector<size_t>> spannerReads;
+	for (size_t i = 0; i < allelesPerRead.size(); i++)
+	{
+		size_t startAllele = std::numeric_limits<size_t>::max();
+		size_t endAllele = std::numeric_limits<size_t>::max();
+		for (auto pair : std::get<3>(allelesPerRead[i]))
+		{
+			if (pair.first == 0)
+			{
+				if (startAllele == std::numeric_limits<size_t>::max())
+				{
+					startAllele = pair.second;
+				}
+				else if (startAllele != pair.second)
+				{
+					startAllele = std::numeric_limits<size_t>::max()-1;
+				}
+			}
+			if (pair.first == alleleCount-1)
+			{
+				if (endAllele == std::numeric_limits<size_t>::max())
+				{
+					endAllele = pair.second;
+				}
+				else if (endAllele != pair.second)
+				{
+					endAllele = std::numeric_limits<size_t>::max()-1;
+				}
+			}
+		}
+		if (startAllele >= std::numeric_limits<size_t>::max()-1) continue;
+		if (endAllele >= std::numeric_limits<size_t>::max()-1) continue;
+		spannerReads[std::make_pair(startAllele, endAllele)].push_back(i);
+	}
+	size_t estimatedPloidy = 0;
+	size_t minorCoverage = 0;
+	size_t effectivePloidy = 0;
+	for (const auto& pair : spannerReads)
+	{
+		std::cerr << "spanner triple " << pair.first.first << " " << pair.first.second << " " << pair.second.size() << std::endl;
+		size_t ploidy = pair.second.size() / approxOneHapCoverage + 0.5;
+		estimatedPloidy += ploidy;
+		if (ploidy == 0) minorCoverage += pair.second.size();
+		if (ploidy >= 1) effectivePloidy += 1;
+	}
+	std::cerr << "spanner estimated ploidy sum " << estimatedPloidy << " minor count " << minorCoverage << " effective ploidy " << effectivePloidy << std::endl;
+	if (estimatedPloidy != ploidy) return std::vector<PhaseBlock> {};
+	if (minorCoverage >= 3) return std::vector<PhaseBlock> {};
+	if (effectivePloidy == 1) return std::vector<PhaseBlock> {};
+	PhaseBlock result;
+	result.chainNumber = coreNodeChainIndex;
+	result.bubbleIndices.push_back(0);
+	result.chainStartPhased = true;
+	result.chainEndPhased = true;
+	result.bubbleIndices.push_back(alleleCount-1);
+	std::cerr << "phased with spanners, alleles:" << std::endl;
+	for (const auto& pair : spannerReads)
+	{
+		size_t ploidy = pair.second.size() / approxOneHapCoverage + 0.5;
+		if (ploidy < 1) continue;
+		std::cerr << "hap " << result.allelesPerHaplotype.size() << " " << pair.first.first << " " << pair.first.second << std::endl;
+		result.allelesPerHaplotype.emplace_back();
+		result.allelesPerHaplotype.back().push_back(pair.first.first);
+		result.allelesPerHaplotype.back().push_back(pair.first.second);
+		result.extraAllelesPerHaplotype.emplace_back();
+		result.extraAllelesPerHaplotype.back().emplace_back();
+		result.extraAllelesPerHaplotype.back().emplace_back();
+	}
+	return std::vector<PhaseBlock> { result };
+}
+
 std::vector<PhaseBlock> getChainPhaseBlocksTransitiveClosure(const size_t coreNodeChainIndex, const std::vector<std::tuple<size_t, bool, int, std::vector<std::pair<size_t, size_t>>>>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
 {
 	std::cerr << "try transitive closure phase chain " << coreNodeChainIndex << std::endl;
@@ -2249,7 +2323,11 @@ std::vector<PhaseBlock> phaseCoreChains(const std::vector<AnchorChain>& anchorCh
 		}
 		else
 		{
-			auto phaseBlocks = getChainPhaseBlocksTransitiveClosure(i, allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()+1, approxOneHapCoverage);
+			auto phaseBlocks = getChainPhaseBlocksSpanners(i, allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()+1, approxOneHapCoverage);
+			if (phaseBlocks.size() == 0)
+			{
+				phaseBlocks = getChainPhaseBlocksTransitiveClosure(i, allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()+1, approxOneHapCoverage);
+			}
 			if (phaseBlocks.size() == 0) continue;
 			std::cerr << "phased with " << phaseBlocks.size() << " blocks. start: " << (phaseBlocks[0].chainStartPhased ? "yes" : "no") << ", end: " << (phaseBlocks.back().chainEndPhased ? "yes" : "no") << std::endl;
 			result.insert(result.end(), phaseBlocks.begin(), phaseBlocks.end());
@@ -2424,7 +2502,7 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 			size_t solutionHap = std::numeric_limits<size_t>::max();
 			size_t solutionChain = std::numeric_limits<size_t>::max();
 			size_t solutionOffset = std::numeric_limits<size_t>::max();
-			// std::cerr << "check " << m << " " << lastChain << " " << lastOffset << " " << (lastFw ? "fw" : "bw") << " " << (lastNode & maskUint64_t) << " " << std::get<3>(readToAnchorMatches[m-1]) << " " << currChain << " " << currOffset << " " << (currFw ? "fw" : "bw") << " " << (currNode & maskUint64_t) << " " << std::get<3>(readToAnchorMatches[m]) << std::endl;
+			std::cerr << "check " << m << " " << lastChain << " " << lastOffset << " " << (lastFw ? "fw" : "bw") << " " << (lastNode & maskUint64_t) << " " << std::get<3>(readToAnchorMatches[m-1]) << " " << currChain << " " << currOffset << " " << (currFw ? "fw" : "bw") << " " << (currNode & maskUint64_t) << " " << std::get<3>(readToAnchorMatches[m]) << std::endl;
 			if (currChain == lastChain && currFw == lastFw && ((currFw && currOffset == lastOffset+1) || (!currFw && currOffset+1 == lastOffset) || (currOffset == lastOffset)))
 			{
 				// std::cerr << "has chain match" << std::endl;
@@ -2434,10 +2512,10 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 				if (lastDiagonal > currDiagonal - maxDiagonalDifferences[currChain] && lastDiagonal < currDiagonal + maxDiagonalDifferences[currChain])
 				{
 					// std::cerr << "has curr last diagonal" << std::endl;
-					if (std::get<3>(readToAnchorMatches[m-1]) == std::get<3>(readToAnchorMatches[m]) && std::get<3>(readToAnchorMatches[m]) != std::numeric_limits<size_t>::max()-1 && std::get<3>(readToAnchorMatches[m]) != std::numeric_limits<size_t>::max())
+					if (solvedLocations.count(std::make_pair(currChain, std::min(lastOffset, currOffset))) == 1)
 					{
 						// std::cerr << "has unique hap " << std::get<3>(readToAnchorMatches[m]) << " check solved location " << currChain << " " << std::min(lastOffset, currOffset) << std::endl;
-						if (solvedLocations.count(std::make_pair(currChain, std::min(lastOffset, currOffset))) == 1)
+						if (std::get<3>(readToAnchorMatches[m-1]) == std::get<3>(readToAnchorMatches[m]) && std::get<3>(readToAnchorMatches[m]) != std::numeric_limits<size_t>::max()-1 && std::get<3>(readToAnchorMatches[m]) != std::numeric_limits<size_t>::max())
 						{
 							// std::cerr << "has solved location" << std::endl;
 							solveThisBlock = true;
@@ -2445,6 +2523,13 @@ void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& res
 							solutionChain = currChain;
 							solutionOffset = std::min(currOffset, lastOffset);
 						}
+					}
+					else
+					{
+						solveThisBlock = true;
+						solutionHap = 0;
+						solutionChain = currChain;
+						solutionOffset = std::min(currOffset, lastOffset);
 					}
 				}
 			}
@@ -3016,6 +3101,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 		assert(ploidy == anchorChains[chain].ploidy || anchorChains[chain].ploidy != 2);
 		readsPerHaplotypePerChain[i].resize(ploidy);
 		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> alleleBelongsToUniqueHaplotype;
+		phmap::flat_hash_map<std::pair<size_t, size_t>, std::vector<size_t>> alleleBelongsToNonuniqueHaplotypes;
 		for (size_t j = 0; j < chainHaplotypes[i].bubbleIndices.size(); j++)
 		{
 			for (size_t k = 0; k < ploidy; k++)
@@ -3027,7 +3113,12 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 					auto key = std::make_pair(chainHaplotypes[i].bubbleIndices[j], chainHaplotypes[i].allelesPerHaplotype[k][j]);
 					if (alleleBelongsToUniqueHaplotype.count(key) == 1)
 					{
-						alleleBelongsToUniqueHaplotype[key] = std::numeric_limits<size_t>::max();
+						if (alleleBelongsToUniqueHaplotype[key] != std::numeric_limits<size_t>::max())
+						{
+							alleleBelongsToNonuniqueHaplotypes[key].emplace_back(alleleBelongsToUniqueHaplotype.at(key));
+							alleleBelongsToUniqueHaplotype[key] = std::numeric_limits<size_t>::max();
+						}
+						alleleBelongsToNonuniqueHaplotypes[key].emplace_back(k);
 					}
 					else
 					{
@@ -3040,7 +3131,12 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 					auto key = std::make_pair(chainHaplotypes[i].bubbleIndices[j], chainHaplotypes[i].extraAllelesPerHaplotype[k][j][l]);
 					if (alleleBelongsToUniqueHaplotype.count(key) == 1)
 					{
-						alleleBelongsToUniqueHaplotype[key] = std::numeric_limits<size_t>::max();
+						if (alleleBelongsToUniqueHaplotype[key] != std::numeric_limits<size_t>::max())
+						{
+							alleleBelongsToNonuniqueHaplotypes[key].emplace_back(alleleBelongsToUniqueHaplotype.at(key));
+							alleleBelongsToUniqueHaplotype[key] = std::numeric_limits<size_t>::max();
+						}
+						alleleBelongsToNonuniqueHaplotypes[key].emplace_back(k);
 					}
 					else
 					{
@@ -3057,10 +3153,21 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 			size_t totalMatches = 0;
 			for (auto pair : std::get<3>(allelesPerReadPerChain[chain][j]))
 			{
-				if (alleleBelongsToUniqueHaplotype.count(pair) == 0) continue;
-				if (alleleBelongsToUniqueHaplotype.at(pair) == std::numeric_limits<size_t>::max()) continue;
-				countMatches[alleleBelongsToUniqueHaplotype.at(pair)] += 1;
-				totalMatches += 1;
+				bool hasMatch = false;
+				if (alleleBelongsToUniqueHaplotype.count(pair) == 1 && alleleBelongsToUniqueHaplotype.at(pair) != std::numeric_limits<size_t>::max())
+				{
+					countMatches[alleleBelongsToUniqueHaplotype.at(pair)] += 1;
+					hasMatch = true;
+				}
+				if (alleleBelongsToNonuniqueHaplotypes.count(pair) == 1)
+				{
+					for (size_t k : alleleBelongsToNonuniqueHaplotypes.at(pair))
+					{
+						countMatches[k] += 1;
+					}
+					hasMatch = true;
+				}
+				if (hasMatch) totalMatches += 1;
 			}
 			if (totalMatches == 0)
 			{
@@ -3068,13 +3175,24 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 				continue;
 			}
 			size_t bestHap = 0;
-			for (size_t k = 0; k < ploidy; k++)
+			bool ambiguous = false;
+			for (size_t k = 1; k < ploidy; k++)
 			{
-				if (countMatches[k] > countMatches[bestHap]) bestHap = k;
+				if (countMatches[k] == countMatches[bestHap]) ambiguous = true;
+				if (countMatches[k] > countMatches[bestHap])
+				{
+					bestHap = k;
+					ambiguous = false;
+				}
 			}
 			if (countMatches[bestHap] <= totalMatches * 0.9)
 			{
 				std::cerr << "read " << std::get<0>(allelesPerReadPerChain[chain][j]) << " diagonal " << std::get<2>(allelesPerReadPerChain[chain][j]) << " is ambiguous (" << countMatches[bestHap] << " vs " << totalMatches << ") in block " << i << " chain " << chain << std::endl;
+				continue;
+			}
+			if (ambiguous)
+			{
+				std::cerr << "read " << std::get<0>(allelesPerReadPerChain[chain][j]) << " diagonal " << std::get<2>(allelesPerReadPerChain[chain][j]) << " is ambiguous (same number) in block " << i << " chain " << chain << std::endl;
 				continue;
 			}
 			readsPerHaplotypePerChain[i][bestHap].emplace_back(std::get<0>(allelesPerReadPerChain[chain][j]), std::get<1>(allelesPerReadPerChain[chain][j]), std::get<2>(allelesPerReadPerChain[chain][j]));
