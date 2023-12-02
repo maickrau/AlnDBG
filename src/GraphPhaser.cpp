@@ -1529,14 +1529,7 @@ std::vector<PhaseBlock> phaseCoreChains(const std::vector<AnchorChain>& anchorCh
 		}
 		else
 		{
-			auto phaseBlocks = getChainPhaseBlocksSpanners(i, allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()+1, approxOneHapCoverage);
-			if (phaseBlocks.size() == 0)
-			{
-				phaseBlocks = getChainPhaseBlocksTransitiveClosure(i, allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()+1, approxOneHapCoverage);
-			}
-			if (phaseBlocks.size() == 0) continue;
-			std::cerr << "phased with " << phaseBlocks.size() << " blocks. start: " << (phaseBlocks[0].chainStartPhased ? "yes" : "no") << ", end: " << (phaseBlocks.back().chainEndPhased ? "yes" : "no") << std::endl;
-			result.insert(result.end(), phaseBlocks.begin(), phaseBlocks.end());
+			std::cerr << "skipped chain with ploidy " << anchorChains[i].ploidy << std::endl;
 		}
 	}
 	return result;
@@ -2163,6 +2156,12 @@ std::tuple<phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::
 	canUnzipEnd.resize(anchorChains.size(), true);
 	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
+		if (anchorChains[i].ploidy != 1 && anchorChains[i].ploidy != 2)
+		{
+			canUnzipEnd[i] = false;
+			canUnzipStart[i] = false;
+			continue;
+		}
 		size_t totalFoundPloidyFw = 0;
 		for (auto edge : validChainEdges.getEdges(std::make_pair(i, true)))
 		{
@@ -2601,6 +2600,43 @@ std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>
 	return result;
 }
 
+std::pair<std::vector<uint64_t>, std::vector<uint64_t>> getContext(const int pos, const std::vector<std::tuple<size_t, size_t, uint64_t>>& processedHetInfos, const std::vector<ChainPosition>& chainPositionsInReads, const size_t contextLength, bool fw)
+{
+	std::pair<std::vector<uint64_t>, std::vector<uint64_t>> context;
+	std::vector<std::pair<int, uint64_t>> hets;
+	for (auto m : processedHetInfos)
+	{
+		if ((int)std::get<1>(m) < pos) continue;
+		if ((int)std::get<0>(m) >= pos+(int)contextLength) continue;
+		hets.emplace_back((std::get<0>(m) + std::get<1>(m))*0.5, std::get<2>(m));
+	}
+	std::sort(hets.begin(), hets.end());
+	for (auto pair : hets) context.first.emplace_back(pair.second);
+	std::vector<std::pair<int, uint64_t>> chains;
+	for (auto m : chainPositionsInReads)
+	{
+		if (m.chainEndPosInRead < pos) continue;
+		if (m.chainStartPosInRead >= pos+(int)contextLength) continue;
+		chains.emplace_back((m.chainEndPosInRead + m.chainStartPosInRead)/2, m.chain);
+	}
+	std::sort(chains.begin(), chains.end());
+	for (auto pair : chains) context.second.emplace_back(pair.second);
+	if (!fw)
+	{
+		std::reverse(context.first.begin(), context.first.end());
+		std::reverse(context.second.begin(), context.second.end());
+		for (size_t m = 0; m < context.first.size(); m++)
+		{
+			context.first[m] ^= firstBitUint64_t;
+		}
+		for (size_t m = 0; m < context.second.size(); m++)
+		{
+			context.second[m] ^= firstBitUint64_t;
+		}
+	}
+	return context;
+}
+
 template <typename F>
 void iterateContextNodes(const UnitigGraph& unitigGraph, const ReadPathBundle& readPath, const std::vector<size_t>& contextCheckStartPoses, const std::vector<std::tuple<size_t, size_t, uint64_t>>& processedHetInfos, const std::vector<ChainPosition>& chainPositionsInReads, const size_t resolveLength, F callback)
 {
@@ -2626,38 +2662,7 @@ void iterateContextNodes(const UnitigGraph& unitigGraph, const ReadPathBundle& r
 			}
 			for (int pos : checkThese)
 			{
-				std::pair<std::vector<uint64_t>, std::vector<uint64_t>> context;
-				std::vector<std::pair<int, uint64_t>> hets;
-				for (auto m : processedHetInfos)
-				{
-					if ((int)std::get<1>(m) < pos) continue;
-					if ((int)std::get<0>(m) >= pos+(int)resolveLength) continue;
-					hets.emplace_back((std::get<0>(m) + std::get<1>(m))*0.5, std::get<2>(m));
-				}
-				std::sort(hets.begin(), hets.end());
-				for (auto pair : hets) context.first.emplace_back(pair.second);
-				std::vector<std::pair<int, uint64_t>> chains;
-				for (auto m : chainPositionsInReads)
-				{
-					if (m.chainEndPosInRead < pos) continue;
-					if (m.chainStartPosInRead >= pos+(int)resolveLength) continue;
-					chains.emplace_back((m.chainEndPosInRead + m.chainStartPosInRead)/2, m.chain);
-				}
-				std::sort(chains.begin(), chains.end());
-				for (auto pair : chains) context.second.emplace_back(pair.second);
-				if ((node ^ firstBitUint64_t) & firstBitUint64_t)
-				{
-					std::reverse(context.first.begin(), context.first.end());
-					std::reverse(context.second.begin(), context.second.end());
-					for (size_t m = 0; m < context.first.size(); m++)
-					{
-						context.first[m] ^= firstBitUint64_t;
-					}
-					for (size_t m = 0; m < context.second.size(); m++)
-					{
-						context.second[m] ^= firstBitUint64_t;
-					}
-				}
+				std::pair<std::vector<uint64_t>, std::vector<uint64_t>> context = getContext(pos, processedHetInfos, chainPositionsInReads, resolveLength, node & firstBitUint64_t);
 				contexts.emplace(std::move(context));
 			}
 			if (contexts.size() == 0)
@@ -2697,9 +2702,8 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const UnitigGra
 	assert(readPaths.size() == hetInfoPerRead.size());
 	assert(readPaths.size() == chainPositionsInReads.size());
 	std::vector<std::map<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>, std::pair<std::vector<uint64_t>, std::vector<uint64_t>>>> nodeParent;
-	std::vector<std::map<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>, size_t>> contextCoverage;
+	std::map<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>, size_t> contextCoverage;
 	nodeParent.resize(unitigGraph.nodeCount());
-	contextCoverage.resize(unitigGraph.nodeCount());
 	std::map<std::tuple<size_t, size_t, size_t>, uint64_t> bubbleAlleleToIndex;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> processedHetInfos;
 	processedHetInfos.resize(readPaths.size());
@@ -2736,14 +2740,18 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const UnitigGra
 	std::cerr << "counting context coverages" << std::endl;
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
-		iterateContextNodes(unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&contextCoverage, &readPaths, i](const size_t j, const size_t k, const std::vector<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>>& contexts)
+		std::set<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>> contexts;
+		for (auto pos : contextCheckStartPoses[i])
 		{
-			uint64_t node = readPaths[i].paths[j].path[k];
-			for (const auto& context : contexts)
-			{
-				contextCoverage[node & maskUint64_t][context] += 1;
-			}
-		});
+			auto context = getContext(pos, processedHetInfos[i], chainPositionsInReads[i], resolveLength, true);
+			contexts.insert(context);
+			context = getContext(pos, processedHetInfos[i], chainPositionsInReads[i], resolveLength, false);
+			contexts.insert(context);
+		}
+		for (const auto& context : contexts)
+		{
+			contextCoverage[context] += 1;
+		}
 	}
 	std::cerr << "merging per-node contexts" << std::endl;
 	for (size_t i = 0; i < readPaths.size(); i++)
@@ -2754,13 +2762,13 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const UnitigGra
 			std::pair<std::vector<uint64_t>, std::vector<uint64_t>> anyContext;
 			for (const auto& context : contexts)
 			{
-				if (contextCoverage[node & maskUint64_t][context] < minContextCoverage) continue;
+				if (contextCoverage[context] < minContextCoverage) continue;
 				anyContext = context;
 				find(nodeParent[node & maskUint64_t], context);
 			}
 			for (const auto& context : contexts)
 			{
-				if (contextCoverage[node & maskUint64_t][context] < minContextCoverage) continue;
+				if (contextCoverage[context] < minContextCoverage) continue;
 				merge(nodeParent[node & maskUint64_t], context, anyContext);
 			}
 		});
@@ -2799,7 +2807,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const UnitigGra
 			uint64_t node = readPaths[i].paths[j].path[k];
 			for (const auto& context : contexts)
 			{
-				if (contextCoverage[node & maskUint64_t][context] < minContextCoverage) continue;
+				if (contextCoverage[context] < minContextCoverage) continue;
 				auto cluster = find(nodeParent[node & maskUint64_t], context);
 				if (contextToNewNodeNumber[node & maskUint64_t].count(cluster) == 1)
 				{

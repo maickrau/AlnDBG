@@ -19,6 +19,7 @@ public:
 	uint64_t chain;
 	int chainStartPosInRead;
 	int chainEndPosInRead;
+	size_t numKmerMatches;
 };
 
 std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage);

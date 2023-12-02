@@ -853,7 +853,7 @@ std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph&
 	result.resize(readPaths.size());
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
-		std::vector<std::tuple<size_t, bool, int, size_t, int, int>> impliedPositions; // chain, fw, diagonal, readPos, readChainStartPos, readChainEndPos
+		std::vector<std::tuple<size_t, bool, int, size_t, int, int, size_t>> impliedPositions; // chain, fw, diagonal, readPos, readChainStartPos, readChainEndPos, kmerMatches
 		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
 		{
 			size_t readPos = readPaths[i].paths[j].readStartPos;
@@ -867,17 +867,21 @@ std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph&
 				const size_t offset = anchorLocator[node & maskUint64_t].second;
 				assert((node & maskUint64_t) == (anchorChains[chain].nodes[offset] & maskUint64_t));
 				const bool fw = (node & firstBitUint64_t) == (anchorChains[chain].nodes[offset] & firstBitUint64_t);
+				std::cerr << "anchorchain read " << i << " matches chain " << chain << " node " << (node & maskUint64_t) << std::endl;
+				size_t kmerMatches = unitigGraph.lengths[node & maskUint64_t];
+				if (k == 0) kmerMatches -= readPaths[i].paths[j].pathLeftClipKmers;
+				if (k == readPaths[i].paths[j].path.size()-1) kmerMatches -= readPaths[i].paths[j].pathRightClipKmers;
 				int diagonal = (int)readPos - (int)anchorChains[chain].nodeOffsets[offset] - (int)unitigGraph.lengths[anchorChains[chain].nodes[offset] & maskUint64_t];
 				if (!fw) diagonal = (int)readPos + (int)anchorChains[chain].nodeOffsets[offset];
 				if (fw)
 				{
 					// readPos is at the end of current node
-					impliedPositions.emplace_back(chain, fw, diagonal, readPos, readPos - unitigGraph.lengths[node & maskUint64_t] - anchorChains[chain].nodeOffsets[offset], readPos + anchorChains[chain].nodeOffsets.back() - anchorChains[chain].nodeOffsets[offset] - unitigGraph.lengths[node & maskUint64_t] + unitigGraph.lengths[anchorChains[chain].nodes.back() & maskUint64_t]);
+					impliedPositions.emplace_back(chain, fw, diagonal, readPos, readPos - unitigGraph.lengths[node & maskUint64_t] - anchorChains[chain].nodeOffsets[offset], readPos + anchorChains[chain].nodeOffsets.back() - anchorChains[chain].nodeOffsets[offset] - unitigGraph.lengths[node & maskUint64_t] + unitigGraph.lengths[anchorChains[chain].nodes.back() & maskUint64_t], kmerMatches);
 				}
 				else
 				{
 					// readPos is at the start of current node
-					impliedPositions.emplace_back(chain, fw, diagonal, readPos, readPos - (unitigGraph.lengths[anchorChains[chain].nodes.back() & maskUint64_t] + anchorChains[chain].nodeOffsets.back() - anchorChains[chain].nodeOffsets[offset]), readPos + anchorChains[chain].nodeOffsets[offset]);
+					impliedPositions.emplace_back(chain, fw, diagonal, readPos, readPos - (unitigGraph.lengths[anchorChains[chain].nodes.back() & maskUint64_t] + anchorChains[chain].nodeOffsets.back() - anchorChains[chain].nodeOffsets[offset]), readPos + anchorChains[chain].nodeOffsets[offset], kmerMatches);
 				}
 			}
 		}
@@ -894,6 +898,7 @@ std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph&
 				currentMinReadPos = std::numeric_limits<size_t>::max();
 				currentMaxReadPos = 0;
 			}
+			result[i].back().numKmerMatches += std::get<6>(impliedPositions[j]);
 			if (std::get<3>(impliedPositions[j]) < currentMinReadPos)
 			{
 				result[i].back().chainStartPosInRead = std::get<4>(impliedPositions[j]);
@@ -904,6 +909,30 @@ std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph&
 				result[i].back().chainEndPosInRead = std::get<5>(impliedPositions[j]);
 				currentMaxReadPos = std::get<3>(impliedPositions[j]);
 			}
+		}
+		std::vector<bool> keep;
+		keep.resize(result[i].size(), true);
+		for (size_t j = 0; j < result[i].size(); j++)
+		{
+			for (size_t k = 0; k < result[i].size(); k++)
+			{
+				if (j == k) continue;
+				if (result[i][j].chainStartPosInRead >= result[i][k].chainEndPosInRead) continue;
+				if (result[i][j].chainEndPosInRead <= result[i][k].chainStartPosInRead) continue;
+				assert(result[i][j].chainEndPosInRead > result[i][k].chainStartPosInRead);
+				int overlap = std::min(result[i][j].chainEndPosInRead, result[i][k].chainEndPosInRead) - std::max(result[i][j].chainStartPosInRead, result[i][k].chainStartPosInRead);
+				assert(overlap >= 1);
+				if (overlap < (result[i][j].chainEndPosInRead - result[i][j].chainStartPosInRead) * 0.1) continue;
+				if (overlap < (result[i][k].chainEndPosInRead - result[i][k].chainStartPosInRead) * 0.1) continue;
+				if (result[i][j].numKmerMatches > result[i][k].numKmerMatches) keep[k] = false;
+				if (result[i][j].numKmerMatches < result[i][k].numKmerMatches) keep[j] = false;
+			}
+		}
+		for (size_t j = result[i].size()-1; j < result[i].size(); j--)
+		{
+			if (keep[j]) continue;
+			std::swap(result[i][j], result[i].back());
+			result[i].pop_back();
 		}
 		std::sort(result[i].begin(), result[i].end(), [](auto left, auto right) { return left.chainStartPosInRead < right.chainStartPosInRead; });
 	}
