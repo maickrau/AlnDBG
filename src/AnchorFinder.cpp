@@ -778,7 +778,7 @@ void refineAnchorChainPloidies(std::vector<AnchorChain>& anchorChains, const Spa
 				else
 				{
 					assert(bubbleChains.size() < refinedPloidy);
-					std::cerr << "todo implement: could not distribute ploidy between too few chains (ploidy " << refinedPloidy << " vs chain count" << bubbleChains.size() << ")";
+					std::cerr << "todo implement: could not distribute ploidy between too few chains (ploidy " << refinedPloidy << " vs chain count" << bubbleChains.size() << ")" << std::endl;
 					// for (const uint64_t chain : bubbleChains)
 					// {
 					// 	std::cerr << " " << (anchorChains[chain & maskUint64_t].nodes[0] & maskUint64_t) << "-" << (anchorChains[chain & maskUint64_t].nodes.back() & maskUint64_t);
