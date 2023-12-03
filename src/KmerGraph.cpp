@@ -399,13 +399,14 @@ std::vector<size_t> getNodeLengths(const std::vector<std::vector<uint64_t>>& seg
 }
 
 // destroy segments to save memory, otherwise segments and result both use huge memory to represent the same thing
-std::vector<ReadPathBundle> getReadPathsAndDestroySegments(std::vector<std::vector<uint64_t>>& segments, const std::vector<RankBitvector>& breakpoints, const RankBitvector& segmentToNode, const RankBitvector& keptNodes)
+std::vector<ReadPathBundle> getReadPathsAndDestroySegments(std::vector<std::vector<uint64_t>>& segments, const std::vector<RankBitvector>& breakpoints, const RankBitvector& segmentToNode, const RankBitvector& keptNodes, const std::vector<size_t>& readLengths)
 {
 	std::vector<ReadPathBundle> result;
 	result.resize(breakpoints.size());
 	for (size_t i = 0; i < result.size(); i++)
 	{
 		result[i].readName = i;
+		result[i].readLength = readLengths[i];
 		uint64_t lastNode = std::numeric_limits<size_t>::max();
 		size_t segmenti = 0;
 		for (size_t j = 0; j < breakpoints[i].size()-1; j++)
@@ -465,7 +466,7 @@ std::pair<KmerGraph, std::vector<ReadPathBundle>> makeKmerGraph(const std::vecto
 	size_t countKeptNodes = (keptNodes.getRank(keptNodes.size()-1) + (keptNodes.get(keptNodes.size()-1) ? 1 : 0));
 	std::cerr << countKeptNodes << " kmer-nodes post coverage filter" << std::endl;
 	result.lengths = getNodeLengths(segments, segmentToNode, keptNodes, breakpoints, countKeptNodes);
-	std::vector<ReadPathBundle> readPaths = getReadPathsAndDestroySegments(segments, breakpoints, segmentToNode, keptNodes);
+	std::vector<ReadPathBundle> readPaths = getReadPathsAndDestroySegments(segments, breakpoints, segmentToNode, keptNodes, readLengths);
 	return std::make_pair(std::move(result), std::move(readPaths));
 }
 

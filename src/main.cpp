@@ -138,6 +138,10 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
 	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
 	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphChainmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
 	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	writeGraph("phased-graph.gfa", unitigGraph, nodeSequences, k);

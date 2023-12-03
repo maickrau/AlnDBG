@@ -411,6 +411,8 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNod
 	}
 	for (size_t i = 0; i < kmerGraphReadPaths.size(); i++)
 	{
+		result[i].readName = kmerGraphReadPaths[i].readName;
+		result[i].readLength = kmerGraphReadPaths[i].readLength;
 		for (size_t j = 0; j < kmerGraphReadPaths[i].paths.size(); j++)
 		{
 			std::pair<uint64_t, size_t> lastPos { std::numeric_limits<uint64_t>::max(), std::numeric_limits<size_t>::max() };

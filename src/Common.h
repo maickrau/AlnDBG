@@ -23,6 +23,7 @@ public:
 	};
 	std::vector<ReadPath> paths;
 	size_t readName;
+	size_t readLength;
 };
 
 SparseEdgeContainer getActiveEdges(const MostlySparse2DHashmap<uint8_t, size_t>& edges, const size_t numNodes);

@@ -119,7 +119,7 @@ bool blocksGraphPath(const UnitigGraph& unitigGraph, const SparseEdgeContainer& 
 	return true;
 }
 
-SparseEdgeContainer getEdgesWithoutTransitiveEdges(const SparseEdgeContainer& rawEdgesWithTransitiveEdges, const std::vector<std::tuple<uint64_t, uint64_t, uint64_t>>& maybeTransitiveTriplets, const std::vector<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>>& maybeTransitiveQuadruplets, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, std::vector<bool>& anchor, const double approxOneHapCoverage)
+SparseEdgeContainer getEdgesWithoutTransitiveEdges(const SparseEdgeContainer& rawEdgesWithTransitiveEdges, const std::vector<std::tuple<uint64_t, uint64_t, uint64_t>>& maybeTransitiveTriplets, const std::vector<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>>& maybeTransitiveQuadruplets, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, std::vector<bool>& anchor, const size_t minCoverage)
 {
 	if (maybeTransitiveTriplets.size() == 0 && maybeTransitiveQuadruplets.size() == 0) return rawEdgesWithTransitiveEdges;
 	SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
@@ -183,7 +183,7 @@ SparseEdgeContainer getEdgesWithoutTransitiveEdges(const SparseEdgeContainer& ra
 	return result;
 }
 
-SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, std::vector<bool>& anchor, const double approxOneHapCoverage)
+SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, std::vector<bool>& anchor, const size_t minCoverage)
 {
 	MostlySparse2DHashmap<uint8_t, size_t> edgeCoverage;
 	edgeCoverage.resize(unitigGraph.nodeCount());
@@ -254,7 +254,7 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 		std::pair<size_t, bool> fw { i, true };
 		for (auto pair : edgeCoverage.getValues(fw))
 		{
-			if ((double)pair.second < approxOneHapCoverage * 0.5 && (pair.second < unitigGraph.coverages[i] * 0.5 || pair.second < unitigGraph.coverages[pair.first.first] * 0.5)) continue;
+			if ((double)pair.second < minCoverage && (pair.second < unitigGraph.coverages[i] * 0.5 || pair.second < unitigGraph.coverages[pair.first.first] * 0.5)) continue;
 			assert(anchor[pair.first.first]);
 			assert(fw.first < rawEdgesWithTransitiveEdges.size());
 			assert(pair.first.first < rawEdgesWithTransitiveEdges.size());
@@ -264,7 +264,7 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 		std::pair<size_t, bool> bw { i, false };
 		for (auto pair : edgeCoverage.getValues(bw))
 		{
-			if ((double)pair.second < approxOneHapCoverage * 0.5 && (pair.second < unitigGraph.coverages[i] * 0.5 || pair.second < unitigGraph.coverages[pair.first.first] * 0.5)) continue;
+			if ((double)pair.second < minCoverage && (pair.second < unitigGraph.coverages[i] * 0.5 || pair.second < unitigGraph.coverages[pair.first.first] * 0.5)) continue;
 			assert(anchor[pair.first.first]);
 			assert(bw.first < rawEdgesWithTransitiveEdges.size());
 			assert(pair.first.first < rawEdgesWithTransitiveEdges.size());
@@ -298,7 +298,7 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 		std::cerr << "transitive quadruplet " << ((std::get<0>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(t) & maskUint64_t) << " "  << ((std::get<1>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<1>(t) & maskUint64_t) << " "  << ((std::get<2>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(t) & maskUint64_t) << " "  << ((std::get<3>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<3>(t) & maskUint64_t) << std::endl;
 	}
 	// return rawEdgesWithTransitiveEdges;
-	return getEdgesWithoutTransitiveEdges(rawEdgesWithTransitiveEdges, maybeTransitiveEdges, maybeTransitiveQuadrupletEdges, unitigGraph, readPaths, anchor, approxOneHapCoverage);
+	return getEdgesWithoutTransitiveEdges(rawEdgesWithTransitiveEdges, maybeTransitiveEdges, maybeTransitiveQuadrupletEdges, unitigGraph, readPaths, anchor, minCoverage);
 	// SparseEdgeContainer edges = getEdgesWithoutTransitiveEdges(rawEdgesWithTransitiveEdges, maybeTransitiveEdges, unitigGraph, readPaths, anchor, approxOneHapCoverage);
 	// return edges;
 }
@@ -799,7 +799,7 @@ std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const s
 		if (unitigGraph.lengths[i] >= 100) anchor[i] = true;
 	}
 	extendAnchors(unitigGraph, readPaths, anchor);
-	SparseEdgeContainer edges = getAnchorEdges(unitigGraph, readPaths, anchor, approxOneHapCoverage);
+	SparseEdgeContainer edges = getAnchorEdges(unitigGraph, readPaths, anchor, approxOneHapCoverage*.25);
 	for (size_t i = 0; i < edges.size(); i++)
 	{
 		std::pair<size_t, bool> fw { i, true };
@@ -832,7 +832,7 @@ std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const s
 			anchor[node & maskUint64_t] = true;
 		}
 	}
-	edges = getAnchorEdges(unitigGraph, readPaths, anchor, approxOneHapCoverage);
+	edges = getAnchorEdges(unitigGraph, readPaths, anchor, approxOneHapCoverage*.25);
 	auto result = getAnchorChains(anchor, edges, unitigGraph, readPaths, approxOneHapCoverage);
 	refineAnchorChainPloidies(result, edges, unitigGraph, readPaths, approxOneHapCoverage);
 	return result;
@@ -859,6 +859,7 @@ std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph&
 			size_t readPos = readPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 			{
+				assert(readPos < readPaths[i].readLength);
 				uint64_t node = readPaths[i].paths[j].path[k];
 				readPos += unitigGraph.lengths[node & maskUint64_t];
 				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
@@ -873,16 +874,25 @@ std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph&
 				if (k == readPaths[i].paths[j].path.size()-1) kmerMatches -= readPaths[i].paths[j].pathRightClipKmers;
 				int diagonal = (int)readPos - (int)anchorChains[chain].nodeOffsets[offset] - (int)unitigGraph.lengths[anchorChains[chain].nodes[offset] & maskUint64_t];
 				if (!fw) diagonal = (int)readPos + (int)anchorChains[chain].nodeOffsets[offset];
+				int startPosInRead;
+				int endPosInRead;
 				if (fw)
 				{
 					// readPos is at the end of current node
-					impliedPositions.emplace_back(chain, fw, diagonal, readPos, readPos - unitigGraph.lengths[node & maskUint64_t] - anchorChains[chain].nodeOffsets[offset], readPos + anchorChains[chain].nodeOffsets.back() - anchorChains[chain].nodeOffsets[offset] - unitigGraph.lengths[node & maskUint64_t] + unitigGraph.lengths[anchorChains[chain].nodes.back() & maskUint64_t], kmerMatches);
+					startPosInRead = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t] - (int)anchorChains[chain].nodeOffsets[offset];
+					endPosInRead = (int)readPos + (int)anchorChains[chain].nodeOffsets.back() - (int)anchorChains[chain].nodeOffsets[offset] - (int)unitigGraph.lengths[node & maskUint64_t] + (int)unitigGraph.lengths[anchorChains[chain].nodes.back() & maskUint64_t];
+					assert(startPosInRead < (int)readPaths[i].readLength);
 				}
 				else
 				{
 					// readPos is at the start of current node
-					impliedPositions.emplace_back(chain, fw, diagonal, readPos, readPos - (unitigGraph.lengths[anchorChains[chain].nodes.back() & maskUint64_t] + anchorChains[chain].nodeOffsets.back() - anchorChains[chain].nodeOffsets[offset]), readPos + anchorChains[chain].nodeOffsets[offset], kmerMatches);
+					startPosInRead = (int)readPos - ((int)((int)unitigGraph.lengths[anchorChains[chain].nodes.back() & maskUint64_t] + (int)anchorChains[chain].nodeOffsets.back() - (int)anchorChains[chain].nodeOffsets[offset]));
+					endPosInRead = (int)readPos + (int)anchorChains[chain].nodeOffsets[offset];
+					assert(startPosInRead < (int)readPaths[i].readLength);
 				}
+				assert(startPosInRead < (int)readPaths[i].readLength);
+				assert(endPosInRead > 0);
+				impliedPositions.emplace_back(chain, fw, diagonal, readPos, startPosInRead, endPosInRead, kmerMatches);
 			}
 		}
 		if (impliedPositions.size() == 0) continue;
