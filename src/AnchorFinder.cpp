@@ -191,14 +191,34 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 	{
 		uint64_t lastAnchor = std::numeric_limits<size_t>::max();
 		size_t lastRightClip = 0;
+		int lastAnchorImpliedStartPos = 0;
 		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
 		{
+			size_t readPos = readPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 			{
-				if (!anchor[readPaths[i].paths[j].path[k] & maskUint64_t]) continue;
+				uint64_t node = readPaths[i].paths[j].path[k];
+				readPos += unitigGraph.lengths[node & maskUint64_t];
+				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
+				if (!anchor[node & maskUint64_t]) continue;
 				if (lastAnchor == std::numeric_limits<size_t>::max())
 				{
-					lastAnchor = readPaths[i].paths[j].path[k];
+					lastAnchor = node;
+					lastAnchorImpliedStartPos = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t];
+					if (k == readPaths[i].paths[j].path.size()-1)
+					{
+						lastRightClip = readPaths[i].paths[j].pathRightClipKmers;
+					}
+					else
+					{
+						lastRightClip = 0;
+					}
+					continue;
+				}
+				if (((int)readPos < lastAnchorImpliedStartPos + (int)unitigGraph.lengths[lastAnchor & maskUint64_t]) || ((int)readPos - (int)unitigGraph.lengths[node & maskUint64_t] < lastAnchorImpliedStartPos))
+				{
+					lastAnchor = node;
+					lastAnchorImpliedStartPos = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t];
 					if (k == readPaths[i].paths[j].path.size()-1)
 					{
 						lastRightClip = readPaths[i].paths[j].pathRightClipKmers;
@@ -213,7 +233,8 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 				{
 					if (unitigGraph.lengths[lastAnchor & maskUint64_t] - lastRightClip <= readPaths[i].paths[j].pathLeftClipKmers)
 					{
-						lastAnchor = readPaths[i].paths[j].path[k];
+						lastAnchor = node;
+						lastAnchorImpliedStartPos = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t];
 						if (k == readPaths[i].paths[j].path.size()-1)
 						{
 							lastRightClip = readPaths[i].paths[j].pathRightClipKmers;
@@ -233,7 +254,8 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 				assert(key.second.first < edgeCoverage.size());
 				if (edgeCoverage.hasValue(key.first, key.second)) coverage = edgeCoverage.get(key.first, key.second);
 				edgeCoverage.set(key.first, key.second, coverage+1);
-				lastAnchor = readPaths[i].paths[j].path[k];
+				lastAnchor = node;
+				lastAnchorImpliedStartPos = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t];
 				if (k == readPaths[i].paths[j].path.size()-1)
 				{
 					lastRightClip = readPaths[i].paths[j].pathRightClipKmers;
@@ -494,7 +516,7 @@ void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vecto
 					int distance = readOffset - lastAnchorOffset + lastAnchorPlus;
 					assert(distance >= 0);
 					if (k == 0) distance -= (int)readPaths[i].paths[j].pathLeftClipKmers;
-					distances.at(std::make_pair(lastAnchor, node)).emplace_back(distance);
+					if (distance >= 0) distances.at(std::make_pair(lastAnchor, node)).emplace_back(distance);
 					lastAnchor = node;
 					lastAnchorOffset = readOffset;
 					lastAnchorPlus = 0;
@@ -509,7 +531,7 @@ void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vecto
 					assert(distance >= 0);
 					if (k == 0) distance -= (int)readPaths[i].paths[j].pathLeftClipKmers;
 					distance += (int)unitigGraph.lengths[node & maskUint64_t] - (int)unitigGraph.lengths[lastAnchor & maskUint64_t];
-					distances.at(std::make_pair(node ^ firstBitUint64_t, lastAnchor ^ firstBitUint64_t)).emplace_back(distance);
+					if (distance >= 0) distances.at(std::make_pair(node ^ firstBitUint64_t, lastAnchor ^ firstBitUint64_t)).emplace_back(distance);
 					lastAnchor = node;
 					lastAnchorOffset = readOffset;
 					lastAnchorPlus = 0;
