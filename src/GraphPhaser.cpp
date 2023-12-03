@@ -471,8 +471,8 @@ std::pair<std::vector<std::vector<size_t>>, size_t> getMostCoveredAlleles(const 
 
 bool allelesCouldSomewhatMatch(const std::vector<std::vector<size_t>>& bestAllelesLeft, const std::vector<std::vector<size_t>>& bestAllelesRight, const size_t ploidy, const size_t extraNonMatchers)
 {
-	if (bestAllelesLeft.size() != ploidy) return false;
-	if (bestAllelesRight.size() != ploidy) return false;
+	if (bestAllelesLeft.size() != bestAllelesRight.size()) return false;
+	if (bestAllelesLeft.size() != 2) return false;
 	size_t requiredCoveragePerHap = 3;
 	size_t normalCounts = intersectSize(bestAllelesLeft[0], bestAllelesRight[0]) + intersectSize(bestAllelesLeft[1], bestAllelesRight[1]);
 	size_t crossCounts = intersectSize(bestAllelesLeft[0], bestAllelesRight[1]) + intersectSize(bestAllelesLeft[1], bestAllelesRight[0]);
@@ -483,14 +483,16 @@ bool allelesCouldSomewhatMatch(const std::vector<std::vector<size_t>>& bestAllel
 
 bool allelesCouldMatch(const std::vector<std::vector<size_t>>& bestAllelesLeft, const std::vector<std::vector<size_t>>& bestAllelesRight, const size_t ploidy, const double approxOneHapCoverage)
 {
+	if (bestAllelesLeft.size() != bestAllelesRight.size()) return false;
+	if (bestAllelesLeft.size() != 2) return false;
 	assert(bestAllelesLeft.size() >= 2);
 	assert(bestAllelesRight.size() >= 2);
 	size_t requiredCoverage = 4;
 	// size_t requiredCoverage = (double)approxOneHapCoverage * ((double)ploidy - 0.5);
 	size_t normalCounts = intersectSize(bestAllelesLeft[0], bestAllelesRight[0]) + intersectSize(bestAllelesLeft[1], bestAllelesRight[1]);
 	size_t crossCounts = intersectSize(bestAllelesLeft[0], bestAllelesRight[1]) + intersectSize(bestAllelesLeft[1], bestAllelesRight[0]);
-	if (normalCounts >= requiredCoverage && normalCounts > crossCounts*9) return true;
-	if (crossCounts >= requiredCoverage && crossCounts > normalCounts*9) return true;
+	if (normalCounts >= requiredCoverage && intersectSize(bestAllelesLeft[0], bestAllelesRight[0]) >= 1 && intersectSize(bestAllelesLeft[1], bestAllelesRight[1]) >= 1 && normalCounts > crossCounts*9) return true;
+	if (crossCounts >= requiredCoverage && intersectSize(bestAllelesLeft[0], bestAllelesRight[1]) >= 1 && intersectSize(bestAllelesLeft[1], bestAllelesRight[0]) >= 1 && crossCounts > normalCounts*9) return true;
 	return false;
 }
 
@@ -539,6 +541,18 @@ std::vector<bool> getVeryLikelyHaplotypeInformativeSites(const std::vector<std::
 			notgood[i] = true;
 			continue;
 		}
+	}
+	if (notgood[0])
+	{
+		size_t minorCount;
+		std::tie(bestAlleles[0], minorCount) = getTopNCoveredAlleles(readsPerAllele[0], ploidy);
+		if (minorCount == 0) notgood[0] = bestAlleles[0].size() != ploidy;
+	}
+	if (notgood.back())
+	{
+		size_t minorCount;
+		std::tie(bestAlleles.back(), minorCount) = getTopNCoveredAlleles(readsPerAllele.back(), ploidy);
+		if (minorCount == 0) notgood.back() = bestAlleles.back().size() != ploidy;
 	}
 	std::vector<bool> result;
 	result.resize(readsPerAllele.size(), false);
