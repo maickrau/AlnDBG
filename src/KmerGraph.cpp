@@ -467,6 +467,18 @@ std::pair<KmerGraph, std::vector<ReadPathBundle>> makeKmerGraph(const std::vecto
 	std::cerr << countKeptNodes << " kmer-nodes post coverage filter" << std::endl;
 	result.lengths = getNodeLengths(segments, segmentToNode, keptNodes, breakpoints, countKeptNodes);
 	std::vector<ReadPathBundle> readPaths = getReadPathsAndDestroySegments(segments, breakpoints, segmentToNode, keptNodes, readLengths);
+	size_t countNodeMatches = 0;
+	size_t countReadPaths = 0;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		countReadPaths += readPaths[i].paths.size();
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			countNodeMatches += readPaths[i].paths[j].path.size();
+		}
+	}
+	std::cerr << countReadPaths << " read paths" << std::endl;
+	std::cerr << countNodeMatches << " read-node matches" << std::endl;
 	return std::make_pair(std::move(result), std::move(readPaths));
 }
 
