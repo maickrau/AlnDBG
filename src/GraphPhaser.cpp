@@ -3058,7 +3058,160 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHapmers(const Unit
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
 	{
-		kept.set(i, unzippedGraph.coverages[i] >= 1);
+		kept.set(i, unzippedGraph.coverages[i] >= 2);
+	}
+	return filterUnitigGraph(unzippedGraph, unzippedReadPaths, kept);
+}
+
+void makeFakeLocalUniqGraph(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const phmap::flat_hash_set<size_t>& notUniques)
+{
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<int>> distances;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			size_t readPos = readPaths[i].paths[j].readStartPos;
+			uint64_t lastLocalUniq = std::numeric_limits<size_t>::max();
+			int lastLocalUniqEndPos = 0;
+			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
+			{
+				uint64_t node = readPaths[i].paths[j].path[k];
+				readPos += unitigGraph.lengths[node & maskUint64_t];
+				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
+				if (notUniques.count(node & maskUint64_t) == 1) continue;
+				if (unitigGraph.coverages[node & maskUint64_t] < approxOneHapCoverage * 0.5) continue;
+				if (lastLocalUniq == std::numeric_limits<size_t>::max())
+				{
+					lastLocalUniq = node;
+					lastLocalUniqEndPos = readPos;
+					continue;
+				}
+				auto key = canon(std::make_pair(lastLocalUniq & maskUint64_t, lastLocalUniq & firstBitUint64_t), std::make_pair(node & maskUint64_t, node & firstBitUint64_t));
+				int distance = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t] - lastLocalUniqEndPos;
+				if (distance < 0)
+				{
+					lastLocalUniq = node;
+					lastLocalUniqEndPos = readPos;
+					continue;
+				}
+				if (key.first == std::make_pair<size_t, bool>(lastLocalUniq & maskUint64_t, lastLocalUniq & firstBitUint64_t) && key.second == std::make_pair<size_t, bool>(node & maskUint64_t, node & firstBitUint64_t))
+				{
+					distances[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
+				}
+				else
+				{
+					distances[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^firstBitUint64_t)].emplace_back(distance);
+				}
+				lastLocalUniq = node;
+				lastLocalUniqEndPos = readPos;
+			}
+		}
+	}
+	std::ofstream graph { "localuniqgraph.gfa" };
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		if (unitigGraph.coverages[i] < approxOneHapCoverage * 0.5) continue;
+		if (notUniques.count(i) == 1) continue;
+		graph << "S\t" << i << "\t*\tLN:i:" << unitigGraph.lengths[i] << "\tll:i:" << unitigGraph.coverages[i] << "\tFC:i:" << (unitigGraph.coverages[i]*unitigGraph.lengths[i]) << std::endl;
+	}
+	size_t edgenum = 0;
+	for (auto pair : distances)
+	{
+		if (pair.second.size() < 3) continue;
+		int distance = pair.second[pair.second.size()/2];
+		if (distance < 1) distance = 1;
+		graph << "S\tedge_" << edgenum << "\t*\tLN:i:" << distance << "\tll:i:" << pair.second.size() << "\tFC:i:" << (distance * pair.second.size()) << std::endl;
+		graph << "L\t" << (pair.first.first & maskUint64_t) << "\t" << ((pair.first.first & firstBitUint64_t) ? "+" : "-") << "\tedge_" << edgenum << "\t+\t0M\tec:i:" << pair.second.size() << std::endl;
+		graph << "L\tedge_" << edgenum << "\t+\t" << (pair.first.second & maskUint64_t) << "\t" << ((pair.first.second & firstBitUint64_t) ? "+" : "-") << "\t0M\tec:i:" << pair.second.size() << std::endl;
+		edgenum += 1;
+	}
+}
+
+std::vector<std::vector<ChainPosition>> getReadLocalUniqPositions(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t minLength, const size_t resolveLength)
+{
+	const size_t notSameNodeDistance = 100;
+	phmap::flat_hash_set<size_t> notUniques;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			phmap::flat_hash_set<size_t> found;
+			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
+			{
+				size_t node = readPaths[i].paths[j].path[k] & maskUint64_t;
+				if (found.count(node) == 1) notUniques.insert(node);
+				found.insert(node);
+			}
+		}
+	}
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		phmap::flat_hash_map<uint64_t, std::vector<size_t>> nodePositions;
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			size_t readPos = readPaths[i].paths[j].readStartPos;
+			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
+			{
+				uint64_t node = readPaths[i].paths[j].path[k];
+				readPos += unitigGraph.lengths[node & maskUint64_t];
+				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
+				if (unitigGraph.lengths[node & maskUint64_t] < minLength) continue;
+				if (notUniques.count(node & maskUint64_t) == 1) continue;
+				nodePositions[node].emplace_back(readPos);
+			}
+		}
+		for (auto& pair : nodePositions)
+		{
+			if (notUniques.count(pair.first & maskUint64_t) == 1) continue;
+			std::sort(pair.second.begin(), pair.second.end());
+			for (size_t j = 1; j < pair.second.size(); j++)
+			{
+				if (pair.second[j] < pair.second[j-1] + notSameNodeDistance) continue;
+				if (pair.second[j] > pair.second[j-1] + resolveLength) continue;
+				notUniques.insert(pair.first);
+				break;
+			}
+		}
+	}
+	makeFakeLocalUniqGraph(unitigGraph, readPaths, approxOneHapCoverage, notUniques);
+	std::vector<AnchorChain> fakeChains;
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		if (unitigGraph.lengths[i] < minLength) continue;
+		if (unitigGraph.coverages[i] < approxOneHapCoverage * 0.5) continue;
+		if (notUniques.count(i) == 1) continue;
+		fakeChains.emplace_back();
+		fakeChains.back().nodes.push_back(i);
+		fakeChains.back().nodeOffsets.push_back(0);
+		fakeChains.back().ploidy = 1;
+		std::cerr << "local-uniq node: " << i << std::endl;
+	}
+	std::cerr << fakeChains.size() << " locally unique nodes" << std::endl;
+	return getReadChainPositions(unitigGraph, readPaths, fakeChains);
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t resolveLength)
+{
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
+	std::vector<std::vector<ChainPosition>> localUniqPositions = getReadLocalUniqPositions(unitigGraph, readPaths, approxOneHapCoverage, 50, resolveLength);
+	// for (size_t i = 0; i < chainPositionsInReads.size(); i++)
+	// {
+	// 	for (auto chain : chainPositionsInReads[i])
+	// 	{
+	// 		std::cerr << "read " << i << " chain " << (chain.chain & maskUint64_t) << " " << ((chain.chain & firstBitUint64_t) ? "fw" : "bw") << " (" << (anchorChains[chain.chain].nodes[0] & maskUint64_t) << " " << (anchorChains[chain.chain].nodes.back() & maskUint64_t) << ") " << chain.chainStartPosInRead << " " << chain.chainEndPosInRead << std::endl;
+	// 	}
+	// }
+	std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>>> hetInfoPerRead;
+	hetInfoPerRead.resize(readPaths.size());
+	UnitigGraph unzippedGraph;
+	std::vector<ReadPathBundle> unzippedReadPaths;
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(unitigGraph, readPaths, hetInfoPerRead, localUniqPositions, resolveLength);
+	RankBitvector kept;
+	kept.resize(unzippedGraph.nodeCount());
+	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
+	{
+		kept.set(i, unzippedGraph.coverages[i] >= 2);
 	}
 	return filterUnitigGraph(unzippedGraph, unzippedReadPaths, kept);
 }
@@ -3088,7 +3241,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphChainmers(const Un
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
 	{
-		kept.set(i, unzippedGraph.coverages[i] >= 1);
+		kept.set(i, unzippedGraph.coverages[i] >= 2);
 	}
 	return filterUnitigGraph(unzippedGraph, unzippedReadPaths, kept);
 }
