@@ -115,14 +115,14 @@ void forbidAlnsFromDifferentHaplotypes(const UnitigGraph& unitigGraph, const std
 	std::cerr << countForbidden << " alns forbidden by phasing" << std::endl;
 }
 */
-void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k)
+void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k, const double approxOneHapCoverage)
 {
 	UnitigGraph unitigGraph;
 	std::vector<ReadPathBundle> readUnitigGraphPaths;
 	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
-	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, 20);
-	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, 20);
-	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, 20);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 //	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraph(unitigGraph, readUnitigGraphPaths, getGraphPhaseBlockNodes(unitigGraph, readUnitigGraphPaths, 17));
 //	forbidAlnsFromDifferentHaplotypes(unitigGraph, readUnitigGraphPaths, matches, readNames);
 //	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
@@ -130,27 +130,39 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	writeGraph(outputFileName, unitigGraph, nodeSequences, k);
 //	writeGraph(outputFileName, unitigGraph, k);
 	writePaths("paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
-	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	writeGraph("onephase-graph.gfa", unitigGraph, nodeSequences, k);
 	writePaths("onephase-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
-	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, 20, 2000);
-	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
-	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, 20);
-	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
-	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
-	writeGraph("twophase-graph.gfa", unitigGraph, nodeSequences, k);
-	writePaths("twophase-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 2000);
+	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	// std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	// nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
+	// writeGraph("twophase-graph.gfa", unitigGraph, nodeSequences, k);
+	// writePaths("twophase-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, 20, 2000);
 	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
 	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
 	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
-	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphChainmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
-	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
-	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
-	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
-	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
-	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, 20, 10000);
+
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphChainmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 10000);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 10000);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 10000);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 10000);
+	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
+	writeGraph("twophase-graph.gfa", unitigGraph, nodeSequences, k);
+	writePaths("twophase-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 2000);
+
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 10000);
+	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
+	writeGraph("threephase-graph.gfa", unitigGraph, nodeSequences, k);
+	writePaths("threephase-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	writeGraph("phased-graph.gfa", unitigGraph, nodeSequences, k);
 	writePaths("phased-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
@@ -181,6 +193,7 @@ int main(int argc, char** argv)
 	const size_t graphk = 11;
 	const size_t minCoverage = 2;
 	const size_t graphd = 50;
+	const double approxOneHapCoverage = 20;
 	std::vector<std::string> readFiles;
 	for (size_t i = 6; i < argc; i++)
 	{
@@ -277,5 +290,5 @@ int main(int argc, char** argv)
 	std::cerr << matches.size() << " mapping matches" << std::endl;
 	addKmerMatches(numThreads, readSequences, matches, graphk, graphd);
 //	doHaplofilter(matches, readKmerLengths);
-	makeGraph(readKmerLengths, readNames, readSequences, matches, minCoverage, "graph.gfa", graphk);
+	makeGraph(readKmerLengths, readNames, readSequences, matches, minCoverage, "graph.gfa", graphk, approxOneHapCoverage);
 }

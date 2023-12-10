@@ -183,7 +183,48 @@ SparseEdgeContainer getEdgesWithoutTransitiveEdges(const SparseEdgeContainer& ra
 	return result;
 }
 
-SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, std::vector<bool>& anchor, const size_t minCoverage)
+void addEdges(const std::pair<size_t, bool> start, SparseEdgeContainer& result, const SparseEdgeContainer& edges, const std::vector<bool>& anchor)
+{
+	assert(anchor[start.first]);
+	phmap::flat_hash_set<std::pair<size_t, bool>> visited;
+	std::vector<std::pair<size_t, bool>> stack;
+	for (auto edge : edges.getEdges(start))
+	{
+		stack.push_back(edge);
+	}
+	while (stack.size() >= 1)
+	{
+		auto top = stack.back();
+		stack.pop_back();
+		if (visited.count(top) == 1) continue;
+		visited.insert(top);
+		if (anchor[top.first])
+		{
+			result.addEdge(start, top);
+			continue;
+		}
+		for (auto edge : edges.getEdges(top))
+		{
+			stack.push_back(edge);
+		}
+	}
+}
+
+SparseEdgeContainer getTopologicalEdges(const UnitigGraph& unitigGraph, const std::vector<bool>& anchor)
+{
+	SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	SparseEdgeContainer result;
+	result.resize(unitigGraph.nodeCount());
+	for (size_t i = 0; i < anchor.size(); i++)
+	{
+		if (!anchor[i]) continue;
+		addEdges(std::make_pair(i, true), result, edges, anchor);
+		addEdges(std::make_pair(i, false), result, edges, anchor);
+	}
+	return result;
+}
+
+SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<bool>& anchor, const size_t minCoverage)
 {
 	MostlySparse2DHashmap<uint8_t, size_t> edgeCoverage;
 	edgeCoverage.resize(unitigGraph.nodeCount());
@@ -268,61 +309,44 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 			}
 		}
 	}
-	SparseEdgeContainer rawEdgesWithTransitiveEdges;
-	rawEdgesWithTransitiveEdges.resize(unitigGraph.nodeCount());
+	SparseEdgeContainer topologicalEdges = getTopologicalEdges(unitigGraph, anchor);
+	SparseEdgeContainer result;
+	result.resize(unitigGraph.nodeCount());
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
 		if (!anchor[i]) continue;
 		std::pair<size_t, bool> fw { i, true };
-		for (auto pair : edgeCoverage.getValues(fw))
+		if (topologicalEdges.getEdges(fw).size() == 1)
 		{
-			if ((double)pair.second < minCoverage && (pair.second < unitigGraph.coverages[i] * 0.5 || pair.second < unitigGraph.coverages[pair.first.first] * 0.5)) continue;
-			assert(anchor[pair.first.first]);
-			assert(fw.first < rawEdgesWithTransitiveEdges.size());
-			assert(pair.first.first < rawEdgesWithTransitiveEdges.size());
-			rawEdgesWithTransitiveEdges.addEdge(fw, pair.first);
-			rawEdgesWithTransitiveEdges.addEdge(reverse(pair.first), reverse(fw));
+			auto other = reverse(topologicalEdges.getEdges(fw)[0]);
+			assert(anchor[other.first]);
+			if (topologicalEdges.getEdges(other).size() == 1)
+			{
+				assert(reverse(topologicalEdges.getEdges(other)[0]) == fw);
+				auto key = canon(fw, topologicalEdges.getEdges(fw)[0]);
+				if (edgeCoverage.get(key.first, key.second) >= minCoverage)
+				{
+					result.addEdge(fw, topologicalEdges.getEdges(fw)[0]);
+				}
+			}
 		}
 		std::pair<size_t, bool> bw { i, false };
-		for (auto pair : edgeCoverage.getValues(bw))
+		if (topologicalEdges.getEdges(bw).size() == 1)
 		{
-			if ((double)pair.second < minCoverage && (pair.second < unitigGraph.coverages[i] * 0.5 || pair.second < unitigGraph.coverages[pair.first.first] * 0.5)) continue;
-			assert(anchor[pair.first.first]);
-			assert(bw.first < rawEdgesWithTransitiveEdges.size());
-			assert(pair.first.first < rawEdgesWithTransitiveEdges.size());
-			rawEdgesWithTransitiveEdges.addEdge(bw, pair.first);
-			rawEdgesWithTransitiveEdges.addEdge(reverse(pair.first), reverse(bw));
+			auto other = reverse(topologicalEdges.getEdges(bw)[0]);
+			assert(anchor[other.first]);
+			if (topologicalEdges.getEdges(other).size() == 1)
+			{
+				assert(reverse(topologicalEdges.getEdges(other)[0]) == bw);
+				auto key = canon(bw, topologicalEdges.getEdges(bw)[0]);
+				if (edgeCoverage.get(key.first, key.second) >= minCoverage)
+				{
+					result.addEdge(bw, topologicalEdges.getEdges(bw)[0]);
+				}
+			}
 		}
 	}
-	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
-	{
-		std::pair<size_t, bool> fw { i, true };
-		for (auto pair : rawEdgesWithTransitiveEdges.getEdges(fw))
-		{
-			assert(rawEdgesWithTransitiveEdges.hasEdge(reverse(pair), reverse(fw)));
-		}
-		std::pair<size_t, bool> bw { i, false };
-		for (auto pair : rawEdgesWithTransitiveEdges.getEdges(bw))
-		{
-			assert(rawEdgesWithTransitiveEdges.hasEdge(reverse(pair), reverse(bw)));
-		}
-	}
-	auto maybeTransitiveEdges = getPossiblyTransitiveTriplets(rawEdgesWithTransitiveEdges);
-	std::cerr << maybeTransitiveEdges.size() << " maybe transitive triplet edges" << std::endl;
-	for (auto t : maybeTransitiveEdges)
-	{
-		std::cerr << "transitive triplet " << ((std::get<0>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(t) & maskUint64_t) << " "  << ((std::get<1>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<1>(t) & maskUint64_t) << " "  << ((std::get<2>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(t) & maskUint64_t) << std::endl;
-	}
-	auto maybeTransitiveQuadrupletEdges = getPossiblyTransitiveQuadruplets(rawEdgesWithTransitiveEdges);
-	std::cerr << maybeTransitiveQuadrupletEdges.size() << " maybe transitive quadruplet edges" << std::endl;
-	for (auto t : maybeTransitiveQuadrupletEdges)
-	{
-		std::cerr << "transitive quadruplet " << ((std::get<0>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(t) & maskUint64_t) << " "  << ((std::get<1>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<1>(t) & maskUint64_t) << " "  << ((std::get<2>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(t) & maskUint64_t) << " "  << ((std::get<3>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<3>(t) & maskUint64_t) << std::endl;
-	}
-	// return rawEdgesWithTransitiveEdges;
-	return getEdgesWithoutTransitiveEdges(rawEdgesWithTransitiveEdges, maybeTransitiveEdges, maybeTransitiveQuadrupletEdges, unitigGraph, readPaths, anchor, minCoverage);
-	// SparseEdgeContainer edges = getEdgesWithoutTransitiveEdges(rawEdgesWithTransitiveEdges, maybeTransitiveEdges, unitigGraph, readPaths, anchor, approxOneHapCoverage);
-	// return edges;
+	return result;
 }
 
 void setReachableAnchors(const SparseEdgeContainer& edges, std::vector<std::vector<uint64_t>>& forwardReachableAnchors, std::vector<std::vector<uint64_t>>& backwardReachableAnchors, const uint64_t startNode, const std::vector<bool>& anchor)

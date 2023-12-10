@@ -2230,6 +2230,8 @@ std::tuple<phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::
 			canUnzipStart[i] = false;
 			continue;
 		}
+		if (anchorChains[i].ploidy == 2 && !startPhased[i]) canUnzipStart[i] = false;
+		if (anchorChains[i].ploidy == 2 && !endPhased[i]) canUnzipEnd[i] = false;
 		size_t totalFoundPloidyFw = 0;
 		for (auto edge : validChainEdges.getEdges(std::make_pair(i, true)))
 		{
@@ -2504,6 +2506,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 	// 	std::cerr << "anchor chain " << i << " (" << (anchorChains[i].nodes[0] & maskUint64_t) << " to " << (anchorChains[i].nodes.back() & maskUint64_t) << ") unzippable at start: " << (canUnzipStart[i] ? "yes" : "no") << " at end: " << (canUnzipEnd[i] ? "yes" : "no") << std::endl;
 	// }
 	phmap::flat_hash_set<size_t> solvedInterchainTangles;
+	phmap::flat_hash_set<size_t> unsolvedInterchainTangles;
 	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
 		// canUnzipStart[i] = false;
@@ -2514,12 +2517,28 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 			assert(nodeLocationInInterchainTangles[key] != std::numeric_limits<size_t>::max());
 			solvedInterchainTangles.insert(nodeLocationInInterchainTangles[key]);
 		}
+		else
+		{
+			std::pair<size_t, bool> key { anchorChains[i].nodes[0] & maskUint64_t, (anchorChains[i].nodes[0] ^ firstBitUint64_t) & firstBitUint64_t };
+			assert(nodeLocationInInterchainTangles[key] != std::numeric_limits<size_t>::max());
+			unsolvedInterchainTangles.insert(nodeLocationInInterchainTangles[key]);
+		}
 		if (canUnzipEnd[i])
 		{
 			std::pair<size_t, bool> key { anchorChains[i].nodes.back() & maskUint64_t, anchorChains[i].nodes.back() & firstBitUint64_t };
 			assert(nodeLocationInInterchainTangles[key] != std::numeric_limits<size_t>::max());
 			solvedInterchainTangles.insert(nodeLocationInInterchainTangles[key]);
 		}
+		else
+		{
+			std::pair<size_t, bool> key { anchorChains[i].nodes.back() & maskUint64_t, anchorChains[i].nodes.back() & firstBitUint64_t };
+			assert(nodeLocationInInterchainTangles[key] != std::numeric_limits<size_t>::max());
+			unsolvedInterchainTangles.insert(nodeLocationInInterchainTangles[key]);
+		}
+	}
+	for (auto tangle : unsolvedInterchainTangles)
+	{
+		if (solvedInterchainTangles.count(tangle) == 1) solvedInterchainTangles.erase(tangle);
 	}
 	for (size_t chain = 0; chain < anchorChains.size(); chain++)
 	{
@@ -3274,6 +3293,7 @@ std::vector<std::vector<ChainPosition>> getReadLocalUniqChains(const UnitigGraph
 			}
 		}
 	}
+	makeFakeLocalUniqGraph(unitigGraph, readPaths, approxOneHapCoverage, notUniques);
 	auto edges = getUniqueLocallyUniqueNodeEdges(unitigGraph, readPaths, approxOneHapCoverage, notUniques);
 	std::vector<bool> checked;
 	checked.resize(unitigGraph.nodeCount(), false);
