@@ -1562,7 +1562,22 @@ std::vector<PhaseBlock> getChainPhaseBlocksTransitiveClosure(const size_t coreNo
 	return std::vector<PhaseBlock> { result };
 }
 
-std::vector<PhaseBlock> phaseCoreChains(const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ReadDiagonalAlleles>>& allelesPerReadPerChain, const double approxOneHapCoverage)
+bool isDiploidChain(const size_t chainNumber, const AnchorChain& chain, const std::vector<ReadDiagonalAlleles>& allelesPerRead, const double approxOneHapCoverage)
+{
+	std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> mergedAllelesPerRead;
+	std::vector<bool> maybeHaplotypeInformative;
+	std::vector<size_t> numAllelesPerSite;
+	std::tie(mergedAllelesPerRead, maybeHaplotypeInformative, numAllelesPerSite) = getPhasingTableInformation(chainNumber, allelesPerRead, chain.nodes, 2, chain.nodes.size()+1, approxOneHapCoverage);
+	if (maybeHaplotypeInformative.size() == 0) return false;
+	size_t numHaplotypeInformative = 0;
+	for (size_t i = 0; i < maybeHaplotypeInformative.size(); i++)
+	{
+		if (maybeHaplotypeInformative[i]) numHaplotypeInformative += 1;
+	}
+	return (maybeHaplotypeInformative[0] && maybeHaplotypeInformative.back()) && (numHaplotypeInformative >= 2);
+}
+
+std::vector<PhaseBlock> phaseCoreChains(std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ReadDiagonalAlleles>>& allelesPerReadPerChain, const double approxOneHapCoverage)
 {
 	assert(anchorChains.size() == allelesPerReadPerChain.size());
 	std::vector<PhaseBlock> result;
@@ -1571,10 +1586,20 @@ std::vector<PhaseBlock> phaseCoreChains(const std::vector<AnchorChain>& anchorCh
 		std::cerr << "check chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << " ploidy " << anchorChains[i].ploidy << std::endl;
 		if (anchorChains[i].ploidy == 1)
 		{
-			continue;
+			std::cerr << "check if chain " << i << " is low coverage miscalled diploid" << std::endl;
+			if (isDiploidChain(i, anchorChains[i], allelesPerReadPerChain[i], approxOneHapCoverage))
+			{
+				std::cerr << "chain " << i << " is actually diploid" << std::endl;
+				anchorChains[i].ploidy = 2;
+			}
+			else
+			{
+				continue;
+			}
 		}
-		else if (anchorChains[i].ploidy == 2)
+		if (anchorChains[i].ploidy == 2)
 		{
+			std::cerr << "try phase diploid chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << std::endl;
 			auto phaseBlocks = getChainPhaseBlocksMEC(i, allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()+1, approxOneHapCoverage);
 			if (phaseBlocks.size() == 0) continue;
 			std::cerr << "phased with " << phaseBlocks.size() << " blocks. start: " << (phaseBlocks[0].chainStartPhased ? "yes" : "no") << ", end: " << (phaseBlocks.back().chainEndPhased ? "yes" : "no") << std::endl;
