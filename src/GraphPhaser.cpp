@@ -2872,7 +2872,7 @@ Context getContext(const int contextWindowStartPos, const size_t nodeStartPos, c
 }
 
 template <typename F>
-void iterateContextNodes(const UnitigGraph& unitigGraph, const ReadPathBundle& readPath, const std::vector<size_t>& contextCheckStartPoses, const std::vector<std::tuple<size_t, size_t, uint64_t>>& processedHetInfos, const std::vector<ChainPosition>& chainPositionsInReads, const size_t resolveLength, F callback)
+void iterateContextNodes(const std::vector<bool>& checkTheseNodes, const UnitigGraph& unitigGraph, const ReadPathBundle& readPath, const std::vector<size_t>& contextCheckStartPoses, const std::vector<std::tuple<size_t, size_t, uint64_t>>& processedHetInfos, const std::vector<ChainPosition>& chainPositionsInReads, const size_t resolveLength, F callback)
 {
 	for (size_t j = 0; j < readPath.paths.size(); j++)
 	{
@@ -2882,6 +2882,7 @@ void iterateContextNodes(const UnitigGraph& unitigGraph, const ReadPathBundle& r
 			uint64_t node = readPath.paths[j].path[k];
 			readPos += unitigGraph.lengths[node & maskUint64_t];
 			if (k == 0) readPos -= readPath.paths[j].pathLeftClipKmers;
+			if (!checkTheseNodes[node & maskUint64_t]) continue;
 			size_t startPos = readPos;
 			if (k == 0) startPos += readPath.paths[j].pathLeftClipKmers;
 			size_t endPos = readPos;
@@ -2938,11 +2939,49 @@ void merge(std::map<Context, Context>& parent, const Context& left, const Contex
 	parent[rightp] = leftp;
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>>>& hetInfoPerRead, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const size_t resolveLength)
+void markNonCheckable(std::vector<bool>& checkTheseNodes, const uint64_t startNode, const uint64_t endNode, const SparseEdgeContainer& edges)
+{
+	phmap::flat_hash_set<uint64_t> visited;
+	std::vector<uint64_t> stack;
+	stack.push_back(startNode);
+	while (stack.size() >= 1)
+	{
+		auto top = stack.back();
+		stack.pop_back();
+		if (visited.count(top) == 1) continue;
+		visited.insert(top);
+		if (top != startNode && top != endNode) stack.push_back(top ^ firstBitUint64_t);
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			stack.push_back(edge.first + (edge.second ? 0 : firstBitUint64_t));
+		}
+	}
+	for (auto node : visited)
+	{
+		checkTheseNodes[node & maskUint64_t] = false;
+	}
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const std::vector<AnchorChain>& anchorChains, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>>>& hetInfoPerRead, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const size_t resolveLength)
 {
 	const size_t minContextCoverage = 3;
 	assert(readPaths.size() == hetInfoPerRead.size());
 	assert(readPaths.size() == chainPositionsInReads.size());
+	std::vector<bool> checkTheseNodes;
+	checkTheseNodes.resize(unitigGraph.nodeCount(), true);
+	SparseEdgeContainer graphEdges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		if (anchorChains[i].ploidy != 1) continue;
+		for (size_t j = 0; j+1 < anchorChains[i].nodes.size(); j++)
+		{
+			markNonCheckable(checkTheseNodes, anchorChains[i].nodes[j], anchorChains[i].nodes[j+1] ^ firstBitUint64_t, graphEdges);
+		}
+		for (size_t j = 0; j < anchorChains[i].nodes.size(); j++)
+		{
+			checkTheseNodes[anchorChains[i].nodes[j] & maskUint64_t] = false;
+		}
+	}
 	std::vector<std::map<Context, Context>> nodeParent;
 	std::map<Context, size_t> contextCoverage;
 	nodeParent.resize(unitigGraph.nodeCount());
@@ -2991,7 +3030,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const UnitigGra
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
 		std::set<Context> contexts;
-		iterateContextNodes(unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&contexts](const size_t j, const size_t k, const std::vector<Context>& nodecontexts)
+		iterateContextNodes(checkTheseNodes, unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&contexts](const size_t j, const size_t k, const std::vector<Context>& nodecontexts)
 		{
 			contexts.insert(nodecontexts.begin(), nodecontexts.end());
 		});
@@ -3003,7 +3042,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const UnitigGra
 	std::cerr << "merging per-node contexts" << std::endl;
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
-		iterateContextNodes(unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&nodeParent, &contextCoverage, &readPaths, i, minContextCoverage](const size_t j, const size_t k, const std::vector<Context>& contexts)
+		iterateContextNodes(checkTheseNodes, unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&nodeParent, &contextCoverage, &readPaths, i, minContextCoverage](const size_t j, const size_t k, const std::vector<Context>& contexts)
 		{
 			uint64_t node = readPaths[i].paths[j].path[k];
 			Context anyContext;
@@ -3049,7 +3088,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const UnitigGra
 	std::cerr << "replacing nodes" << std::endl;
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
-		iterateContextNodes(unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&nodeParent, &readPaths, &contextCoverage, &contextToNewNodeNumber, &resultPaths, i, minContextCoverage](const size_t j, const size_t k, const std::vector<Context>& contexts)
+		iterateContextNodes(checkTheseNodes, unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&nodeParent, &readPaths, &contextCoverage, &contextToNewNodeNumber, &resultPaths, i, minContextCoverage](const size_t j, const size_t k, const std::vector<Context>& contexts)
 		{
 			uint64_t node = readPaths[i].paths[j].path[k];
 			for (const auto& context : contexts)
@@ -3069,7 +3108,14 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const UnitigGra
 	kept.resize(resultGraph.nodeCount());
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
-		kept.set(i, false);
+		if (checkTheseNodes[i])
+		{
+			kept.set(i, false);
+		}
+		else
+		{
+			kept.set(i, true);
+		}
 	}
 	for (size_t i = unitigGraph.nodeCount(); i < resultGraph.nodeCount(); i++)
 	{
@@ -3097,7 +3143,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHapmers(const Unit
 	std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>>> hetInfoPerRead = getHetInfoPerRead(unitigGraph, readPaths, anchorChains, allelesPerReadPerChain, readPaths.size(), approxOneHapCoverage);
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
-	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(unitigGraph, readPaths, hetInfoPerRead, chainPositionsInReads, resolveLength);
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(anchorChains, unitigGraph, readPaths, hetInfoPerRead, chainPositionsInReads, resolveLength);
 	RankBitvector kept;
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
@@ -3366,7 +3412,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(cons
 	hetInfoPerRead.resize(readPaths.size());
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
-	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(unitigGraph, readPaths, hetInfoPerRead, localUniqPositions, resolveLength);
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(anchorChains, unitigGraph, readPaths, hetInfoPerRead, localUniqPositions, resolveLength);
 	RankBitvector kept;
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
@@ -3396,7 +3442,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphChainmers(const Un
 	hetInfoPerRead.resize(readPaths.size());
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
-	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(unitigGraph, readPaths, hetInfoPerRead, chainPositionsInReads, resolveLength);
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(anchorChains, unitigGraph, readPaths, hetInfoPerRead, chainPositionsInReads, resolveLength);
 	RankBitvector kept;
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
