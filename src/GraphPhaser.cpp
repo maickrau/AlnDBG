@@ -1,7 +1,7 @@
-#include <set>
-#include <map>
 #include <iostream>
 #include <tuple>
+#include <vector>
+#include <phmap.h>
 #include "MBGCommon.h"
 #include "GraphPhaser.h"
 #include "Common.h"
@@ -38,6 +38,16 @@ public:
 class Context
 {
 public:
+	Context() :
+		preHets(),
+		overlapHets(),
+		postHets(),
+		preChains(),
+		overlapChains(),
+		postChains(),
+		mergedhash(std::numeric_limits<size_t>::max())
+	{
+	}
 	Context reverse() const
 	{
 		Context result = *this;
@@ -87,7 +97,42 @@ public:
 		if (postChains > other.postChains) return false;
 		return false;
 	}
+	size_t getHash() const
+	{
+		if (mergedhash == std::numeric_limits<size_t>::max())
+		{
+			mergedhash = 1;
+			for (auto n : preHets) mergedhash = mergedhash * 3 + n;
+			mergedhash *= 3;
+			for (auto n : overlapHets) mergedhash = mergedhash * 3 + n;
+			mergedhash *= 3;
+			for (auto n : postHets) mergedhash = mergedhash * 3 + n;
+			mergedhash *= 3;
+			for (auto n : preChains) mergedhash = mergedhash * 3 + n;
+			mergedhash *= 3;
+			for (auto n : overlapChains) mergedhash = mergedhash * 3 + n;
+			mergedhash *= 3;
+			for (auto n : postChains) mergedhash = mergedhash * 3 + n;
+			if (mergedhash == std::numeric_limits<size_t>::max()) mergedhash = std::numeric_limits<size_t>::max()-1;
+		}
+		return mergedhash;
+	}
+private:
+	mutable size_t mergedhash;
 };
+
+namespace std
+{
+	template<>
+	struct hash<Context>
+	{
+	public:
+		size_t operator()(const Context& context) const
+		{
+			return context.getHash();
+		}
+	};
+}
 
 size_t getAlleleIndex(std::vector<std::vector<std::vector<std::vector<uint64_t>>>>& allelesPerChain, const size_t i, const size_t j, const std::vector<uint64_t>& allele)
 {
@@ -2893,7 +2938,7 @@ void iterateContextNodes(const std::vector<bool>& checkTheseNodes, const UnitigG
 			minCheck = std::max(minCheck, 0);
 			int maxCheck = (int)readPos;
 			maxCheck = std::min(maxCheck, (int)readPath.readLength - (int)resolveLength);
-			std::set<Context> contexts;
+			phmap::flat_hash_set<Context> contexts;
 			phmap::flat_hash_set<int> checkThese;
 			checkThese.insert(minCheck);
 			checkThese.insert(maxCheck-1);
@@ -2918,7 +2963,7 @@ void iterateContextNodes(const std::vector<bool>& checkTheseNodes, const UnitigG
 	}
 }
 
-Context find(std::map<Context, Context>& parent, const Context& key)
+Context find(phmap::flat_hash_map<Context, Context>& parent, const Context& key)
 {
 	if (parent.count(key) == 0)
 	{
@@ -2932,7 +2977,7 @@ Context find(std::map<Context, Context>& parent, const Context& key)
 	return parent.at(key);
 }
 
-void merge(std::map<Context, Context>& parent, const Context& left, const Context& right)
+void merge(phmap::flat_hash_map<Context, Context>& parent, const Context& left, const Context& right)
 {
 	auto leftp = find(parent, left);
 	auto rightp = find(parent, right);
@@ -2982,10 +3027,10 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const std::vect
 			checkTheseNodes[anchorChains[i].nodes[j] & maskUint64_t] = false;
 		}
 	}
-	std::vector<std::map<Context, Context>> nodeParent;
-	std::map<Context, size_t> contextCoverage;
+	std::vector<phmap::flat_hash_map<Context, Context>> nodeParent;
+	phmap::flat_hash_map<Context, size_t> contextCoverage;
 	nodeParent.resize(unitigGraph.nodeCount());
-	std::map<std::tuple<size_t, size_t, size_t>, uint64_t> bubbleAlleleToIndex;
+	phmap::flat_hash_map<std::tuple<size_t, size_t, size_t>, uint64_t> bubbleAlleleToIndex;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> processedHetInfos;
 	processedHetInfos.resize(readPaths.size());
 	for (size_t i = 0; i < hetInfoPerRead.size(); i++)
@@ -3029,7 +3074,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const std::vect
 	std::cerr << "counting context coverages" << std::endl;
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
-		std::set<Context> contexts;
+		phmap::flat_hash_set<Context> contexts;
 		iterateContextNodes(checkTheseNodes, unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&contexts](const size_t j, const size_t k, const std::vector<Context>& nodecontexts)
 		{
 			contexts.insert(nodecontexts.begin(), nodecontexts.end());
@@ -3062,17 +3107,17 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const std::vect
 	std::cerr << "getting context clusters" << std::endl;
 	UnitigGraph resultGraph = unitigGraph;
 	std::vector<ReadPathBundle> resultPaths = readPaths;
-	std::vector<std::map<Context, size_t>> contextToNewNodeNumber;
+	std::vector<phmap::flat_hash_map<Context, size_t>> contextToNewNodeNumber;
 	contextToNewNodeNumber.resize(unitigGraph.nodeCount());
 	size_t nextNodeNumber = unitigGraph.nodeCount();
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
-		std::set<Context> keys;
+		phmap::flat_hash_set<Context> keys;
 		for (const auto& pair : nodeParent[i])
 		{
 			keys.insert(pair.first);
 		}
-		std::set<Context> clusters;
+		phmap::flat_hash_set<Context> clusters;
 		for (const auto& key : keys)
 		{
 			clusters.insert(find(nodeParent[i], key));
