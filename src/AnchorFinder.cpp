@@ -324,7 +324,7 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 			{
 				assert(reverse(topologicalEdges.getEdges(other)[0]) == fw);
 				auto key = canon(fw, topologicalEdges.getEdges(fw)[0]);
-				if (edgeCoverage.get(key.first, key.second) >= minCoverage)
+				if (edgeCoverage.hasValue(key.first, key.second) && edgeCoverage.get(key.first, key.second) >= minCoverage)
 				{
 					result.addEdge(fw, topologicalEdges.getEdges(fw)[0]);
 				}
@@ -339,7 +339,7 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 			{
 				assert(reverse(topologicalEdges.getEdges(other)[0]) == bw);
 				auto key = canon(bw, topologicalEdges.getEdges(bw)[0]);
-				if (edgeCoverage.get(key.first, key.second) >= minCoverage)
+				if (edgeCoverage.hasValue(key.first, key.second) && edgeCoverage.get(key.first, key.second) >= minCoverage)
 				{
 					result.addEdge(bw, topologicalEdges.getEdges(bw)[0]);
 				}
