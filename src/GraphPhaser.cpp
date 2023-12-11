@@ -2064,116 +2064,6 @@ VectorWithDirection<size_t> getNodeLocationsWithinInterchainTangles(const Unitig
 	return result;
 }
 
-std::pair<std::vector<bool>, std::vector<bool>> getUnzippableChainEnds(const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges, const phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>>& validHaplotypeConnectionsPerChainEdge)
-{
-	std::vector<bool> startPhased;
-	std::vector<bool> endPhased;
-	std::vector<bool> canUnzipStart;
-	std::vector<bool> canUnzipEnd;
-	startPhased.resize(anchorChains.size(), false);
-	endPhased.resize(anchorChains.size(), false);
-	canUnzipStart.resize(anchorChains.size(), true);
-	canUnzipEnd.resize(anchorChains.size(), true);
-	for (size_t i = 0; i < chainHaplotypes.size(); i++)
-	{
-		if (chainHaplotypes[i].chainStartPhased) startPhased[chainHaplotypes[i].chainNumber] = true;
-		if (chainHaplotypes[i].chainEndPhased) endPhased[chainHaplotypes[i].chainNumber] = true;
-	}
-	phmap::flat_hash_map<std::pair<std::pair<uint64_t, uint64_t>, std::pair<size_t, size_t>>, size_t> edgeAndHapCoverage;
-
-	for (size_t i = 0; i < anchorChains.size(); i++)
-	{
-		if (endPhased[i])
-		{
-			for (auto edge : validChainEdges.getEdges(std::make_pair(i, true)))
-			{
-				if (edge.second && !startPhased[edge.first]) continue;
-				if (!edge.second && !endPhased[edge.first]) continue;
-				if (validHaplotypeConnectionsPerChainEdge.count(i + firstBitUint64_t) == 0)
-				{
-					canUnzipEnd[i] = false;
-					break;
-				}
-				if (validHaplotypeConnectionsPerChainEdge.at(i + firstBitUint64_t).count(edge.first + (edge.second ? firstBitUint64_t : 0)) == 0)
-				{
-					canUnzipEnd[i] = false;
-					break;
-				}
-				if (validHaplotypeConnectionsPerChainEdge.at(i + firstBitUint64_t).at(edge.first + (edge.second ? firstBitUint64_t : 0)).size() == 0)
-				{
-					canUnzipEnd[i] = false;
-					break;
-				}
-			}
-		}
-		if (startPhased[i])
-		{
-			for (auto edge : validChainEdges.getEdges(std::make_pair(i, false)))
-			{
-				if (edge.second && !startPhased[edge.first]) continue;
-				if (!edge.second && !endPhased[edge.first]) continue;
-				if (validHaplotypeConnectionsPerChainEdge.count(i) == 0)
-				{
-					canUnzipStart[i] = false;
-					break;
-				}
-				if (validHaplotypeConnectionsPerChainEdge.at(i).count(edge.first + (edge.second ? firstBitUint64_t : 0)) == 0)
-				{
-					canUnzipStart[i] = false;
-					break;
-				}
-				if (validHaplotypeConnectionsPerChainEdge.at(i).at(edge.first + (edge.second ? firstBitUint64_t : 0)).size() == 0)
-				{
-					canUnzipStart[i] = false;
-					break;
-				}
-			}
-		}
-	}
-	// could do smartly, but naive method is good enough
-	while (true)
-	{
-		bool repeat = false;
-		for (size_t i = 0; i < anchorChains.size(); i++)
-		{
-			if (!canUnzipStart[i])
-			{
-				for (auto edge : validChainEdges.getEdges(std::make_pair(i, false)))
-				{
-					if (edge.second)
-					{
-						if (canUnzipStart[edge.first]) repeat = true;
-						canUnzipStart[edge.first] = false;
-					}
-					else
-					{
-						if (canUnzipEnd[edge.first]) repeat = true;
-						canUnzipEnd[edge.first] = false;
-					}
-				}
-			}
-			if (!canUnzipEnd[i])
-			{
-				for (auto edge : validChainEdges.getEdges(std::make_pair(i, true)))
-				{
-					if (edge.second)
-					{
-						if (canUnzipStart[edge.first]) repeat = true;
-						canUnzipStart[edge.first] = false;
-					}
-					else
-					{
-						if (canUnzipEnd[edge.first]) repeat = true;
-						canUnzipEnd[edge.first] = false;
-					}
-				}
-			}
-		}
-		if (!repeat) break;
-	}
-	return std::make_pair(canUnzipStart, canUnzipEnd);
-}
-
 std::tuple<phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>>, std::vector<bool>, std::vector<bool>> getValidHaplotypeConnectionsPerChainEdge(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>>& haplotypeDiagonalsPerRead, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
 {
 	std::vector<int> maxDiagonalDifferences;
@@ -2284,6 +2174,7 @@ std::tuple<phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::
 			{
 				std::cerr << "hap check chain " << (pair.first & maskUint64_t) << ((pair.first & firstBitUint64_t) ? "+" : "-") << " to chain " << (pair2.first & maskUint64_t) << ((pair2.first & firstBitUint64_t) ? "+" : "-") << " haps " << pair3.first.first << " " << pair3.first.second << " coverage " << pair3.second << std::endl;
 				if (pair3.second < approxOneHapCoverage * 0.5) continue;
+				std::cerr << "add hap-edge chain " << (pair.first & maskUint64_t) << ((pair.first & firstBitUint64_t) ? "+" : "-") << " to chain " << (pair2.first & maskUint64_t) << ((pair2.first & firstBitUint64_t) ? "+" : "-") << " haps " << pair3.first.first << " " << pair3.first.second << " coverage " << pair3.second << std::endl;
 				unfilteredResult[pair.first][pair2.first].insert(pair3.first);
 			}
 		}
@@ -2322,10 +2213,17 @@ std::tuple<phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::
 			for (auto happair : edgeHapCoverage.at(from).at(to))
 			{
 				size_t ploidyHere = happair.second / approxOneHapCoverage + 0.5;
+				if (ploidyHere == 2 && (double)happair.second / approxOneHapCoverage < 1.75 && (anchorChains[to & maskUint64_t].ploidy == 1 || anchorChains[from & maskUint64_t].ploidy == 1))
+				{
+					ploidyHere = 1;
+				}
 				totalFoundPloidyFw += ploidyHere;
 			}
 		}
-		if (totalFoundPloidyFw != anchorChains[i].ploidy) canUnzipEnd[i] = false;
+		if (totalFoundPloidyFw != anchorChains[i].ploidy)
+		{
+			canUnzipEnd[i] = false;
+		}
 		size_t totalFoundPloidyBw = 0;
 		for (auto edge : validChainEdges.getEdges(std::make_pair(i, false)))
 		{
@@ -2346,10 +2244,17 @@ std::tuple<phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::
 			for (auto happair : edgeHapCoverage.at(from).at(to))
 			{
 				size_t ploidyHere = happair.second / approxOneHapCoverage + 0.5;
+				if (ploidyHere == 2 && (double)happair.second / approxOneHapCoverage < 1.75 && (anchorChains[to & maskUint64_t].ploidy == 1 || anchorChains[from & maskUint64_t].ploidy == 1))
+				{
+					ploidyHere = 1;
+				}
 				totalFoundPloidyBw += ploidyHere;
 			}
 		}
-		if (totalFoundPloidyBw != anchorChains[i].ploidy) canUnzipStart[i] = false;
+		if (totalFoundPloidyBw != anchorChains[i].ploidy)
+		{
+			canUnzipStart[i] = false;
+		}
 	}
 	// could do smartly, but naive method is good enough
 	while (true)
@@ -2391,6 +2296,10 @@ std::tuple<phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::
 			}
 		}
 		if (!repeat) break;
+	}
+	for (size_t i = 0; i < canUnzipEnd.size(); i++)
+	{
+		std::cerr << "chain " << i << " can unzip start: " << (canUnzipStart[i] ? "yes" : "no") << " end: " << (canUnzipEnd[i] ? "yes" : "no") << std::endl;
 	}
 	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>> result;
 	for (const auto& pair : unfilteredResult)
