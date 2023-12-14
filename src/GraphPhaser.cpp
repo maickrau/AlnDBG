@@ -1648,7 +1648,7 @@ std::vector<PhaseBlock> phaseCoreChains(std::vector<AnchorChain>& anchorChains, 
 			auto phaseBlocks = getChainPhaseBlocksMEC(i, allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()+1, approxOneHapCoverage);
 			if (phaseBlocks.size() == 0) continue;
 			std::cerr << "phased with " << phaseBlocks.size() << " blocks. start: " << (phaseBlocks[0].chainStartPhased ? "yes" : "no") << ", end: " << (phaseBlocks.back().chainEndPhased ? "yes" : "no") << std::endl;
-			result.insert(result.end(), phaseBlocks.begin(), phaseBlocks.end());
+			bool include = true;
 			for (size_t j = 0; j < phaseBlocks.size(); j++)
 			{
 				for (size_t sitei = 0; sitei < phaseBlocks[j].allelesPerHaplotype[0].size(); sitei++)
@@ -1660,10 +1660,12 @@ std::vector<PhaseBlock> phaseCoreChains(std::vector<AnchorChain>& anchorChains, 
 					}
 					if (foundAlleles.size() != anchorChains[i].ploidy)
 					{
-						std::cerr << "red flag: allele shared between haps, ploidy " << anchorChains[i].ploidy << ", num distinct alleles: " << foundAlleles.size() << std::endl;
+						std::cerr << "red flag: allele shared between haps, ploidy " << anchorChains[i].ploidy << ", num distinct alleles: " << foundAlleles.size() << ", skipping this phasing" << std::endl;
+						include = false;
 					}
 				}
 			}
+			if (include) result.insert(result.end(), phaseBlocks.begin(), phaseBlocks.end());
 		}
 		else
 		{
