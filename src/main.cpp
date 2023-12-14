@@ -238,7 +238,7 @@ int main(int argc, char** argv)
 	}
 	std::mutex printMutex;
 	std::vector<MatchGroup> matches;
-	auto result = matchIndex.iterateMatchChains(numThreads, 2, 1000, 50, storage.getRawReadLengths(), [&printMutex, &matches, minAlignmentLength, k, graphd](const size_t left, const size_t leftstart, const size_t leftend, const bool leftFw, const size_t right, const size_t rightstart, const size_t rightend, const bool rightFw)
+	auto result = matchIndex.iterateMatchChains(numThreads, 2, std::numeric_limits<size_t>::max(), 50, storage.getRawReadLengths(), [&printMutex, &matches, minAlignmentLength, k, graphd](const size_t left, const size_t leftstart, const size_t leftend, const bool leftFw, const size_t right, const size_t rightstart, const size_t rightend, const bool rightFw)
 	{
 		if (leftend+1-leftstart < minAlignmentLength) return;
 		if (rightend+1-rightstart < minAlignmentLength) return;
