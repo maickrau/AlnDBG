@@ -134,6 +134,14 @@ namespace std
 	};
 }
 
+std::pair<uint64_t, uint64_t> canon(uint64_t from, uint64_t to)
+{
+	std::pair<uint64_t, uint64_t> fw { from, to };
+	std::pair<uint64_t, uint64_t> bw { to ^ firstBitUint64_t, from ^ firstBitUint64_t };
+	if (bw < fw) return bw;
+	return fw;
+}
+
 size_t getAlleleIndex(std::vector<std::vector<std::vector<std::vector<uint64_t>>>>& allelesPerChain, const size_t i, const size_t j, const std::vector<uint64_t>& allele)
 {
 	for (size_t k = 0; k < allelesPerChain[i][j].size(); k++)
@@ -3406,4 +3414,179 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphChainmers(const Un
 		kept.set(i, unzippedGraph.coverages[i] >= 2);
 	}
 	return filterUnitigGraph(unzippedGraph, unzippedReadPaths, kept);
+}
+
+std::pair<std::vector<bool>, std::vector<bool>> getChainTips(const std::vector<AnchorChain>& anchorChains, const UnitigGraph& graph)
+{
+	auto edges = getActiveEdges(graph.edgeCoverages, graph.nodeCount());
+	std::vector<bool> startsWithTip;
+	std::vector<bool> endsInTip;
+	startsWithTip.resize(anchorChains.size(), false);
+	endsInTip.resize(anchorChains.size(), false);
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		std::pair<size_t, bool> start = std::make_pair(anchorChains[i].nodes[0] & maskUint64_t, (anchorChains[i].nodes[0] ^ firstBitUint64_t) & firstBitUint64_t);
+		std::pair<size_t, bool> end = std::make_pair(anchorChains[i].nodes.back() & maskUint64_t, anchorChains[i].nodes.back() & firstBitUint64_t);
+		if (edges.getEdges(start).size() == 0)
+		{
+			std::cerr << "chain " << i << " start tip" << std::endl;
+			startsWithTip[i] = true;
+		}
+		if (edges.getEdges(end).size() == 0)
+		{
+			std::cerr << "chain " << i << " end tip" << std::endl;
+			endsInTip[i] = true;
+		}
+	}
+	return std::make_pair(startsWithTip, endsInTip);
+}
+
+std::vector<std::tuple<uint64_t, uint64_t, size_t>> getGapFills(const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const std::vector<bool>& startsWithTip, const std::vector<bool>& endsInTip, const size_t minSafeCoverage, const size_t maxSpuriousCoverage)
+{
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<size_t>> gapfillLengths;
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<uint64_t>> gapfillEdges;
+	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
+	{
+		for (size_t j = 1; j < chainPositionsInReads[i].size(); j++)
+		{
+			uint64_t from = chainPositionsInReads[i][j-1].chain;
+			uint64_t to = chainPositionsInReads[i][j].chain;
+			if (from & firstBitUint64_t)
+			{
+				if (!endsInTip[from & maskUint64_t]) continue;
+			}
+			else
+			{
+				if (!startsWithTip[from & maskUint64_t]) continue;
+			}
+			if (to & firstBitUint64_t)
+			{
+				if (!startsWithTip[to & maskUint64_t]) continue;
+			}
+			else
+			{
+				if (!endsInTip[to & maskUint64_t]) continue;
+			}
+			int gapLength = chainPositionsInReads[i][j].chainStartPosInRead - chainPositionsInReads[i][j-1].chainEndPosInRead;
+			std::cerr << "gap support chain " << (from & maskUint64_t) << " to " << (to & maskUint64_t) << " length " << gapLength << std::endl;
+			if (gapLength < 50) gapLength = 50;
+			auto key = canon(from, to);
+			gapfillLengths[key].emplace_back(gapLength);
+			gapfillEdges[from].emplace(to);
+			gapfillEdges[to ^ firstBitUint64_t].emplace(from ^ firstBitUint64_t);
+		}
+	}
+	phmap::flat_hash_map<uint64_t, uint64_t> hasUniqueConnection;
+	for (const auto& pair : gapfillEdges)
+	{
+		uint64_t from = pair.first;
+		size_t bestCoverage = 0;
+		uint64_t bestEdge = 0;
+		for (uint64_t to : pair.second)
+		{
+			auto key = canon(from, to);
+			assert(gapfillLengths.count(key) == 1);
+			assert(gapfillLengths.at(key).size() >= 1);
+			if (gapfillLengths.at(key).size() > bestCoverage)
+			{
+				bestEdge = to;
+				bestCoverage = gapfillLengths.at(key).size();
+			}
+		}
+		if (bestCoverage < minSafeCoverage) continue;
+		bool valid = true;
+		for (uint64_t to : pair.second)
+		{
+			if (to == bestEdge) continue;
+			auto key = canon(from, to);
+			assert(gapfillLengths.count(key) == 1);
+			assert(gapfillLengths.at(key).size() >= 1);
+			if (gapfillLengths.at(key).size() > maxSpuriousCoverage) valid = false;
+		}
+		if (valid) hasUniqueConnection[from] = bestEdge;
+	}
+	std::vector<std::tuple<uint64_t, uint64_t, size_t>> result;
+	for (const auto& pair : gapfillLengths)
+	{
+		uint64_t from = pair.first.first;
+		uint64_t to = pair.first.second;
+		if (hasUniqueConnection.count(from) == 0) continue;
+		if (hasUniqueConnection.at(from) != to) continue;
+		if (hasUniqueConnection.count(to ^ firstBitUint64_t) == 0) continue;
+		if (hasUniqueConnection.at(to ^ firstBitUint64_t) != (from ^ firstBitUint64_t)) continue;
+		if (pair.second.size() < minSafeCoverage) continue;
+		result.emplace_back(from, to, pair.second[pair.second.size()/2]);
+	}
+	return result;
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyGapFills(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<std::tuple<uint64_t, uint64_t, size_t>>& fills)
+{
+	UnitigGraph resultGraph = unitigGraph;
+	std::vector<ReadPathBundle> resultPaths = readPaths;
+	MostlySparse2DHashmap<uint8_t, size_t> newEdgeCoverages;
+	newEdgeCoverages.resize(resultGraph.nodeCount() + fills.size());
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		std::pair<size_t, bool> fw { i, true };
+		std::pair<size_t, bool> bw { i, false };
+		for (auto edges : unitigGraph.edgeCoverages.getValues(fw))
+		{
+			newEdgeCoverages.set(fw, edges.first, edges.second);
+		}
+		for (auto edges : unitigGraph.edgeCoverages.getValues(bw))
+		{
+			newEdgeCoverages.set(bw, edges.first, edges.second);
+		}
+	}
+	size_t zeroFill = unitigGraph.nodeCount();
+	for (size_t i = 0; i < fills.size(); i++)
+	{
+		uint64_t fromnode;
+		uint64_t tonode;
+		if (std::get<0>(fills[i]) & firstBitUint64_t)
+		{
+			fromnode = anchorChains[std::get<0>(fills[i]) & maskUint64_t].nodes.back();
+		}
+		else
+		{
+			fromnode = anchorChains[std::get<0>(fills[i]) & maskUint64_t].nodes[0] ^ firstBitUint64_t;
+		}
+		if (std::get<1>(fills[i]) & firstBitUint64_t)
+		{
+			tonode = anchorChains[std::get<1>(fills[i]) & maskUint64_t].nodes[0];
+		}
+		else
+		{
+			tonode = anchorChains[std::get<1>(fills[i]) & maskUint64_t].nodes.back() ^ firstBitUint64_t;
+		}
+		std::cerr << "fill from node " << ((fromnode & firstBitUint64_t) ? ">" : "<") << (fromnode & maskUint64_t) << " to node " << ((tonode & firstBitUint64_t) ? ">" : "<") << (tonode & maskUint64_t) << " with length " << std::get<2>(fills[i]) << std::endl;
+		assert(resultGraph.lengths.size() == zeroFill + i);
+		assert(resultGraph.coverages.size() == zeroFill + i);
+		resultGraph.lengths.push_back(std::get<2>(fills[i]));
+		resultGraph.coverages.push_back(1);
+		newEdgeCoverages.set(std::make_pair(fromnode & maskUint64_t, fromnode & firstBitUint64_t), std::make_pair(zeroFill + i, true), 1);
+		newEdgeCoverages.set(std::make_pair(zeroFill + i, true), std::make_pair(tonode & maskUint64_t, tonode & firstBitUint64_t), 1);
+		// newEdgeCoverages.set(std::make_pair(tonode & maskUint64_t, (tonode ^ firstBitUint64_t) & firstBitUint64_t), std::make_pair(zeroFill + i, false), 1);
+		// newEdgeCoverages.set(std::make_pair(zeroFill + i, false), std::make_pair(fromnode & maskUint64_t, (fromnode ^ firstBitUint64_t) & firstBitUint64_t), 1);
+	}
+	assert(newEdgeCoverages.size() == resultGraph.lengths.size());
+	resultGraph.edgeCoverages = newEdgeCoverages;
+	return unitigify(resultGraph, resultPaths);
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> connectChainGaps(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t minSafeCoverage, const size_t maxSpuriousCoverage)
+{
+	std::cerr << "try gap fill" << std::endl;
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
+	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
+	std::vector<bool> endsInTip;
+	std::vector<bool> startsWithTip;
+	std::tie(startsWithTip, endsInTip) = getChainTips(anchorChains, unitigGraph);
+	auto fills = getGapFills(anchorChains, chainPositionsInReads, startsWithTip, endsInTip, minSafeCoverage, maxSpuriousCoverage);
+	UnitigGraph resultGraph;
+	std::vector<ReadPathBundle> resultPaths;
+	std::tie(resultGraph, resultPaths) = applyGapFills(unitigGraph, readPaths, anchorChains, fills);
+	return std::make_pair(std::move(resultGraph), std::move(resultPaths));
 }

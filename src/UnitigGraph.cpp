@@ -614,3 +614,14 @@ std::vector<TwobitString> getNodeSequences(const UnitigGraph& unitigGraph, const
 	return sequences;
 }
 
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unitigify(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths)
+{
+	UnitigGraph result;
+	std::vector<ReadPathBundle> resultPaths;
+	std::vector<std::vector<uint64_t>> unitigs = getUnitigs(unitigGraph.nodeCount(), getUniqueEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount(), 1));
+	std::vector<std::pair<uint64_t, size_t>> kmerNodeToUnitig = getKmerPosToUnitigPos(unitigs, unitigGraph.nodeCount());
+	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, readPaths, kmerNodeToUnitig, unitigGraph.lengths);
+	result.edgeCoverages = getUnitigEdgeCoverages(unitigs, 1, readPaths, kmerNodeToUnitig);
+	auto resultReadPaths = getReadPaths(unitigGraph.lengths, readPaths, kmerNodeToUnitig, unitigs, result);
+	return std::make_pair(std::move(result), std::move(resultReadPaths));
+}

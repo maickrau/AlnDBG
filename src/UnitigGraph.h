@@ -24,6 +24,7 @@ void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, cons
 void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, const size_t k);
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> makeUnitigGraph(const KmerGraph& kmerGraph, const std::vector<ReadPathBundle>& kmerGraphReadPaths, const size_t minCoverage);
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> filterUnitigGraph(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const RankBitvector& keptNodes);
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unitigify(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths);
 std::vector<TwobitString> getNodeSequences(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t k, const std::vector<TwobitString>& readSequences);
 
 #endif
