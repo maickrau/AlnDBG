@@ -166,6 +166,9 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	writeGraph("threephase-graph.gfa", unitigGraph, nodeSequences, k);
 	writePaths("threephase-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
