@@ -3647,7 +3647,7 @@ VectorWithDirection<size_t> getNodeTipTangleAssignmentsUniqueChains(const Unitig
 	return result;
 }
 
-phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const VectorWithDirection<size_t>& nodeTipBelongsToTangle, const double approxOneHapCoverage, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads)
+phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const VectorWithDirection<size_t>& nodeTipBelongsToTangle, const double approxOneHapCoverage, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads)
 {
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> spannerCoverages;
 	phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<uint64_t>> spannerEdges;
@@ -3658,7 +3658,10 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const Unit
 		{
 			if (anchorChains[chainPositionsInReads[i][j].chain & maskUint64_t].ploidy != 1) continue;
 			size_t chain = chainPositionsInReads[i][j].chain & maskUint64_t;
-			// if (nodeTipBelongsToTangle[std::make_pair(anchorChains[chain].nodes.back() & maskUint64_t, anchorChains[chain].nodes.back() & firstBitUint64_t)] == nodeTipBelongsToTangle[std::make_pair(anchorChains[chain].nodes[0] & maskUint64_t, (anchorChains[chain].nodes[0] & firstBitUint64_t) ^ firstBitUint64_t)]) continue;
+			if (removeContained)
+			{
+				if (nodeTipBelongsToTangle[std::make_pair(anchorChains[chain].nodes.back() & maskUint64_t, anchorChains[chain].nodes.back() & firstBitUint64_t)] == nodeTipBelongsToTangle[std::make_pair(anchorChains[chain].nodes[0] & maskUint64_t, (anchorChains[chain].nodes[0] & firstBitUint64_t) ^ firstBitUint64_t)]) continue;
+			}
 			uniqueChains.emplace_back(chainPositionsInReads[i][j]);
 		}
 		for (size_t j = 1; j < uniqueChains.size(); j++)
@@ -3713,7 +3716,10 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const Unit
 		std::pair<size_t, bool> bw { anchorChains[i].nodes[0] & maskUint64_t, (anchorChains[i].nodes[0] & firstBitUint64_t) ^ firstBitUint64_t };
 		std::pair<size_t, bool> fw { anchorChains[i].nodes.back() & maskUint64_t, anchorChains[i].nodes.back() & firstBitUint64_t };
 		assert(nodeTipBelongsToTangle[bw] != std::numeric_limits<size_t>::max());
-		// if (nodeTipBelongsToTangle[bw] == nodeTipBelongsToTangle[fw]) continue;
+		if (removeContained)
+		{
+			if (nodeTipBelongsToTangle[bw] == nodeTipBelongsToTangle[fw]) continue;
+		}
 		while (chainsPerTangle.size() <= nodeTipBelongsToTangle[bw])
 		{
 			chainsPerTangle.emplace_back();
@@ -3730,30 +3736,20 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const Unit
 	for (size_t i = 0; i < chainsPerTangle.size(); i++)
 	{
 		bool allValid = true;
-		// std::cerr << "tangle " << i << std::endl;
-		// for (auto node : chainsPerTangle[i])
-		// {
-		// 	std::cerr << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t) << " ";
-		// }
-		// std::cerr << std::endl;
 		for (uint64_t tip : chainsPerTangle[i])
 		{
-			// std::cerr << "check node " << ((tip & firstBitUint64_t) ? ">" : "<") << (tip & maskUint64_t) << std::endl;
 			if (hasUniqueConnection.count(tip) == 0)
 			{
-				// std::cerr << "no unique connection" << std::endl;
 				allValid = false;
 				break;
 			}
 			if (hasUniqueConnection.count(hasUniqueConnection.at(tip) ^ firstBitUint64_t) == 0)
 			{
-				// std::cerr << "no unique connection on other side" << std::endl;
 				allValid = false;
 				break;
 			}
 			if (hasUniqueConnection.at(hasUniqueConnection.at(tip) ^ firstBitUint64_t) != (tip ^ firstBitUint64_t))
 			{
-				// std::cerr << "unique connection don't match" << std::endl;
 				allValid = false;
 				break;
 			}
@@ -3769,7 +3765,87 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const Unit
 	return result;
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const VectorWithDirection<size_t>& nodeTipBelongsToTangle, const phmap::flat_hash_set<std::pair<uint64_t, uint64_t>>& validSpans, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const std::vector<AnchorChain>& anchorChains)
+std::vector<std::tuple<int, int, size_t, std::pair<uint64_t, uint64_t>, bool>> getReplaceableSpans(const bool removeContained, const std::vector<AnchorChain>& anchorChains, const VectorWithDirection<size_t>& nodeTipBelongsToTangle, phmap::flat_hash_set<size_t>& clearedTangles, const ReadPathBundle& readPath, const std::vector<ChainPosition>& chainPositionsInRead, const phmap::flat_hash_set<std::pair<uint64_t, uint64_t>>& validSpans)
+{
+	std::vector<std::tuple<int, int, size_t, std::pair<uint64_t, uint64_t>, bool>> replaceableSpans;
+	std::vector<ChainPosition> uniqueChains;
+	for (size_t j = 0; j < chainPositionsInRead.size(); j++)
+	{
+		if (anchorChains[chainPositionsInRead[j].chain & maskUint64_t].ploidy != 1) continue;
+		if (removeContained)
+		{
+			if (nodeTipBelongsToTangle[std::make_pair(anchorChains[chainPositionsInRead[j].chain].nodes.back() & maskUint64_t, anchorChains[chainPositionsInRead[j].chain].nodes.back() & firstBitUint64_t)] == nodeTipBelongsToTangle[std::make_pair(anchorChains[chainPositionsInRead[j].chain].nodes[0] & maskUint64_t, (anchorChains[chainPositionsInRead[j].chain].nodes[0] & firstBitUint64_t) ^ firstBitUint64_t)]) continue;
+		}
+		uniqueChains.emplace_back(chainPositionsInRead[j]);
+	}
+	for (size_t j = 1; j < uniqueChains.size(); j++)
+	{
+		auto key = canon(uniqueChains[j-1].chain, uniqueChains[j].chain);
+		if (validSpans.count(key) == 0) continue;
+		bool fw = (key.first == uniqueChains[j-1].chain && key.second == uniqueChains[j].chain);
+		uint64_t prevNode;
+		uint64_t thisNode;
+		if (uniqueChains[j-1].chain & firstBitUint64_t)
+		{
+			prevNode = anchorChains[uniqueChains[j-1].chain & maskUint64_t].nodes.back();
+		}
+		else
+		{
+			prevNode = anchorChains[uniqueChains[j-1].chain & maskUint64_t].nodes[0] ^ firstBitUint64_t;
+		}
+		if (uniqueChains[j].chain & firstBitUint64_t)
+		{
+			thisNode = anchorChains[uniqueChains[j].chain & maskUint64_t].nodes[0] ^ firstBitUint64_t;
+		}
+		else
+		{
+			thisNode = anchorChains[uniqueChains[j].chain & maskUint64_t].nodes.back();
+		}
+		assert(nodeTipBelongsToTangle[std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t)] == nodeTipBelongsToTangle[std::make_pair(thisNode & maskUint64_t, thisNode & firstBitUint64_t)]);
+		size_t tangle = nodeTipBelongsToTangle[std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t)];
+		clearedTangles.insert(tangle);
+		assert(tangle != std::numeric_limits<size_t>::max());
+		replaceableSpans.emplace_back((uniqueChains[j-1].chainEndPosInRead + uniqueChains[j-1].chainStartPosInRead)/2, (uniqueChains[j].chainEndPosInRead + uniqueChains[j].chainStartPosInRead)/2, tangle, key, fw);
+	}
+	return replaceableSpans;
+}
+
+phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<std::pair<double, size_t>>>> getTangleSpannedNodeSeparatorReplacers(UnitigGraph& resultGraph, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, phmap::flat_hash_map<uint64_t, std::vector<double>>>& nodeApproxPositionsWithinTangleSpanners, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<size_t>>& spannerLengths)
+{
+	const size_t maxClusterDistance = 100;
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<std::pair<double, size_t>>>> result;
+	for (auto& pair : nodeApproxPositionsWithinTangleSpanners)
+	{
+		assert(spannerLengths.count(pair.first) == 1);
+		size_t lengthSum = 0;
+		for (auto len : spannerLengths.at(pair.first))
+		{
+			lengthSum += len;
+		}
+		size_t length = lengthSum / spannerLengths.at(pair.first).size();
+		for (auto& pair2 : pair.second)
+		{
+			assert((pair2.first & firstBitUint64_t) == 0);
+			assert(pair2.second.size() >= 1);
+			std::sort(pair2.second.begin(), pair2.second.end());
+			result[pair2.first][pair.first].emplace_back(pair2.second[0] - 1.0, resultGraph.lengths.size());
+			// std::cerr << "breakpoint node " << pair2.first << " spanners " << pair.first.first << " " << pair.first.second << " breakpoint " << pair2.second[0] - 1.0 << std::endl;
+			resultGraph.lengths.emplace_back(resultGraph.lengths[pair2.first & maskUint64_t]);
+			resultGraph.coverages.emplace_back(0);
+			for (size_t i = 1; i < pair2.second.size(); i++)
+			{
+				if ((pair2.second[i] - pair2.second[i-1]) * length < maxClusterDistance + resultGraph.lengths[pair2.first & maskUint64_t]) continue;
+				// std::cerr << "breakpoint node " << pair2.first << " spanners " << pair.first.first << " " << pair.first.second << " breakpoint " << (pair2.second[i] + pair2.second[i-1]) / 2.0 << std::endl;
+				result[pair2.first][pair.first].emplace_back((pair2.second[i] + pair2.second[i-1]) / 2.0, resultGraph.lengths.size());
+				resultGraph.lengths.emplace_back(resultGraph.lengths[pair2.first & maskUint64_t]);
+				resultGraph.coverages.emplace_back(0);
+			}
+		}
+	}
+	return result;
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const VectorWithDirection<size_t>& nodeTipBelongsToTangle, const phmap::flat_hash_set<std::pair<uint64_t, uint64_t>>& validSpans, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const std::vector<AnchorChain>& anchorChains)
 {
 	std::cerr << validSpans.size() << " valid spans" << std::endl;
 	for (auto span : validSpans)
@@ -3777,58 +3853,25 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const Un
 		std::cerr << "span from " << ((span.first & firstBitUint64_t) ? ">" : "<") << (span.first & maskUint64_t) << " " << ((span.second & firstBitUint64_t) ? ">" : "<") << (span.second & maskUint64_t) << std::endl;
 	}
 	assert(readPaths.size() == chainPositionsInReads.size());
-	std::vector<phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> replaceNodeWithThisNode;
 	phmap::flat_hash_set<size_t> mustNotReplace;
 	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
 		if (anchorChains[i].ploidy != 1) continue;
 		if (anchorChains[i].nodes.size() != 1) continue;
-		// if (nodeTipBelongsToTangle[std::make_pair(anchorChains[i].nodes.back() & maskUint64_t, anchorChains[i].nodes.back() & firstBitUint64_t)] == nodeTipBelongsToTangle[std::make_pair(anchorChains[i].nodes[0] & maskUint64_t, (anchorChains[i].nodes[0] & firstBitUint64_t) ^ firstBitUint64_t)]) continue;
+		if (removeContained)
+		{
+			if (nodeTipBelongsToTangle[std::make_pair(anchorChains[i].nodes.back() & maskUint64_t, anchorChains[i].nodes.back() & firstBitUint64_t)] == nodeTipBelongsToTangle[std::make_pair(anchorChains[i].nodes[0] & maskUint64_t, (anchorChains[i].nodes[0] & firstBitUint64_t) ^ firstBitUint64_t)]) continue;
+		}
 		mustNotReplace.insert(anchorChains[i].nodes[0] & maskUint64_t);
 	}
-	replaceNodeWithThisNode.resize(unitigGraph.nodeCount());
 	UnitigGraph resultGraph = unitigGraph;
 	std::vector<ReadPathBundle> resultPaths = readPaths;
 	phmap::flat_hash_set<size_t> clearedTangles;
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, phmap::flat_hash_map<uint64_t, std::vector<double>>> nodeApproxPositionsWithinTangleSpanners;
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<size_t>> spannerLengths;
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
-		std::vector<std::tuple<int, int, size_t, std::pair<uint64_t, uint64_t>>> replaceableSpans;
-		std::vector<ChainPosition> uniqueChains;
-		for (size_t j = 0; j < chainPositionsInReads[i].size(); j++)
-		{
-			if (anchorChains[chainPositionsInReads[i][j].chain & maskUint64_t].ploidy != 1) continue;
-			// if (nodeTipBelongsToTangle[std::make_pair(anchorChains[chainPositionsInReads[i][j].chain].nodes.back() & maskUint64_t, anchorChains[chainPositionsInReads[i][j].chain].nodes.back() & firstBitUint64_t)] == nodeTipBelongsToTangle[std::make_pair(anchorChains[chainPositionsInReads[i][j].chain].nodes[0] & maskUint64_t, (anchorChains[chainPositionsInReads[i][j].chain].nodes[0] & firstBitUint64_t) ^ firstBitUint64_t)]) continue;
-			uniqueChains.emplace_back(chainPositionsInReads[i][j]);
-		}		
-		for (size_t j = 1; j < uniqueChains.size(); j++)
-		{
-			auto key = canon(uniqueChains[j-1].chain, uniqueChains[j].chain);
-			if (validSpans.count(key) == 0) continue;
-			uint64_t prevNode;
-			uint64_t thisNode;
-			if (uniqueChains[j-1].chain & firstBitUint64_t)
-			{
-				prevNode = anchorChains[uniqueChains[j-1].chain & maskUint64_t].nodes.back();
-			}
-			else
-			{
-				prevNode = anchorChains[uniqueChains[j-1].chain & maskUint64_t].nodes[0] ^ firstBitUint64_t;
-			}
-			if (uniqueChains[j].chain & firstBitUint64_t)
-			{
-				thisNode = anchorChains[uniqueChains[j].chain & maskUint64_t].nodes[0] ^ firstBitUint64_t;
-			}
-			else
-			{
-				thisNode = anchorChains[uniqueChains[j].chain & maskUint64_t].nodes.back();
-			}
-			assert(nodeTipBelongsToTangle[std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t)] == nodeTipBelongsToTangle[std::make_pair(thisNode & maskUint64_t, thisNode & firstBitUint64_t)]);
-			size_t tangle = nodeTipBelongsToTangle[std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t)];
-			clearedTangles.insert(tangle);
-			assert(tangle != std::numeric_limits<size_t>::max());
-			replaceableSpans.emplace_back((uniqueChains[j-1].chainEndPosInRead + uniqueChains[j-1].chainStartPosInRead)/2, (uniqueChains[j].chainEndPosInRead + uniqueChains[j].chainStartPosInRead)/2, tangle, key);
-			// std::cerr << "read " << i << " replaceable span " << std::get<0>(replaceableSpans.back()) << " " << std::get<1>(replaceableSpans.back()) << " " << std::get<2>(replaceableSpans.back()) << " " << (std::get<3>(replaceableSpans.back()).first & maskUint64_t) << " " << (std::get<3>(replaceableSpans.back()).second & maskUint64_t) << std::endl;
-		}
+		std::vector<std::tuple<int, int, size_t, std::pair<uint64_t, uint64_t>, bool>> replaceableSpans = getReplaceableSpans(removeContained, anchorChains, nodeTipBelongsToTangle, clearedTangles, readPaths[i], chainPositionsInReads[i], validSpans);
 		if (replaceableSpans.size() == 0) continue;
 		for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
 		{
@@ -3841,15 +3884,20 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const Un
 				if (mustNotReplace.count(node & maskUint64_t) == 1) continue;
 				size_t tangle = std::numeric_limits<size_t>::max();
 				std::pair<uint64_t, uint64_t> replaceKey;
+				int spannerStartPos, spannerEndPos;
+				bool spannerFw;
 				for (auto t : replaceableSpans)
 				{
 					if (std::get<0>(t) > (int)readPos - (int)resultGraph.lengths[node & maskUint64_t]) continue;
-					if (std::get<1>(t) < readPos) continue;
+					if (std::get<1>(t) < (int)readPos) continue;
 					if (nodeTipBelongsToTangle[std::make_pair(node & maskUint64_t, false)] != std::get<2>(t)) continue;
 					if (nodeTipBelongsToTangle[std::make_pair(node & maskUint64_t, true)] != std::get<2>(t)) continue;
 					if (tangle == std::numeric_limits<size_t>::max())
 					{
 						tangle = std::get<2>(t);
+						spannerStartPos = std::get<0>(t);
+						spannerEndPos = std::get<1>(t);
+						spannerFw = std::get<4>(t);
 					}
 					else
 					{
@@ -3858,14 +3906,88 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const Un
 					replaceKey = std::get<3>(t);
 				}
 				if (tangle >= std::numeric_limits<size_t>::max()-1) continue;
-				if (replaceNodeWithThisNode[node & maskUint64_t].count(replaceKey) == 0)
+				assert(spannerEndPos > spannerStartPos);
+				int nodeApproxPos = (int)readPos - (int)(resultGraph.lengths[node & maskUint64_t])/2;
+				double nodeFractionalPos = (double)(nodeApproxPos - spannerStartPos) / (double)(spannerEndPos - spannerStartPos);
+				if (spannerFw)
 				{
-					size_t index = resultGraph.lengths.size();
-					resultGraph.lengths.emplace_back(resultGraph.lengths[node & maskUint64_t]);
-					resultGraph.coverages.emplace_back(0);
-					replaceNodeWithThisNode[node & maskUint64_t][replaceKey] = index;
+					// std::cerr << "found read " << i << " node " << (node & maskUint64_t) << " pos " << nodeFractionalPos << " fw spanners " << replaceKey.first << " " << replaceKey.second << std::endl;
+					nodeApproxPositionsWithinTangleSpanners[replaceKey][node & maskUint64_t].emplace_back(nodeFractionalPos);
 				}
-				size_t replacement = replaceNodeWithThisNode[node & maskUint64_t][replaceKey] & maskUint64_t;
+				else
+				{
+					nodeFractionalPos = 1.0 - nodeFractionalPos;
+					// std::cerr << "found read " << i << " node " << (node & maskUint64_t) << " pos " << nodeFractionalPos << " bw spanners " << replaceKey.first << " " << replaceKey.second << std::endl;
+					nodeApproxPositionsWithinTangleSpanners[replaceKey][node & maskUint64_t].emplace_back(nodeFractionalPos);
+				}
+				spannerLengths[replaceKey].emplace_back(spannerEndPos - spannerStartPos);
+			}
+		}
+	}
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<std::pair<double, size_t>>>> replaceNodeWithThisNode = getTangleSpannedNodeSeparatorReplacers(resultGraph, nodeApproxPositionsWithinTangleSpanners, spannerLengths);
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		std::vector<std::tuple<int, int, size_t, std::pair<uint64_t, uint64_t>, bool>> replaceableSpans = getReplaceableSpans(removeContained, anchorChains, nodeTipBelongsToTangle, clearedTangles, readPaths[i], chainPositionsInReads[i], validSpans);
+		if (replaceableSpans.size() == 0) continue;
+		for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
+		{
+			size_t readPos = resultPaths[i].paths[j].readStartPos;
+			for (size_t k = 0; k < resultPaths[i].paths[j].path.size(); k++)
+			{
+				uint64_t node = resultPaths[i].paths[j].path[k];
+				readPos += resultGraph.lengths[node & maskUint64_t];
+				if (k == 0) readPos -= resultPaths[i].paths[j].pathLeftClipKmers;
+				if (mustNotReplace.count(node & maskUint64_t) == 1) continue;
+				size_t tangle = std::numeric_limits<size_t>::max();
+				std::pair<uint64_t, uint64_t> replaceKey;
+				int spannerStartPos, spannerEndPos;
+				bool spannerFw;
+				for (auto t : replaceableSpans)
+				{
+					if (std::get<0>(t) > (int)readPos - (int)resultGraph.lengths[node & maskUint64_t]) continue;
+					if (std::get<1>(t) < (int)readPos) continue;
+					if (nodeTipBelongsToTangle[std::make_pair(node & maskUint64_t, false)] != std::get<2>(t)) continue;
+					if (nodeTipBelongsToTangle[std::make_pair(node & maskUint64_t, true)] != std::get<2>(t)) continue;
+					if (tangle == std::numeric_limits<size_t>::max())
+					{
+						tangle = std::get<2>(t);
+						spannerStartPos = std::get<0>(t);
+						spannerEndPos = std::get<1>(t);
+						spannerFw = std::get<4>(t);
+					}
+					else
+					{
+						tangle = std::numeric_limits<size_t>::max()-1;
+					}
+					replaceKey = std::get<3>(t);
+				}
+				if (tangle >= std::numeric_limits<size_t>::max()-1) continue;
+				assert(spannerEndPos > spannerStartPos);
+				int nodeApproxPos = (int)readPos - (int)(resultGraph.lengths[node & maskUint64_t])/2;
+				double nodeFractionalPos = (double)(nodeApproxPos - spannerStartPos) / (double)(spannerEndPos - spannerStartPos);
+				size_t replacement = std::numeric_limits<size_t>::max();
+				if (spannerFw)
+				{
+					for (auto pair : replaceNodeWithThisNode.at(node & maskUint64_t).at(replaceKey))
+					{
+						if (pair.first <= nodeFractionalPos) replacement = pair.second;
+					}
+					assert(replacement != std::numeric_limits<size_t>::max());
+				}
+				if (!spannerFw)
+				{
+					nodeFractionalPos = 1.0 - nodeFractionalPos;
+					for (auto pair : replaceNodeWithThisNode.at(node & maskUint64_t).at(replaceKey))
+					{
+						if (pair.first <= nodeFractionalPos)
+						{
+							replacement = pair.second;
+						}
+					}
+					assert(replacement != std::numeric_limits<size_t>::max());
+				}
+				assert((replacement & firstBitUint64_t) == 0);
+				// std::cerr << "replace read " << i << " node " << (node & maskUint64_t) << " pos " << nodeFractionalPos << " " << (spannerFw ? "fw" : "bw") << " spanners " << replaceKey.first << " " << replaceKey.second << " with " << replacement << std::endl;
 				resultPaths[i].paths[j].path[k] = replacement + (node & firstBitUint64_t);
 			}
 		}
@@ -3965,7 +4087,7 @@ void fixFakeSinglePloidyChains(std::vector<AnchorChain>& anchorChains, const std
 	}
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
 	std::cerr << "try gap fill" << std::endl;
 	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
@@ -3973,9 +4095,16 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const 
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
 	VectorWithDirection<size_t> nodeTipBelongsToTangle = getNodeTipTangleAssignmentsUniqueChains(unitigGraph, anchorChains);
-	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> validSpans = getTangleSpanners(unitigGraph, readPaths, nodeTipBelongsToTangle, approxOneHapCoverage, anchorChains, chainPositionsInReads);
+	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> validSpans = getTangleSpanners(false, unitigGraph, readPaths, nodeTipBelongsToTangle, approxOneHapCoverage, anchorChains, chainPositionsInReads);
 	UnitigGraph resultGraph;
 	std::vector<ReadPathBundle> resultPaths;
-	std::tie(resultGraph, resultPaths) = applyTangleSpanners(unitigGraph, readPaths, nodeTipBelongsToTangle, validSpans, chainPositionsInReads, anchorChains);
+	std::tie(resultGraph, resultPaths) = applyTangleSpanners(false, unitigGraph, readPaths, nodeTipBelongsToTangle, validSpans, chainPositionsInReads, anchorChains);
 	return std::make_pair(std::move(resultGraph), std::move(resultPaths));
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+{
+	auto result = resolveSpannedTangles(false, unitigGraph, readPaths, approxOneHapCoverage);
+	result = resolveSpannedTangles(true, result.first, result.second, approxOneHapCoverage);
+	return result;
 }
