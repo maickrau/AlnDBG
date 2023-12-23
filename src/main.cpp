@@ -135,6 +135,7 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	writeGraph("onephase-graph.gfa", unitigGraph, nodeSequences, k);
 	writePaths("onephase-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 	std::tie(unitigGraph, readUnitigGraphPaths) = connectChainGaps(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 4, 2);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 
 	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 2000);
 	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
@@ -149,9 +150,12 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, 20);
 
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphChainmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 10000);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 10000);
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHapmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 10000);
 	std::tie(unitigGraph, readUnitigGraphPaths) = connectChainGaps(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 4, 2);
 	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
@@ -160,8 +164,11 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 2000);
 
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 10000);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = connectChainGaps(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 4, 2);
 	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	writeGraph("threephase-graph.gfa", unitigGraph, nodeSequences, k);
@@ -175,6 +182,7 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = connectChainGaps(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 4, 2);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	writeGraph("phased-graph.gfa", unitigGraph, nodeSequences, k);
 	writePaths("phased-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
@@ -205,7 +213,7 @@ int main(int argc, char** argv)
 	const size_t graphk = 31;
 	const size_t minCoverage = 2;
 	const size_t graphd = 50;
-	const double approxOneHapCoverage = 20;
+	const double approxOneHapCoverage = 15;
 	std::vector<std::string> readFiles;
 	for (size_t i = 6; i < argc; i++)
 	{

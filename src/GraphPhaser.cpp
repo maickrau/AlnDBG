@@ -3730,30 +3730,30 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const Unit
 	for (size_t i = 0; i < chainsPerTangle.size(); i++)
 	{
 		bool allValid = true;
-		std::cerr << "tangle " << i << std::endl;
-		for (auto node : chainsPerTangle[i])
-		{
-			std::cerr << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t) << " ";
-		}
-		std::cerr << std::endl;
+		// std::cerr << "tangle " << i << std::endl;
+		// for (auto node : chainsPerTangle[i])
+		// {
+		// 	std::cerr << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t) << " ";
+		// }
+		// std::cerr << std::endl;
 		for (uint64_t tip : chainsPerTangle[i])
 		{
-			std::cerr << "check node " << ((tip & firstBitUint64_t) ? ">" : "<") << (tip & maskUint64_t) << std::endl;
+			// std::cerr << "check node " << ((tip & firstBitUint64_t) ? ">" : "<") << (tip & maskUint64_t) << std::endl;
 			if (hasUniqueConnection.count(tip) == 0)
 			{
-				std::cerr << "no unique connection" << std::endl;
+				// std::cerr << "no unique connection" << std::endl;
 				allValid = false;
 				break;
 			}
 			if (hasUniqueConnection.count(hasUniqueConnection.at(tip) ^ firstBitUint64_t) == 0)
 			{
-				std::cerr << "no unique connection on other side" << std::endl;
+				// std::cerr << "no unique connection on other side" << std::endl;
 				allValid = false;
 				break;
 			}
 			if (hasUniqueConnection.at(hasUniqueConnection.at(tip) ^ firstBitUint64_t) != (tip ^ firstBitUint64_t))
 			{
-				std::cerr << "unique connection don't match" << std::endl;
+				// std::cerr << "unique connection don't match" << std::endl;
 				allValid = false;
 				break;
 			}
@@ -3827,7 +3827,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const Un
 			clearedTangles.insert(tangle);
 			assert(tangle != std::numeric_limits<size_t>::max());
 			replaceableSpans.emplace_back((uniqueChains[j-1].chainEndPosInRead + uniqueChains[j-1].chainStartPosInRead)/2, (uniqueChains[j].chainEndPosInRead + uniqueChains[j].chainStartPosInRead)/2, tangle, key);
-			std::cerr << "read " << i << " replaceable span " << std::get<0>(replaceableSpans.back()) << " " << std::get<1>(replaceableSpans.back()) << " " << std::get<2>(replaceableSpans.back()) << " " << (std::get<3>(replaceableSpans.back()).first & maskUint64_t) << " " << (std::get<3>(replaceableSpans.back()).second & maskUint64_t) << std::endl;
+			// std::cerr << "read " << i << " replaceable span " << std::get<0>(replaceableSpans.back()) << " " << std::get<1>(replaceableSpans.back()) << " " << std::get<2>(replaceableSpans.back()) << " " << (std::get<3>(replaceableSpans.back()).first & maskUint64_t) << " " << (std::get<3>(replaceableSpans.back()).second & maskUint64_t) << std::endl;
 		}
 		if (replaceableSpans.size() == 0) continue;
 		for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
@@ -3838,10 +3838,6 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const Un
 				uint64_t node = resultPaths[i].paths[j].path[k];
 				readPos += resultGraph.lengths[node & maskUint64_t];
 				if (k == 0) readPos -= resultPaths[i].paths[j].pathLeftClipKmers;
-				if (i == 82)
-				{
-					std::cerr << "read " << i << " check " << j << " " << k << " " << (node & maskUint64_t) << " " << (readPos-resultGraph.lengths[node & maskUint64_t]) << " " << readPos << std::endl;
-				}
 				if (mustNotReplace.count(node & maskUint64_t) == 1) continue;
 				size_t tangle = std::numeric_limits<size_t>::max();
 				std::pair<uint64_t, uint64_t> replaceKey;
@@ -3861,10 +3857,6 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const Un
 					}
 					replaceKey = std::get<3>(t);
 				}
-				if (i == 82)
-				{
-					std::cerr << "read " << i << " check " << j << " " << k << " tangle " << tangle << std::endl;
-				}
 				if (tangle >= std::numeric_limits<size_t>::max()-1) continue;
 				if (replaceNodeWithThisNode[node & maskUint64_t].count(replaceKey) == 0)
 				{
@@ -3874,7 +3866,6 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const Un
 					replaceNodeWithThisNode[node & maskUint64_t][replaceKey] = index;
 				}
 				size_t replacement = replaceNodeWithThisNode[node & maskUint64_t][replaceKey] & maskUint64_t;
-				std::cerr << "replace read " << i << " " << j << " " << k << " node " << (node & maskUint64_t) << " with " << replacement << std::endl;
 				resultPaths[i].paths[j].path[k] = replacement + (node & firstBitUint64_t);
 			}
 		}
@@ -3894,28 +3885,93 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const Un
 	return filterUnitigGraph(resultGraph, resultPaths, kept);
 }
 
+void fixFakeSinglePloidyChains(std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
+{
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, size_t>> chainEdgeCoverage;
+	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
+	{
+		uint64_t lastChain = std::numeric_limits<size_t>::max();
+		for (size_t j = 0; j < chainPositionsInReads[i].size(); j++)
+		{
+			if (anchorChains[chainPositionsInReads[i][j].chain & maskUint64_t].ploidy != 1) continue;
+			if (lastChain == std::numeric_limits<size_t>::max())
+			{
+				lastChain = chainPositionsInReads[i][j].chain;
+				continue;
+			}
+			uint64_t thisChain = chainPositionsInReads[i][j].chain;
+			chainEdgeCoverage[lastChain][thisChain] += 1;
+			chainEdgeCoverage[thisChain ^ firstBitUint64_t][lastChain ^ firstBitUint64_t] += 1;
+			lastChain = thisChain;
+		}
+	}
+	phmap::flat_hash_map<uint64_t, uint64_t> uniqueEdge;
+	for (const auto& pair : chainEdgeCoverage)
+	{
+		uint64_t bestEdge = 0;
+		size_t bestEdgeCoverage = 0;
+		for (auto pair2 : pair.second)
+		{
+			if (pair2.second <= bestEdgeCoverage) continue;
+			bestEdgeCoverage = pair2.second;
+			bestEdge = pair2.first;
+		}
+		if (bestEdgeCoverage < approxOneHapCoverage * 0.5) continue;
+		bool valid = true;
+		for (auto pair2 : pair.second)
+		{
+			if (pair2.second < approxOneHapCoverage * 0.25) continue;
+			if (pair2.first == bestEdge) continue;
+			valid = false;
+			break;
+		}
+		if (valid) uniqueEdge[pair.first] = bestEdge;
+	}
+	phmap::flat_hash_set<size_t> actuallyDiploid;
+	for (const auto& pair : chainEdgeCoverage)
+	{
+		if (pair.second.size() < 2) continue;
+		if (uniqueEdge.count(pair.first) == 1) continue;
+		size_t numSolids = 0;
+		bool allSolidsMatched = true;
+		for (auto pair2 : pair.second)
+		{
+			if (pair2.second < approxOneHapCoverage * 0.25) continue;
+			if (pair2.second < approxOneHapCoverage * 0.5)
+			{
+				allSolidsMatched = false;
+				continue;
+			}
+			numSolids += 1;
+			if (uniqueEdge.count(pair2.first ^ firstBitUint64_t) == 0)
+			{
+				allSolidsMatched = false;
+				break;
+			}
+			if (uniqueEdge.at(pair2.first ^ firstBitUint64_t) != (pair.first ^ firstBitUint64_t))
+			{
+				allSolidsMatched = false;
+				break;
+			}
+		}
+		if (numSolids != 2) continue;
+		if (!allSolidsMatched) continue;
+		actuallyDiploid.insert(pair.first & maskUint64_t);
+	}
+	for (auto chain : actuallyDiploid)
+	{
+		std::cerr << "fixed chain " << chain << " from plody " << anchorChains[chain].ploidy << " to " << 2 << std::endl;
+		anchorChains[chain].ploidy = 2;
+	}
+}
+
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
 	std::cerr << "try gap fill" << std::endl;
 	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
-	for (size_t i = 0; i < anchorChains.size(); i++)
-	{
-		std::cerr << "chain " << i << " ploidy " << anchorChains[i].ploidy;
-		for (auto node : anchorChains[i].nodes)
-		{
-			std::cerr << " " << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t);
-		}
-		std::cerr << std::endl;
-	}
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
-	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
-	{
-		for (auto chain : chainPositionsInReads[i])
-		{
-			std::cerr << "read " << i << " chain " << (chain.chain & maskUint64_t) << " " << ((chain.chain & firstBitUint64_t) ? "fw" : "bw") << " (" << (anchorChains[chain.chain].nodes[0] & maskUint64_t) << " " << (anchorChains[chain.chain].nodes.back() & maskUint64_t) << ") " << chain.chainStartPosInRead << " " << chain.chainEndPosInRead << std::endl;
-		}
-	}
+	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
 	VectorWithDirection<size_t> nodeTipBelongsToTangle = getNodeTipTangleAssignmentsUniqueChains(unitigGraph, anchorChains);
 	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> validSpans = getTangleSpanners(unitigGraph, readPaths, nodeTipBelongsToTangle, approxOneHapCoverage, anchorChains, chainPositionsInReads);
 	UnitigGraph resultGraph;
