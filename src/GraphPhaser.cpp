@@ -3360,11 +3360,11 @@ std::vector<std::vector<ChainPosition>> getReadLocalUniqChains(const UnitigGraph
 	return getReadChainPositions(unitigGraph, readPaths, fakeChains);
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t resolveLength)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t uniqSpanLength, const size_t resolveLength)
 {
 	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
-	std::vector<std::vector<ChainPosition>> localUniqPositions = getReadLocalUniqChains(unitigGraph, readPaths, approxOneHapCoverage, 100, 2000);
+	std::vector<std::vector<ChainPosition>> localUniqPositions = getReadLocalUniqChains(unitigGraph, readPaths, approxOneHapCoverage, 100, uniqSpanLength);
 	// for (size_t i = 0; i < chainPositionsInReads.size(); i++)
 	// {
 	// 	for (auto chain : chainPositionsInReads[i])
