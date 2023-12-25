@@ -4239,7 +4239,35 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const 
 
 bool hasAcyclicConnection(const SparseEdgeContainer& edges, const uint64_t startNode, const uint64_t endNode)
 {
+	phmap::flat_hash_set<uint64_t> reachableFromFw;
+	phmap::flat_hash_set<uint64_t> reachableFromBw;
 	std::vector<uint64_t> checkStack;
+	checkStack.emplace_back(startNode);
+	while (checkStack.size() >= 1)
+	{
+		auto top = checkStack.back();
+		checkStack.pop_back();
+		if (reachableFromFw.count(top) == 1) continue;
+		reachableFromFw.insert(top);
+		if (top == endNode) continue;
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			checkStack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+		}
+	}
+	checkStack.emplace_back(endNode ^ firstBitUint64_t);
+	while (checkStack.size() >= 1)
+	{
+		auto top = checkStack.back();
+		checkStack.pop_back();
+		if (reachableFromBw.count(top ^ firstBitUint64_t) == 1) continue;
+		reachableFromBw.insert(top ^ firstBitUint64_t);
+		if (top == (startNode ^ firstBitUint64_t)) continue;
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			checkStack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+		}
+	}
 	phmap::flat_hash_set<uint64_t> seenNodes;
 	for (auto edge : edges.getEdges(std::make_pair(startNode & maskUint64_t, startNode & firstBitUint64_t)))
 	{
@@ -4255,6 +4283,8 @@ bool hasAcyclicConnection(const SparseEdgeContainer& edges, const uint64_t start
 		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, (top ^ firstBitUint64_t) & firstBitUint64_t)))
 		{
 			uint64_t otherNode = edge.first + (edge.second ? 0 : firstBitUint64_t);
+			if (reachableFromFw.count(otherNode) == 0) continue;
+			if (reachableFromBw.count(otherNode) == 0) continue;
 			if (seenNodes.count(otherNode) == 0)
 			{
 				hasNonvisitedPredecessor = true;
@@ -4356,38 +4386,55 @@ void tryPopBubble(const UnitigGraph& unitigGraph, const std::vector<ReadPathBund
 {
 	if (!hasAcyclicConnection(edges, startNode, endNode)) return;
 	std::vector<uint64_t> checkStack;
-	phmap::flat_hash_set<uint64_t> seen;
+	phmap::flat_hash_set<uint64_t> seenFw;
+	phmap::flat_hash_set<uint64_t> seenBw;
 	checkStack.emplace_back(startNode);
 	while (checkStack.size() >= 1)
 	{
 		auto top = checkStack.back();
 		checkStack.pop_back();
-		if (seen.count(top) == 1) continue;
-		seen.insert(top);
+		if (seenFw.count(top) == 1) continue;
+		seenFw.insert(top);
 		if (top == endNode) continue;
 		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
 		{
 			checkStack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
 		}
 	}
-	for (auto node : seen)
+	checkStack.emplace_back(endNode ^ firstBitUint64_t);
+	while (checkStack.size() >= 1)
+	{
+		auto top = checkStack.back();
+		checkStack.pop_back();
+		if (seenBw.count(top ^ firstBitUint64_t) == 1) continue;
+		seenBw.insert(top ^ firstBitUint64_t);
+		if (top == (startNode ^ firstBitUint64_t)) continue;
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			checkStack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+		}
+	}
+	for (auto node : seenFw)
+	{
+		kept.set(node & maskUint64_t, false);
+	}
+	for (auto node : seenBw)
 	{
 		kept.set(node & maskUint64_t, false);
 	}
 	kept.set(startNode & maskUint64_t, true);
 	kept.set(endNode & maskUint64_t, true);
 	uint64_t pos = startNode;
-	size_t iterations = 0;
 	// todo fix: better algorithm
 	while (pos != endNode)
 	{
-		iterations += 1;
-		assert(iterations <= seen.size()+5);
 		kept.set(pos & maskUint64_t, true);
 		uint64_t maxEdge = pos;
 		double maxEdgeCoverage = -1;
 		for (auto edge : edges.getEdges(std::make_pair(pos & maskUint64_t, pos & firstBitUint64_t)))
 		{
+			if (seenFw.count(edge.first + (edge.second ? firstBitUint64_t : 0)) == 0) continue;
+			if (seenBw.count(edge.first + (edge.second ? firstBitUint64_t : 0)) == 0) continue;
 			double coverage = unitigGraph.coverages[edge.first];
 			if (coverage > maxEdgeCoverage)
 			{
