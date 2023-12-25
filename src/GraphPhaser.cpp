@@ -4351,3 +4351,84 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const 
 	result = resolveUniqueChainContainedTangles(result.first, result.second, approxOneHapCoverage);
 	return result;
 }
+
+void tryPopBubble(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, RankBitvector& kept, const SparseEdgeContainer& edges, uint64_t startNode, uint64_t endNode)
+{
+	if (!hasAcyclicConnection(edges, startNode, endNode)) return;
+	std::vector<uint64_t> checkStack;
+	phmap::flat_hash_set<uint64_t> seen;
+	checkStack.emplace_back(startNode);
+	while (checkStack.size() >= 1)
+	{
+		auto top = checkStack.back();
+		checkStack.pop_back();
+		if (seen.count(top) == 1) continue;
+		seen.insert(top);
+		if (top == endNode) continue;
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			checkStack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+		}
+	}
+	for (auto node : seen)
+	{
+		kept.set(node & maskUint64_t, false);
+	}
+	kept.set(startNode & maskUint64_t, true);
+	kept.set(endNode & maskUint64_t, true);
+	uint64_t pos = startNode;
+	size_t iterations = 0;
+	// todo fix: better algorithm
+	while (pos != endNode)
+	{
+		iterations += 1;
+		assert(iterations <= seen.size()+5);
+		kept.set(pos & maskUint64_t, true);
+		uint64_t maxEdge = pos;
+		double maxEdgeCoverage = -1;
+		for (auto edge : edges.getEdges(std::make_pair(pos & maskUint64_t, pos & firstBitUint64_t)))
+		{
+			double coverage = unitigGraph.coverages[edge.first];
+			if (coverage > maxEdgeCoverage)
+			{
+				maxEdge = edge.first + (edge.second ? firstBitUint64_t : 0);
+				maxEdgeCoverage = coverage;
+			}
+		}
+		assert(maxEdge != pos);
+		pos = maxEdge;
+	}
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> popHaploidBubbles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains)
+{
+	RankBitvector keptNodes;
+	keptNodes.resize(unitigGraph.nodeCount());
+	for (size_t i = 0; i < keptNodes.size(); i++)
+	{
+		keptNodes.set(i, true);
+	}
+	auto edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		if (anchorChains[i].ploidy != 1) continue;
+		if (anchorChains[i].nodes.size() < 2) continue;
+		for (size_t j = 1; j < anchorChains[i].nodes.size(); j++)
+		{
+			tryPopBubble(unitigGraph, readPaths, keptNodes, edges, anchorChains[i].nodes[j-1], anchorChains[i].nodes[j]);
+		}
+	}
+	return filterUnitigGraph(unitigGraph, readPaths, keptNodes);
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> popHaploidChainBubbles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+{
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
+	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
+	UnitigGraph resultGraph;
+	std::vector<ReadPathBundle> resultPaths;
+	std::tie(resultGraph, resultPaths) = popHaploidBubbles(unitigGraph, readPaths, anchorChains);
+	return std::make_pair(std::move(resultGraph), std::move(resultPaths));
+}
+
