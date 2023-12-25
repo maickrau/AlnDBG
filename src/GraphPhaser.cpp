@@ -3647,7 +3647,23 @@ VectorWithDirection<size_t> getNodeTipTangleAssignmentsUniqueChains(const Unitig
 	return result;
 }
 
-phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const VectorWithDirection<size_t>& nodeTipBelongsToTangle, const double approxOneHapCoverage, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads)
+size_t find(phmap::flat_hash_map<size_t, size_t>& parent, size_t val)
+{
+	while (parent.at(val) != parent.at(parent.at(val)))
+	{
+		parent[val] = parent.at(parent.at(val));
+	}
+	return parent.at(val);
+}
+
+void merge(phmap::flat_hash_map<size_t, size_t>& parent, size_t left, size_t right)
+{
+	left = find(parent, left);
+	right = find(parent, right);
+	parent[right] = left;
+}
+
+phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, VectorWithDirection<size_t>& nodeTipBelongsToTangle, const double approxOneHapCoverage, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads)
 {
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> spannerCoverages;
 	phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<uint64_t>> spannerEdges;
@@ -3709,6 +3725,58 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool
 		hasUniqueConnection[from] = bestEdge;
 		std::cerr << "unique connection from " << ((from & firstBitUint64_t) ? ">" : "<") << (from & maskUint64_t) << " to " << ((bestEdge & firstBitUint64_t) ? ">" : "<") << (bestEdge & maskUint64_t) << std::endl;
 	}
+	phmap::flat_hash_map<size_t, size_t> tangleMerge;
+	for (size_t i = 0; i < nodeTipBelongsToTangle.size(); i++)
+	{
+		if (nodeTipBelongsToTangle.at(std::make_pair(i, true)) != std::numeric_limits<size_t>::max())
+		{
+			tangleMerge[nodeTipBelongsToTangle.at(std::make_pair(i, true))] = nodeTipBelongsToTangle.at(std::make_pair(i, true));
+		}
+		if (nodeTipBelongsToTangle.at(std::make_pair(i, false)) != std::numeric_limits<size_t>::max())
+		{
+			tangleMerge[nodeTipBelongsToTangle.at(std::make_pair(i, false))] = nodeTipBelongsToTangle.at(std::make_pair(i, false));
+		}
+	}
+	bool tanglesNeedFixing = false;
+	for (auto pair : hasUniqueConnection)
+	{
+		if (hasUniqueConnection.count(pair.second ^ firstBitUint64_t) == 0) continue;
+		if (hasUniqueConnection.at(pair.second ^ firstBitUint64_t) != (pair.first ^ firstBitUint64_t)) continue;
+		size_t nodeFrom;
+		size_t nodeTo;
+		if (pair.first & firstBitUint64_t)
+		{
+			nodeFrom = anchorChains[pair.first & maskUint64_t].nodes.back();
+		}
+		else
+		{
+			nodeFrom = anchorChains[pair.first & maskUint64_t].nodes[0] ^ firstBitUint64_t;
+		}
+		uint64_t otherChain = pair.second ^ firstBitUint64_t;
+		if (otherChain & firstBitUint64_t)
+		{
+			nodeTo = anchorChains[otherChain & maskUint64_t].nodes.back();
+		}
+		else
+		{
+			nodeTo = anchorChains[otherChain & maskUint64_t].nodes[0] ^ firstBitUint64_t;
+		}
+		size_t tangleFrom = nodeTipBelongsToTangle[std::make_pair(nodeFrom & maskUint64_t, nodeFrom & firstBitUint64_t)];
+		size_t tangleTo = nodeTipBelongsToTangle[std::make_pair(nodeTo & maskUint64_t, nodeTo & firstBitUint64_t)];
+		assert(tangleFrom != std::numeric_limits<size_t>::max());
+		assert(tangleTo != std::numeric_limits<size_t>::max());
+		if (tangleFrom == tangleTo) continue;
+		merge(tangleMerge, tangleFrom, tangleTo);
+		tanglesNeedFixing = true;
+	}
+	if (tanglesNeedFixing)
+	{
+		for (size_t i = 0; i < nodeTipBelongsToTangle.size(); i++)
+		{
+			if (nodeTipBelongsToTangle[std::make_pair(i, true)] != std::numeric_limits<size_t>::max()) nodeTipBelongsToTangle[std::make_pair(i, true)] = find(tangleMerge, nodeTipBelongsToTangle[std::make_pair(i, true)]);
+			if (nodeTipBelongsToTangle[std::make_pair(i, false)] != std::numeric_limits<size_t>::max()) nodeTipBelongsToTangle[std::make_pair(i, false)] = find(tangleMerge, nodeTipBelongsToTangle[std::make_pair(i, false)]);
+		}
+	}
 	std::vector<std::vector<uint64_t>> chainsPerTangle;
 	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
@@ -3753,11 +3821,7 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool
 			{
 				otherNode = anchorChains[otherChain & maskUint64_t].nodes[0] ^ firstBitUint64_t;
 			}
-			if (nodeTipBelongsToTangle[std::make_pair(otherNode & maskUint64_t, otherNode & firstBitUint64_t)] != i)
-			{
-				allValid = false;
-				break;
-			}
+			assert(nodeTipBelongsToTangle[std::make_pair(otherNode & maskUint64_t, otherNode & firstBitUint64_t)] == i);
 			if (hasUniqueConnection.count(hasUniqueConnection.at(tip) ^ firstBitUint64_t) == 0)
 			{
 				allValid = false;
@@ -4022,11 +4086,11 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const bo
 		for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
 		{
 			size_t readPos = resultPaths[i].paths[j].readStartPos;
-			readPos += unitigGraph.lengths[resultPaths[i].paths[j].path[0] & maskUint64_t];
+			readPos += resultGraph.lengths[resultPaths[i].paths[j].path[0] & maskUint64_t];
 			readPos -= resultPaths[i].paths[j].pathLeftClipKmers;
 			for (size_t k = 1; k < resultPaths[i].paths[j].path.size(); k++)
 			{
-				readPos += unitigGraph.lengths[resultPaths[i].paths[j].path[k] & maskUint64_t];
+				readPos += resultGraph.lengths[resultPaths[i].paths[j].path[k] & maskUint64_t];
 				if (nodeIsAnchorChainTip.count(resultPaths[i].paths[j].path[k-1]) == 0) continue;
 				if (nodeIsAnchorChainTip.count(resultPaths[i].paths[j].path[k] ^ firstBitUint64_t) == 0) continue;
 				if (nodeTipBelongsToTangle[std::make_pair(resultPaths[i].paths[j].path[k-1] & maskUint64_t, resultPaths[i].paths[j].path[k-1] & firstBitUint64_t)] != nodeTipBelongsToTangle[std::make_pair(resultPaths[i].paths[j].path[k] & maskUint64_t, (resultPaths[i].paths[j].path[k] ^ firstBitUint64_t) & firstBitUint64_t)]) continue;
@@ -4036,8 +4100,10 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const bo
 				uint64_t chainTo = nodeIsAnchorChainTip.at(resultPaths[i].paths[j].path[k] ^ firstBitUint64_t) ^ firstBitUint64_t;
 				auto key = canon(chainFrom, chainTo);
 				if (validSpans.count(key) == 1) continue;
-				std::cerr << "should cut read " << i << " pos " << readPos - unitigGraph.lengths[resultPaths[i].paths[j].path[k] & maskUint64_t] << std::endl;
-				cutPathBeforeHere[std::make_pair(j, k)] = readPos - unitigGraph.lengths[resultPaths[i].paths[j].path[k] & maskUint64_t];
+				assert(readPos >= resultGraph.lengths[resultPaths[i].paths[j].path[k] & maskUint64_t]);
+				size_t posAtStartOfNode = readPos - resultGraph.lengths[resultPaths[i].paths[j].path[k] & maskUint64_t];
+				std::cerr << "should cut read " << i << " pos " << posAtStartOfNode << std::endl;
+				cutPathBeforeHere[std::make_pair(j, k)] = posAtStartOfNode;
 			}
 		}
 		if (cutPathBeforeHere.size() == 0) continue;
@@ -4047,6 +4113,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const bo
 			for (size_t k = resultPaths[i].paths[j].path.size()-1; k > 0; k--)
 			{
 				if (cutPathBeforeHere.count(std::make_pair(j, k)) == 0) continue;
+				assert(cutPathBeforeHere.at(std::make_pair(j, k)) < readPaths[i].readLength);
 				didcut = true;
 				std::cerr << "cut read " << i << " pos " << cutPathBeforeHere.at(std::make_pair(j, k)) << std::endl;
 				resultPaths[i].paths.emplace_back();
