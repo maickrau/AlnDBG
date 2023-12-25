@@ -3853,6 +3853,15 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const bo
 		std::cerr << "span from " << ((span.first & firstBitUint64_t) ? ">" : "<") << (span.first & maskUint64_t) << " " << ((span.second & firstBitUint64_t) ? ">" : "<") << (span.second & maskUint64_t) << std::endl;
 	}
 	assert(readPaths.size() == chainPositionsInReads.size());
+	phmap::flat_hash_map<uint64_t, uint64_t> nodeIsAnchorChainTip;
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		if (anchorChains[i].ploidy != 1) continue;
+		assert(nodeIsAnchorChainTip.count(anchorChains[i].nodes[0] ^ firstBitUint64_t) == 0);
+		nodeIsAnchorChainTip[anchorChains[i].nodes[0] ^ firstBitUint64_t] = i;
+		assert(nodeIsAnchorChainTip.count(anchorChains[i].nodes.back()) == 0);
+		nodeIsAnchorChainTip[anchorChains[i].nodes.back()] = i + firstBitUint64_t;
+	}
 	phmap::flat_hash_set<size_t> mustNotReplace;
 	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
@@ -3991,6 +4000,50 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const bo
 				resultPaths[i].paths[j].path[k] = replacement + (node & firstBitUint64_t);
 			}
 		}
+	}
+	for (size_t i = 0; i < resultPaths.size(); i++)
+	{
+		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> cutPathBeforeHere;
+		for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
+		{
+			size_t readPos = resultPaths[i].paths[j].readStartPos;
+			readPos += unitigGraph.lengths[resultPaths[i].paths[j].path[0] & maskUint64_t];
+			readPos -= resultPaths[i].paths[j].pathLeftClipKmers;
+			for (size_t k = 1; k < resultPaths[i].paths[j].path.size(); k++)
+			{
+				readPos += unitigGraph.lengths[resultPaths[i].paths[j].path[k] & maskUint64_t];
+				if (nodeIsAnchorChainTip.count(resultPaths[i].paths[j].path[k-1]) == 0) continue;
+				if (nodeIsAnchorChainTip.count(resultPaths[i].paths[j].path[k] ^ firstBitUint64_t) == 0) continue;
+				if (nodeTipBelongsToTangle[std::make_pair(resultPaths[i].paths[j].path[k-1] & maskUint64_t, resultPaths[i].paths[j].path[k-1] & firstBitUint64_t)] != nodeTipBelongsToTangle[std::make_pair(resultPaths[i].paths[j].path[k] & maskUint64_t, (resultPaths[i].paths[j].path[k] ^ firstBitUint64_t) & firstBitUint64_t)]) continue;
+				if (nodeTipBelongsToTangle[std::make_pair(resultPaths[i].paths[j].path[k-1] & maskUint64_t, resultPaths[i].paths[j].path[k-1] & firstBitUint64_t)] == std::numeric_limits<size_t>::max()) continue;
+				if (clearedTangles.count(nodeTipBelongsToTangle[std::make_pair(resultPaths[i].paths[j].path[k-1] & maskUint64_t, resultPaths[i].paths[j].path[k-1] & firstBitUint64_t)]) == 0) continue;
+				uint64_t chainFrom = nodeIsAnchorChainTip.at(resultPaths[i].paths[j].path[k-1]);
+				uint64_t chainTo = nodeIsAnchorChainTip.at(resultPaths[i].paths[j].path[k] ^ firstBitUint64_t) ^ firstBitUint64_t;
+				auto key = canon(chainFrom, chainTo);
+				if (validSpans.count(key) == 1) continue;
+				std::cerr << "should cut read " << i << " pos " << readPos - unitigGraph.lengths[resultPaths[i].paths[j].path[k] & maskUint64_t] << std::endl;
+				cutPathBeforeHere[std::make_pair(j, k)] = readPos - unitigGraph.lengths[resultPaths[i].paths[j].path[k] & maskUint64_t];
+			}
+		}
+		if (cutPathBeforeHere.size() == 0) continue;
+		bool didcut = false;
+		for (size_t j = resultPaths[i].paths.size()-1; j < resultPaths[i].paths.size(); j--)
+		{
+			for (size_t k = resultPaths[i].paths[j].path.size()-1; k > 0; k--)
+			{
+				if (cutPathBeforeHere.count(std::make_pair(j, k)) == 0) continue;
+				didcut = true;
+				std::cerr << "cut read " << i << " pos " << cutPathBeforeHere.at(std::make_pair(j, k)) << std::endl;
+				resultPaths[i].paths.emplace_back();
+				resultPaths[i].paths.back().readStartPos = cutPathBeforeHere.at(std::make_pair(j, k));
+				resultPaths[i].paths.back().pathLeftClipKmers = 0;
+				resultPaths[i].paths.back().pathRightClipKmers = resultPaths[i].paths[j].pathRightClipKmers;
+				resultPaths[i].paths.back().path.insert(resultPaths[i].paths.back().path.end(), resultPaths[i].paths[j].path.begin()+k, resultPaths[i].paths[j].path.end());
+				resultPaths[i].paths[j].path.erase(resultPaths[i].paths[j].path.begin() + k, resultPaths[i].paths[j].path.end());
+				resultPaths[i].paths[j].pathRightClipKmers = 0;
+			}
+		}
+		assert(didcut);
 	}
 	std::cerr << clearedTangles.size() << " cleared tangles" << std::endl;
 	RankBitvector kept;
