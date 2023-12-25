@@ -3743,6 +3743,21 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool
 				allValid = false;
 				break;
 			}
+			uint64_t otherChain = hasUniqueConnection.at(tip) ^ firstBitUint64_t;
+			uint64_t otherNode;
+			if (otherChain & firstBitUint64_t)
+			{
+				otherNode = anchorChains[otherChain & maskUint64_t].nodes.back();
+			}
+			else
+			{
+				otherNode = anchorChains[otherChain & maskUint64_t].nodes[0] ^ firstBitUint64_t;
+			}
+			if (nodeTipBelongsToTangle[std::make_pair(otherNode & maskUint64_t, otherNode & firstBitUint64_t)] != i)
+			{
+				allValid = false;
+				break;
+			}
 			if (hasUniqueConnection.count(hasUniqueConnection.at(tip) ^ firstBitUint64_t) == 0)
 			{
 				allValid = false;
