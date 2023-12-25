@@ -4102,9 +4102,117 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const 
 	return std::make_pair(std::move(resultGraph), std::move(resultPaths));
 }
 
+bool hasAcyclicConnection(const SparseEdgeContainer& edges, const uint64_t startNode, const uint64_t endNode)
+{
+	std::vector<uint64_t> checkStack;
+	phmap::flat_hash_set<uint64_t> seenNodes;
+	for (auto edge : edges.getEdges(std::make_pair(startNode & maskUint64_t, startNode & firstBitUint64_t)))
+	{
+		checkStack.emplace_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+	}
+	seenNodes.emplace(startNode);
+	while (checkStack.size() >= 1)
+	{
+		auto top = checkStack.back();
+		checkStack.pop_back();
+		if (seenNodes.count(top) == 1) continue;
+		bool hasNonvisitedPredecessor = false;
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, (top ^ firstBitUint64_t) & firstBitUint64_t)))
+		{
+			uint64_t otherNode = edge.first + (edge.second ? 0 : firstBitUint64_t);
+			if (seenNodes.count(otherNode) == 0)
+			{
+				hasNonvisitedPredecessor = true;
+				break;
+			}
+		}
+		if (hasNonvisitedPredecessor) continue;
+		if (top == endNode) return true;
+		seenNodes.insert(top);
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			checkStack.emplace_back(edge.first + (edge.second ? firstBitUint64_t : 0 ));
+		}
+	}
+	return false;
+}
+
+bool splitChainsAtCyclicTangles(const UnitigGraph& unitigGraph, std::vector<AnchorChain>& chains)
+{
+	bool result = false;
+	auto edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	phmap::flat_hash_set<std::pair<size_t, size_t>> splitBeforeTheseNodes;
+	for (size_t i = 0; i < chains.size(); i++)
+	{
+		if (chains[i].ploidy != 1) continue;
+		for (size_t j = 1; j < chains[i].nodes.size(); j++)
+		{
+			if (hasAcyclicConnection(edges, chains[i].nodes[j-1], chains[i].nodes[j])) continue;
+			splitBeforeTheseNodes.emplace(i, j);
+		}
+	}
+	for (size_t i = 0; i < chains.size(); i++)
+	{
+		if (chains[i].ploidy != 1) continue;
+		for (size_t j = chains[i].nodes.size()-1; j > 0; j--)
+		{
+			if (splitBeforeTheseNodes.count(std::make_pair(i, j)) == 0) continue;
+			std::cerr << "split chain " << i << " at index " << j << " / " << chains[i].nodes.size() << std::endl;
+			result = true;
+			chains.emplace_back();
+			chains.back().ploidy = 1;
+			chains.back().nodes.insert(chains.back().nodes.end(), chains[i].nodes.begin()+j, chains[i].nodes.end());
+			chains.back().nodeOffsets.insert(chains.back().nodeOffsets.end(), chains[i].nodeOffsets.begin()+j, chains[i].nodeOffsets.end());
+			chains[i].nodes.erase(chains[i].nodes.begin()+j, chains[i].nodes.end());
+			chains[i].nodeOffsets.erase(chains[i].nodeOffsets.begin()+j, chains[i].nodeOffsets.end());
+		}
+	}
+	for (size_t i = chains.size()-1; i < chains.size(); i--)
+	{
+		if (chains[i].nodeOffsets[0] != 0)
+		{
+			for (size_t j = chains[i].nodeOffsets.size()-1; j < chains[i].nodeOffsets.size(); j--)
+			{
+				chains[i].nodeOffsets[j] -= chains[i].nodeOffsets[0];
+			}
+		}
+		size_t chainLength = 0;
+		for (uint64_t node : chains[i].nodes)
+		{
+			chainLength += unitigGraph.lengths[node & maskUint64_t];
+		}
+		if (chainLength < 500)
+		{
+			result = true;
+			std::swap(chains[i], chains.back());
+			chains.pop_back();
+		}
+	}
+	return result;
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveUniqueChainContainedTangles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+{
+	std::cerr << "try gap fill" << std::endl;
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
+	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
+	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
+	bool splitAnything = splitChainsAtCyclicTangles(unitigGraph, anchorChains);
+	if (!splitAnything) return std::make_pair(unitigGraph, readPaths);
+	chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
+	VectorWithDirection<size_t> nodeTipBelongsToTangle = getNodeTipTangleAssignmentsUniqueChains(unitigGraph, anchorChains);
+	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> validSpans = getTangleSpanners(false, unitigGraph, readPaths, nodeTipBelongsToTangle, approxOneHapCoverage, anchorChains, chainPositionsInReads);
+	UnitigGraph resultGraph;
+	std::vector<ReadPathBundle> resultPaths;
+	std::tie(resultGraph, resultPaths) = applyTangleSpanners(false, unitigGraph, readPaths, nodeTipBelongsToTangle, validSpans, chainPositionsInReads, anchorChains);
+	return std::make_pair(std::move(resultGraph), std::move(resultPaths));
+}
+
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
 	auto result = resolveSpannedTangles(false, unitigGraph, readPaths, approxOneHapCoverage);
 	result = resolveSpannedTangles(true, result.first, result.second, approxOneHapCoverage);
+	result = resolveUniqueChainContainedTangles(result.first, result.second, approxOneHapCoverage);
 	return result;
 }
