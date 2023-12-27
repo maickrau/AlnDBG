@@ -14,6 +14,7 @@
 #include "AlnHaploFilter.h"
 #include "GraphPhaser.h"
 #include "GraphResolver.h"
+#include "AnchorFinder.h"
 
 void writePaths(const std::string& filename, const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readUnitigGraphPaths, const size_t k)
 {
@@ -115,6 +116,24 @@ void forbidAlnsFromDifferentHaplotypes(const UnitigGraph& unitigGraph, const std
 	std::cerr << countForbidden << " alns forbidden by phasing" << std::endl;
 }
 */
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> getInitialGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const size_t k, const double approxOneHapCoverage)
+{
+	UnitigGraph unitigGraph;
+	std::vector<ReadPathBundle> readUnitigGraphPaths;
+	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+//	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraph(unitigGraph, readUnitigGraphPaths, getGraphPhaseBlockNodes(unitigGraph, readUnitigGraphPaths, 17));
+//	forbidAlnsFromDifferentHaplotypes(unitigGraph, readUnitigGraphPaths, matches, readNames);
+//	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
+	auto nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = popHaploidChainBubbles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	return std::make_pair(std::move(unitigGraph), std::move(readUnitigGraphPaths));
+}
+
 void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k, const double approxOneHapCoverage)
 {
 	UnitigGraph unitigGraph;
@@ -218,61 +237,94 @@ void doHaplofilter(std::vector<MatchGroup>& matches, const std::vector<size_t>& 
 	std::cerr << numRemoved << " mapping matches removed by haplofilter" << std::endl;
 }
 
-int main(int argc, char** argv)
+bool annotationsMismatch(const std::vector<std::vector<ChainPosition>>& readAnnotations, const std::vector<size_t>& readLengths, const size_t leftRead, const size_t rightRead, const size_t leftStart, const size_t rightStart, const bool rightFw)
 {
-	size_t numThreads = std::stoi(argv[1]);
-	size_t k = std::stoull(argv[2]);
-	size_t numWindows = std::stoull(argv[3]);
-	size_t windowSize = std::stoull(argv[4]);
-	size_t minAlignmentLength = std::stoull(argv[5]);
-	const size_t graphk = 31;
-	const size_t minCoverage = 2;
-	const size_t graphd = 50;
-	const double approxOneHapCoverage = 15;
-	std::vector<std::string> readFiles;
-	for (size_t i = 6; i < argc; i++)
+	if (readAnnotations[leftRead].size() == 0) return false;
+	if (readAnnotations[rightRead].size() == 0) return false;
+	std::vector<ChainPosition> annotationsLeft;
+	std::vector<ChainPosition> annotationsRight;
+	for (const auto chain : readAnnotations[leftRead])
 	{
-		readFiles.emplace_back(argv[i]);
+		annotationsLeft.emplace_back(chain);
+		annotationsLeft.back().chainStartPosInRead -= (int)leftStart;
+		annotationsLeft.back().chainEndPosInRead -= (int)leftStart;
 	}
-	MatchIndex matchIndex { k, numWindows, windowSize };
-	ReadStorage storage;
-	std::vector<TwobitString> readSequences;
-	for (auto file : readFiles)
+	for (const auto chain : readAnnotations[rightRead])
 	{
-		std::mutex indexMutex;
-		std::mutex sequenceMutex;
-		storage.iterateReadsFromFile(file, numThreads, false, [&matchIndex, &indexMutex, &sequenceMutex, &readSequences](size_t readName, const std::string& sequence)
+		if (rightFw)
 		{
-			matchIndex.addMatchesFromRead(readName, indexMutex, sequence);
-			{
-				std::lock_guard<std::mutex> lock { sequenceMutex };
-				while (readSequences.size() <= readName) readSequences.emplace_back();
-				readSequences[readName] = sequence;
-			}
-		});
+			annotationsRight.emplace_back(chain);
+			annotationsRight.back().chainStartPosInRead -= (int)rightStart;
+			annotationsRight.back().chainEndPosInRead -= (int)rightStart;
+		}
+		else
+		{
+			annotationsRight.emplace_back(chain);
+			annotationsRight.back().chain ^= firstBitUint64_t;
+			std::swap(annotationsRight.back().chainStartPosInRead, annotationsRight.back().chainEndPosInRead);
+			annotationsRight.back().chainStartPosInRead = readLengths[rightRead] - annotationsRight.back().chainStartPosInRead;
+			annotationsRight.back().chainEndPosInRead = readLengths[rightRead] - annotationsRight.back().chainEndPosInRead;
+			annotationsRight.back().chainStartPosInRead -= (int)rightStart;
+			annotationsRight.back().chainEndPosInRead -= (int)rightStart;
+		}
 	}
-	std::cerr << readSequences.size() << " reads" << std::endl;
-	std::cerr << matchIndex.numWindowChunks() << " distinct windowchunks" << std::endl;
-	std::cerr << matchIndex.numUniqueChunks() << " windowchunks have only one read" << std::endl;
-	matchIndex.clearConstructionVariablesAndCompact();
-	const std::vector<size_t>& readBasepairLengths = storage.getRawReadLengths();
-	std::vector<size_t> readKmerLengths;
-	readKmerLengths.resize(readBasepairLengths.size());
-	for (size_t i = 0; i < readBasepairLengths.size(); i++)
+	int leftReadStart = -(int)leftStart;
+	int rightReadStart = -(int)rightStart;
+	int leftReadEnd = leftReadStart + (int)readLengths[leftRead];
+	int rightReadEnd = rightReadStart + (int)readLengths[rightRead];
+	assert(leftReadEnd > 0);
+	assert(rightReadEnd > 0);
+	for (size_t i = 0; i < annotationsLeft.size(); i++)
 	{
-		readKmerLengths[i] = readBasepairLengths[i] + 1 - graphk;
+		if (annotationsLeft[i].chainEndPosInRead < rightReadStart+1000) continue;
+		if (annotationsLeft[i].chainStartPosInRead > rightReadEnd-1000) continue;
+		if (annotationsLeft[i].numKmerMatches < 100) continue;
+		bool hasMatch = false;
+		for (size_t j = 0; j < annotationsRight.size(); j++)
+		{
+			if (annotationsRight[j].chain != annotationsLeft[i].chain) continue;
+			if (annotationsRight[j].chainEndPosInRead < annotationsLeft[i].chainEndPosInRead-1000) continue;
+			if (annotationsRight[j].chainEndPosInRead > annotationsLeft[i].chainEndPosInRead+1000) continue;
+			if (annotationsRight[j].chainStartPosInRead < annotationsLeft[i].chainStartPosInRead-1000) continue;
+			if (annotationsRight[j].chainStartPosInRead > annotationsLeft[i].chainStartPosInRead+1000) continue;
+			hasMatch = true;
+		}
+		if (!hasMatch) return true;
 	}
-	const std::vector<std::string>& readNames = storage.getNames();
-	for (size_t i = 0; i < readNames.size(); i++)
+	for (size_t i = 0; i < annotationsRight.size(); i++)
 	{
-		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
+		if (annotationsRight[i].chainEndPosInRead < rightReadStart+1000) continue;
+		if (annotationsRight[i].chainStartPosInRead > rightReadEnd-1000) continue;
+		if (annotationsRight[i].numKmerMatches < 100) continue;
+		bool hasMatch = false;
+		for (size_t j = 0; j < annotationsLeft.size(); j++)
+		{
+			if (annotationsLeft[j].chain != annotationsRight[i].chain) continue;
+			if (annotationsLeft[j].chainEndPosInRead < annotationsRight[i].chainEndPosInRead-1000) continue;
+			if (annotationsLeft[j].chainEndPosInRead > annotationsRight[i].chainEndPosInRead+1000) continue;
+			if (annotationsLeft[j].chainStartPosInRead < annotationsRight[i].chainStartPosInRead-1000) continue;
+			if (annotationsLeft[j].chainStartPosInRead > annotationsRight[i].chainStartPosInRead+1000) continue;
+			hasMatch = true;
+		}
+		if (!hasMatch) return true;
 	}
+	return false;
+}
+
+std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIndex, const std::vector<TwobitString>& readSequences, size_t numThreads, const std::vector<size_t>& rawReadLengths, const size_t minAlignmentLength, const size_t k, const size_t graphk, const size_t graphd, const size_t maxIndexCoverage, const std::vector<std::vector<ChainPosition>>& readAnnotations)
+{
 	std::mutex printMutex;
 	std::vector<MatchGroup> matches;
-	auto result = matchIndex.iterateMatchChains(numThreads, 2, std::numeric_limits<size_t>::max(), 50, storage.getRawReadLengths(), [&printMutex, &matches, minAlignmentLength, k, graphd](const size_t left, const size_t leftstart, const size_t leftend, const bool leftFw, const size_t right, const size_t rightstart, const size_t rightend, const bool rightFw)
+	size_t countFiltered = 0;
+	auto result = matchIndex.iterateMatchChains(numThreads, 2, maxIndexCoverage, 50, rawReadLengths, [&printMutex, &matches, minAlignmentLength, &rawReadLengths, k, graphd, &readAnnotations, &countFiltered](const size_t left, const size_t leftstart, const size_t leftend, const bool leftFw, const size_t right, const size_t rightstart, const size_t rightend, const bool rightFw)
 	{
 		if (leftend+1-leftstart < minAlignmentLength) return;
 		if (rightend+1-rightstart < minAlignmentLength) return;
+		if (annotationsMismatch(readAnnotations, rawReadLengths, left, right, leftstart, rightstart, rightFw))
+		{
+			countFiltered += 1;
+			return;
+		}
 		std::lock_guard<std::mutex> lock { printMutex };
 		assert(leftFw);
 		size_t numAlnChunks = std::max(leftend+1-leftstart, rightend+1-rightstart)/(std::numeric_limits<uint16_t>::max()-k-graphd-100)+1;
@@ -322,8 +374,76 @@ int main(int argc, char** argv)
 	std::cerr << result.readChainMatches << " chain matches" << std::endl;
 	std::cerr << result.totalMatches << " window matches" << std::endl;
 	std::cerr << result.maxPerChunk << " max windowchunk size" << std::endl;
+	std::cerr << countFiltered << " mapping matches filtered by annotation mismatch" << std::endl;
 	std::cerr << matches.size() << " mapping matches" << std::endl;
 	addKmerMatches(numThreads, readSequences, matches, graphk, graphd);
+	return matches;
+}
+
+std::vector<MatchGroup> getMatches(const MatchIndex& matchIndex, const std::vector<TwobitString>& readSequences, size_t numThreads, const std::vector<size_t>& rawReadLengths, const size_t minAlignmentLength, const size_t k, const size_t graphk, const size_t graphd, const size_t maxIndexCoverage)
+{
+	std::vector<std::vector<ChainPosition>> tmp;
+	tmp.resize(rawReadLengths.size());
+	return getMatchesFilteredByAnnotation(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, maxIndexCoverage, tmp);
+}
+
+int main(int argc, char** argv)
+{
+	size_t numThreads = std::stoi(argv[1]);
+	size_t k = std::stoull(argv[2]);
+	size_t numWindows = std::stoull(argv[3]);
+	size_t windowSize = std::stoull(argv[4]);
+	size_t minAlignmentLength = std::stoull(argv[5]);
+	const size_t graphk = 31;
+	const size_t minCoverage = 2;
+	const size_t graphd = 50;
+	const double approxOneHapCoverage = 15;
+	std::vector<std::string> readFiles;
+	for (size_t i = 6; i < argc; i++)
+	{
+		readFiles.emplace_back(argv[i]);
+	}
+	MatchIndex matchIndex { k, numWindows, windowSize };
+	ReadStorage storage;
+	std::vector<TwobitString> readSequences;
+	for (auto file : readFiles)
+	{
+		std::mutex indexMutex;
+		std::mutex sequenceMutex;
+		storage.iterateReadsFromFile(file, numThreads, false, [&matchIndex, &indexMutex, &sequenceMutex, &readSequences](size_t readName, const std::string& sequence)
+		{
+			matchIndex.addMatchesFromRead(readName, indexMutex, sequence);
+			{
+				std::lock_guard<std::mutex> lock { sequenceMutex };
+				while (readSequences.size() <= readName) readSequences.emplace_back();
+				readSequences[readName] = sequence;
+			}
+		});
+	}
+	std::cerr << readSequences.size() << " reads" << std::endl;
+	std::cerr << matchIndex.numWindowChunks() << " distinct windowchunks" << std::endl;
+	std::cerr << matchIndex.numUniqueChunks() << " windowchunks have only one read" << std::endl;
+	matchIndex.clearConstructionVariablesAndCompact();
+	const std::vector<size_t>& readBasepairLengths = storage.getRawReadLengths();
+	std::vector<size_t> readKmerLengths;
+	readKmerLengths.resize(readBasepairLengths.size());
+	for (size_t i = 0; i < readBasepairLengths.size(); i++)
+	{
+		readKmerLengths[i] = readBasepairLengths[i] + 1 - graphk;
+	}
+	const std::vector<std::string>& readNames = storage.getNames();
+	for (size_t i = 0; i < readNames.size(); i++)
+	{
+		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
+	}
+	auto rawReadLengths = storage.getRawReadLengths();
+	std::vector<MatchGroup> matches = getMatches(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, 100);
 //	doHaplofilter(matches, readKmerLengths);
+	{
+		auto initial = getInitialGraph(readKmerLengths, readNames, readSequences, matches, minCoverage, graphk, approxOneHapCoverage);
+		auto chains = getAnchorChains(initial.first, initial.second, approxOneHapCoverage);
+		auto readAnnotations = getReadChainPositions(initial.first, initial.second, chains);
+		matches = getMatchesFilteredByAnnotation(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, 100, readAnnotations);
+	}
 	makeGraph(readKmerLengths, readNames, readSequences, matches, minCoverage, "graph.gfa", graphk, approxOneHapCoverage);
 }
