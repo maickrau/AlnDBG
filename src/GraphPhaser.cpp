@@ -4479,3 +4479,633 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> popHaploidChainBubbles(const
 	return std::make_pair(std::move(resultGraph), std::move(resultPaths));
 }
 
+bool isGoodPhasableFork(const UnitigGraph& unitigGraph, const SparseEdgeContainer& edges, const std::pair<size_t, bool> fork, const double approxOneHapCoverage)
+{
+	if (edges.getEdges(fork).size() < 2) return false;
+	if (unitigGraph.coverages[fork.first] < approxOneHapCoverage * 1.5) return false;
+	size_t estimatedMainNodeCoverage = (double)unitigGraph.coverages[fork.first] / approxOneHapCoverage + 0.5;
+	size_t totalEstimatedCoverage = 0;
+	for (auto edge : edges.getEdges(fork))
+	{
+		if (edges.getEdges(reverse(edge)).size() != 1) return false;
+		if (unitigGraph.coverages[edge.first] < approxOneHapCoverage * 0.5) return false;
+		totalEstimatedCoverage += (double)unitigGraph.coverages[edge.first] / approxOneHapCoverage + 0.5;
+	}
+	if (totalEstimatedCoverage < 2) return false;
+	if (totalEstimatedCoverage < estimatedMainNodeCoverage - 1) return false;
+	if (totalEstimatedCoverage > estimatedMainNodeCoverage + 1) return false;
+	return true;
+}
+
+std::tuple<std::vector<bool>, std::vector<bool>, phmap::flat_hash_map<uint64_t, size_t>> getGoodForks(const UnitigGraph& unitigGraph, const double approxOneHapCoverage)
+{
+	SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	std::vector<bool> hasGoodForkFw;
+	std::vector<bool> hasGoodForkBw;
+	phmap::flat_hash_map<uint64_t, size_t> forkAlleleCount;
+	hasGoodForkFw.resize(unitigGraph.nodeCount(), false);
+	hasGoodForkBw.resize(unitigGraph.nodeCount(), false);
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		if (isGoodPhasableFork(unitigGraph, edges, std::make_pair(i, true), approxOneHapCoverage))
+		{
+			hasGoodForkFw[i] = true;
+			forkAlleleCount[i + firstBitUint64_t] = edges.getEdges(std::make_pair(i, true)).size();
+		}
+		if (isGoodPhasableFork(unitigGraph, edges, std::make_pair(i, false), approxOneHapCoverage))
+		{
+			hasGoodForkBw[i] = true;
+			forkAlleleCount[i] = edges.getEdges(std::make_pair(i, false)).size();
+		}
+	}
+	return std::make_tuple(std::move(hasGoodForkBw), std::move(hasGoodForkFw), std::move(forkAlleleCount));
+}
+
+std::pair<std::vector<std::vector<HaplotypeInformativeSite>>, std::vector<std::vector<HaplotypeInformativeSite>>> getReadForkEdges(const std::vector<bool>& hasGoodForkBw, const std::vector<bool>& hasGoodForkFw, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths)
+{
+	std::vector<std::vector<HaplotypeInformativeSite>> readForkEdgesFw;
+	std::vector<std::vector<HaplotypeInformativeSite>> readForkEdgesBw;
+	readForkEdgesBw.resize(readPaths.size());
+	readForkEdgesFw.resize(readPaths.size());
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			size_t readPos = readPaths[i].paths[j].readStartPos;
+			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
+			{
+				uint64_t node = readPaths[i].paths[j].path[k];
+				readPos += unitigGraph.lengths[node & maskUint64_t];
+				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
+				if (k == 0) continue;
+				uint64_t prevNode = readPaths[i].paths[j].path[k-1];
+				if (((prevNode & firstBitUint64_t) && hasGoodForkFw[prevNode & maskUint64_t]) || (((prevNode ^ firstBitUint64_t) & firstBitUint64_t) && hasGoodForkBw[prevNode & maskUint64_t]))
+				{
+					readForkEdgesFw[i].emplace_back();
+					readForkEdgesFw[i].back().readPos = readPos - 1 - unitigGraph.lengths[node & maskUint64_t];
+					readForkEdgesFw[i].back().bubble = prevNode;
+					readForkEdgesFw[i].back().allele = node;
+				}
+				if (((node & firstBitUint64_t) && hasGoodForkBw[node & maskUint64_t]) || (((node ^ firstBitUint64_t) & firstBitUint64_t) && hasGoodForkFw[node & maskUint64_t]))
+				{
+					readForkEdgesBw[i].emplace_back();
+					readForkEdgesBw[i].back().readPos = readPos - unitigGraph.lengths[node & maskUint64_t];
+					readForkEdgesBw[i].back().bubble = node ^ firstBitUint64_t;
+					readForkEdgesBw[i].back().allele = prevNode ^ firstBitUint64_t;
+				}
+			}
+		}
+	}
+	return std::make_pair(std::move(readForkEdgesBw), std::move(readForkEdgesFw));
+}
+
+bool isUsableCluster(const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& allelesInCluster, const double approxOneHapCoverage, const size_t firstMainCoverage, const size_t firstAlleleCount, const size_t secondMainCoverage, const size_t secondAlleleCount, const phmap::flat_hash_map<uint64_t, uint64_t>& forkAlleleCoverage)
+{
+	assert(firstAlleleCount >= 2);
+	assert(firstAlleleCount == secondAlleleCount);
+	phmap::flat_hash_set<uint64_t> allelesInFirst;
+	phmap::flat_hash_set<uint64_t> allelesInSecond;
+	size_t validPairs = 0;
+	size_t validPairsCoverage = 0;
+	size_t falsePositivePairsCoverage = 0;
+	for (auto pair : allelesInCluster)
+	{
+		if (pair.second >= approxOneHapCoverage * 0.5)
+		{
+			validPairs += 1;
+			validPairsCoverage += pair.second;
+			allelesInFirst.emplace(pair.first.first);
+			allelesInSecond.emplace(pair.first.second);
+		}
+		else if (pair.second >= approxOneHapCoverage * 0.25)
+		{
+			// ambiguous, just don't handle and assume not good
+			return false;
+		}
+		else
+		{
+			falsePositivePairsCoverage += pair.second;
+		}
+	}
+	if (allelesInFirst.size() < firstAlleleCount) return false;
+	if (allelesInSecond.size() < secondAlleleCount) return false;
+	if (validPairs != firstAlleleCount) return false;
+	if (validPairsCoverage < approxOneHapCoverage * 1.5) return false;
+	if (falsePositivePairsCoverage >= approxOneHapCoverage * 0.5) return false;
+	if (falsePositivePairsCoverage > validPairsCoverage * 0.1) return false;
+	if (validPairsCoverage < std::min(firstMainCoverage, secondMainCoverage)*0.25) return false;
+	return true;
+}
+
+bool forkIsHaplotypeInformative(const uint64_t left, const uint64_t right, const phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<size_t, std::vector<uint64_t>>>& forkPositionsInReads, const std::vector<std::vector<HaplotypeInformativeSite>>& forkEdgesBw, const std::vector<std::vector<HaplotypeInformativeSite>>& forkEdgesFw, const double approxOneHapCoverage, const phmap::flat_hash_map<uint64_t, size_t>& forkMainCoverage, const phmap::flat_hash_map<uint64_t, size_t>& forkAlleleCoverage, const phmap::flat_hash_map<uint64_t, size_t>& forkAlleleCount)
+{
+	const size_t clusteringMaxDistance = 100;
+	phmap::flat_hash_map<std::tuple<size_t, uint64_t, uint64_t>, size_t> allelePairsHereMap;
+	for (const auto& pair : forkPositionsInReads.at(left))
+	{
+		size_t read = pair.first;
+		if (forkPositionsInReads.at(right).count(read) == 0) continue;
+		for (const uint64_t secondpos : forkPositionsInReads.at(right).at(read))
+		{
+			for (const uint64_t firstpos : pair.second)
+			{
+				if ((firstpos & firstBitUint64_t) == (secondpos & firstBitUint64_t)) continue;
+				if (firstpos & firstBitUint64_t)
+				{
+					assert((secondpos ^ firstBitUint64_t) & firstBitUint64_t);
+					size_t i = firstpos & maskUint64_t;
+					size_t j = secondpos & maskUint64_t;
+					assert(forkEdgesFw[read][i].bubble == left);
+					assert(forkEdgesBw[read][j].bubble == right);
+					if (forkEdgesFw[read][i].readPos < forkEdgesBw[read][j].readPos) continue;
+					allelePairsHereMap[std::make_tuple(forkEdgesFw[read][i].readPos - forkEdgesBw[read][j].readPos, forkEdgesFw[read][i].allele, forkEdgesBw[read][j].allele)] += 1;
+				}
+				else
+				{
+					assert(secondpos & firstBitUint64_t);
+					size_t i = firstpos & maskUint64_t;
+					size_t j = secondpos & maskUint64_t;
+					assert(forkEdgesBw[read][i].bubble == left);
+					assert(forkEdgesFw[read][j].bubble == right);
+					if (forkEdgesFw[read][j].readPos < forkEdgesBw[read][i].readPos) continue;
+					allelePairsHereMap[std::make_tuple(forkEdgesFw[read][j].readPos - forkEdgesBw[read][i].readPos, forkEdgesBw[read][i].allele, forkEdgesFw[read][j].allele)] += 1;
+				}
+			}
+		}
+	}
+	std::vector<std::tuple<size_t, uint64_t, uint64_t, size_t>> allelePairsHere;
+	for (auto t : allelePairsHereMap)
+	{
+		allelePairsHere.emplace_back(std::get<0>(t.first), std::get<1>(t.first), std::get<2>(t.first), t.second);
+	}
+	std::sort(allelePairsHere.begin(), allelePairsHere.end());
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> allelesInCluster;
+	allelesInCluster[std::make_pair(std::get<1>(allelePairsHere[0]), std::get<2>(allelePairsHere[0]))] += std::get<3>(allelePairsHere[0]);
+	for (size_t i = 1; i < allelePairsHere.size(); i++)
+	{
+		if (std::get<0>(allelePairsHere[i]) > std::get<0>(allelePairsHere[i-1])+clusteringMaxDistance)
+		{
+			if (isUsableCluster(allelesInCluster, approxOneHapCoverage, forkMainCoverage.at(left), forkAlleleCount.at(left), forkMainCoverage.at(right), forkAlleleCount.at(right), forkAlleleCoverage))
+			{
+				return true;
+			}
+			allelesInCluster.clear();
+		}
+		allelesInCluster[std::make_pair(std::get<1>(allelePairsHere[i]), std::get<2>(allelePairsHere[i]))] += std::get<3>(allelePairsHere[i]);
+	}
+	if (isUsableCluster(allelesInCluster, approxOneHapCoverage, forkMainCoverage.at(left), forkAlleleCount.at(left), forkMainCoverage.at(right), forkAlleleCount.at(right), forkAlleleCoverage))
+	{
+		return true;
+	}
+	return false;
+}
+
+std::pair<std::vector<bool>, std::vector<bool>> getHaplotypeInformativeForkPairs(const std::vector<std::vector<HaplotypeInformativeSite>>& forkEdgesBw, const std::vector<std::vector<HaplotypeInformativeSite>>& forkEdgesFw, const size_t nodeCount, const phmap::flat_hash_map<uint64_t, size_t>& forkAlleleCount, const double approxOneHapCoverage)
+{
+	assert(forkEdgesFw.size() == forkEdgesBw.size());
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, phmap::flat_hash_map<std::tuple<size_t, uint64_t, uint64_t>, size_t>> forkCrossers;
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<size_t, std::vector<uint64_t>>> forkPositionsInReads;
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> checkablePairsCoverage;
+	phmap::flat_hash_map<uint64_t, size_t> forkMainCoverage;
+	phmap::flat_hash_map<uint64_t, size_t> forkAlleleCoverage;
+	for (size_t i = 0; i < forkEdgesFw.size(); i++)
+	{
+		for (size_t j = 0; j < forkEdgesFw[i].size(); j++)
+		{
+			auto site = forkEdgesFw[i][j];
+			forkPositionsInReads[site.bubble][i].emplace_back(j + firstBitUint64_t);
+			forkMainCoverage[site.bubble] += 1;
+			forkAlleleCoverage[site.allele] += 1;
+		}
+		for (size_t j = 0; j < forkEdgesBw[i].size(); j++)
+		{
+			auto site = forkEdgesBw[i][j];
+			forkPositionsInReads[site.bubble][i].emplace_back(j);
+			forkMainCoverage[site.bubble] += 1;
+			forkAlleleCoverage[site.allele] += 1;
+		}
+	}
+	size_t pairsWithEnoughCoverage = 0;
+	std::cerr << "find checkable pairs" << std::endl;
+	std::vector<bool> resultFw;
+	std::vector<bool> resultBw;
+	resultFw.resize(nodeCount, false);
+	resultBw.resize(nodeCount, false);
+	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> checkedPairs;
+	for (size_t i = 0; i < forkEdgesBw.size(); i++)
+	{
+		std::cerr << "read " << i << " has " << forkEdgesBw[i].size() << " bw forks, " << forkEdgesFw[i].size() << " fw forks" << std::endl;
+		std::vector<std::vector<HaplotypeInformativeSite>> fwSitesPerAlleleCount;
+		std::vector<std::vector<HaplotypeInformativeSite>> fwSitesNeedsCheckingPerAlleleCount;
+		std::vector<std::vector<HaplotypeInformativeSite>> bwSitesResolvedPerAlleleCount;
+		std::vector<std::vector<HaplotypeInformativeSite>> bwSitesNeedsCheckingPerAlleleCount;
+		fwSitesPerAlleleCount.resize(5);
+		fwSitesNeedsCheckingPerAlleleCount.resize(5);
+		bwSitesResolvedPerAlleleCount.resize(5);
+		bwSitesNeedsCheckingPerAlleleCount.resize(5);
+		for (auto fwsite : forkEdgesFw[i])
+		{
+			assert(forkAlleleCount.at(fwsite.bubble) >= 2);
+			size_t alleleCount = forkAlleleCount.at(fwsite.bubble)-2;
+			if (alleleCount >= fwSitesPerAlleleCount.size()) alleleCount = fwSitesPerAlleleCount.size()-1;
+			assert(fwSitesPerAlleleCount[alleleCount].size() == 0 || fwsite.readPos > fwSitesPerAlleleCount[alleleCount].back().readPos);
+			fwSitesPerAlleleCount[alleleCount].emplace_back(fwsite);
+			if ((fwsite.bubble & firstBitUint64_t) && !resultFw[fwsite.bubble & maskUint64_t]) fwSitesNeedsCheckingPerAlleleCount[alleleCount].emplace_back(fwsite);
+			if (((fwsite.bubble ^ firstBitUint64_t) & firstBitUint64_t) && !resultBw[fwsite.bubble & maskUint64_t]) fwSitesNeedsCheckingPerAlleleCount[alleleCount].emplace_back(fwsite);
+		}
+		for (auto bwsite : forkEdgesBw[i])
+		{
+			assert(forkAlleleCount.at(bwsite.bubble) >= 2);
+			size_t alleleCount = forkAlleleCount.at(bwsite.bubble)-2;
+			if (alleleCount >= bwSitesResolvedPerAlleleCount.size()) alleleCount = bwSitesResolvedPerAlleleCount.size()-1;
+			if (((bwsite.bubble & firstBitUint64_t) && !resultFw[bwsite.bubble & maskUint64_t]) || (((bwsite.bubble ^ firstBitUint64_t) & firstBitUint64_t) && !resultBw[bwsite.bubble & maskUint64_t]))
+			{
+				bwSitesNeedsCheckingPerAlleleCount[alleleCount].emplace_back(bwsite);
+			}
+			else
+			{
+				bwSitesResolvedPerAlleleCount[alleleCount].emplace_back(bwsite);
+			}
+		}
+		for (size_t count = 0; count < fwSitesPerAlleleCount.size(); count++)
+		{
+			for (size_t bwi = 0; bwi < bwSitesNeedsCheckingPerAlleleCount[count].size(); bwi++)
+			{
+				auto bwsite = bwSitesNeedsCheckingPerAlleleCount[count][bwi];
+				if ((bwsite.bubble & firstBitUint64_t) && resultFw[bwsite.bubble & maskUint64_t]) break;
+				if (((bwsite.bubble ^ firstBitUint64_t) & firstBitUint64_t) && resultBw[bwsite.bubble & maskUint64_t]) break;
+				size_t fwistart = 0;
+				for (size_t fwi = fwistart; fwi < fwSitesPerAlleleCount[count].size(); fwi++)
+				{
+					auto fwsite = fwSitesPerAlleleCount[count][fwi];
+					if (fwsite.readPos < bwsite.readPos)
+					{
+						fwistart = fwi+1;
+						continue;
+					}
+					if (forkAlleleCount.at(fwsite.bubble) != forkAlleleCount.at(bwsite.bubble)) continue;
+					std::pair<uint64_t, uint64_t> key;
+					// size_t distance = fwsite.readPos - bwsite.readPos;
+					if (fwsite.bubble < bwsite.bubble)
+					{
+						key = std::make_pair(fwsite.bubble, bwsite.bubble);
+						// checkablePairsCoverage[std::make_pair(fwsite.bubble, bwsite.bubble)] += 1;
+						// if (checkablePairsCoverage[std::make_pair(fwsite.bubble, bwsite.bubble)] >= approxOneHapCoverage * 1.5 && checkablePairsCoverage[std::make_pair(fwsite.bubble, bwsite.bubble)]-1 < approxOneHapCoverage * 1.5)
+						// {
+						// 	pairsWithEnoughCoverage += 1;
+						// }
+						// forkCrossers[std::make_pair(fwsite.bubble, bwsite.bubble)][std::make_tuple(distance, fwsite.allele, bwsite.allele)] += 1;
+					}
+					else
+					{
+						key = std::make_pair(bwsite.bubble, fwsite.bubble);
+						// checkablePairsCoverage[std::make_pair(bwsite.bubble, fwsite.bubble)] += 1;
+						// if (checkablePairsCoverage[std::make_pair(bwsite.bubble, fwsite.bubble)] >= approxOneHapCoverage * 1.5 && checkablePairsCoverage[std::make_pair(bwsite.bubble, fwsite.bubble)]-1 < approxOneHapCoverage * 1.5)
+						// {
+						// 	pairsWithEnoughCoverage += 1;
+						// }
+						// forkCrossers[std::make_pair(bwsite.bubble, fwsite.bubble)][std::make_tuple(distance, bwsite.allele, fwsite.allele)] += 1;
+					}
+					if (checkedPairs.count(key) == 1) continue;
+					checkedPairs.insert(key);
+					std::cerr << "check " << ((key.first & firstBitUint64_t) ? ">" : "<") << (key.first & maskUint64_t) << " " << ((key.second & firstBitUint64_t) ? ">" : "<") << (key.second & maskUint64_t) << std::endl;
+					if (forkIsHaplotypeInformative(key.first, key.second, forkPositionsInReads, forkEdgesBw, forkEdgesFw, approxOneHapCoverage, forkMainCoverage, forkAlleleCoverage, forkAlleleCount))
+					{
+						std::cerr << "haplotype informative " << ((key.first & firstBitUint64_t) ? ">" : "<") << (key.first & maskUint64_t) << " " << ((key.second & firstBitUint64_t) ? ">" : "<") << (key.second & maskUint64_t) << std::endl;
+						if (key.first & firstBitUint64_t)
+						{
+							resultFw[key.first & maskUint64_t] = true;
+						}
+						else
+						{
+							resultBw[key.first & maskUint64_t] = true;
+						}
+						if (key.second & firstBitUint64_t)
+						{
+							resultFw[key.second & maskUint64_t] = true;
+						}
+						else
+						{
+							resultBw[key.second & maskUint64_t] = true;
+						}
+					}
+				}
+			}
+			for (size_t bwi = 0; bwi < bwSitesResolvedPerAlleleCount[count].size(); bwi++)
+			{
+				auto bwsite = bwSitesResolvedPerAlleleCount[count][bwi];
+				if ((bwsite.bubble & firstBitUint64_t) && resultFw[bwsite.bubble & maskUint64_t]) break;
+				if (((bwsite.bubble ^ firstBitUint64_t) & firstBitUint64_t) && resultBw[bwsite.bubble & maskUint64_t]) break;
+				size_t fwistart = 0;
+				for (size_t fwi = fwistart; fwi < fwSitesNeedsCheckingPerAlleleCount[count].size(); fwi++)
+				{
+					auto fwsite = fwSitesNeedsCheckingPerAlleleCount[count][fwi];
+					if (fwsite.readPos < bwsite.readPos)
+					{
+						fwistart = fwi+1;
+						continue;
+					}
+					if (forkAlleleCount.at(fwsite.bubble) != forkAlleleCount.at(bwsite.bubble)) continue;
+					std::pair<uint64_t, uint64_t> key;
+					// size_t distance = fwsite.readPos - bwsite.readPos;
+					if (fwsite.bubble < bwsite.bubble)
+					{
+						key = std::make_pair(fwsite.bubble, bwsite.bubble);
+						// checkablePairsCoverage[std::make_pair(fwsite.bubble, bwsite.bubble)] += 1;
+						// if (checkablePairsCoverage[std::make_pair(fwsite.bubble, bwsite.bubble)] >= approxOneHapCoverage * 1.5 && checkablePairsCoverage[std::make_pair(fwsite.bubble, bwsite.bubble)]-1 < approxOneHapCoverage * 1.5)
+						// {
+						// 	pairsWithEnoughCoverage += 1;
+						// }
+						// forkCrossers[std::make_pair(fwsite.bubble, bwsite.bubble)][std::make_tuple(distance, fwsite.allele, bwsite.allele)] += 1;
+					}
+					else
+					{
+						key = std::make_pair(bwsite.bubble, fwsite.bubble);
+						// checkablePairsCoverage[std::make_pair(bwsite.bubble, fwsite.bubble)] += 1;
+						// if (checkablePairsCoverage[std::make_pair(bwsite.bubble, fwsite.bubble)] >= approxOneHapCoverage * 1.5 && checkablePairsCoverage[std::make_pair(bwsite.bubble, fwsite.bubble)]-1 < approxOneHapCoverage * 1.5)
+						// {
+						// 	pairsWithEnoughCoverage += 1;
+						// }
+						// forkCrossers[std::make_pair(bwsite.bubble, fwsite.bubble)][std::make_tuple(distance, bwsite.allele, fwsite.allele)] += 1;
+					}
+					if (checkedPairs.count(key) == 1) continue;
+					checkedPairs.insert(key);
+					std::cerr << "check " << ((key.first & firstBitUint64_t) ? ">" : "<") << (key.first & maskUint64_t) << " " << ((key.second & firstBitUint64_t) ? ">" : "<") << (key.second & maskUint64_t) << std::endl;
+					if (forkIsHaplotypeInformative(key.first, key.second, forkPositionsInReads, forkEdgesBw, forkEdgesFw, approxOneHapCoverage, forkMainCoverage, forkAlleleCoverage, forkAlleleCount))
+					{
+						std::cerr << "haplotype informative " << ((key.first & firstBitUint64_t) ? ">" : "<") << (key.first & maskUint64_t) << " " << ((key.second & firstBitUint64_t) ? ">" : "<") << (key.second & maskUint64_t) << std::endl;
+						if (key.first & firstBitUint64_t)
+						{
+							resultFw[key.first & maskUint64_t] = true;
+						}
+						else
+						{
+							resultBw[key.first & maskUint64_t] = true;
+						}
+						if (key.second & firstBitUint64_t)
+						{
+							resultFw[key.second & maskUint64_t] = true;
+						}
+						else
+						{
+							resultBw[key.second & maskUint64_t] = true;
+						}
+					}
+				}
+			}
+		}
+		// for (auto bwsite : forkEdgesBw[i])
+		// {
+		// 	for (auto fwsite : forkEdgesFw[i])
+		// 	{
+		// 		if (fwsite.readPos < bwsite.readPos) continue;
+		// 		if (forkAlleleCount.at(fwsite.bubble) != forkAlleleCount.at(bwsite.bubble)) continue;
+		// 		// size_t distance = fwsite.readPos - bwsite.readPos;
+		// 		if (fwsite.bubble < bwsite.bubble || (fwsite.bubble == bwsite.bubble && fwsite.allele < bwsite.allele))
+		// 		{
+		// 			checkablePairsCoverage[std::make_pair(fwsite.bubble, bwsite.bubble)] += 1;
+		// 			if (checkablePairsCoverage[std::make_pair(fwsite.bubble, bwsite.bubble)] >= approxOneHapCoverage * 1.5 && checkablePairsCoverage[std::make_pair(fwsite.bubble, bwsite.bubble)]-1 < approxOneHapCoverage * 1.5)
+		// 			{
+		// 				pairsWithEnoughCoverage += 1;
+		// 			}
+		// 			// forkCrossers[std::make_pair(fwsite.bubble, bwsite.bubble)][std::make_tuple(distance, fwsite.allele, bwsite.allele)] += 1;
+		// 		}
+		// 		else
+		// 		{
+		// 			checkablePairsCoverage[std::make_pair(bwsite.bubble, fwsite.bubble)] += 1;
+		// 			if (checkablePairsCoverage[std::make_pair(bwsite.bubble, fwsite.bubble)] >= approxOneHapCoverage * 1.5 && checkablePairsCoverage[std::make_pair(bwsite.bubble, fwsite.bubble)]-1 < approxOneHapCoverage * 1.5)
+		// 			{
+		// 				pairsWithEnoughCoverage += 1;
+		// 			}
+		// 			// forkCrossers[std::make_pair(bwsite.bubble, fwsite.bubble)][std::make_tuple(distance, bwsite.allele, fwsite.allele)] += 1;
+		// 		}
+		// 	}
+		// }
+	}
+	// std::cerr << checkablePairsCoverage.size() << " total pairs" << std::endl;
+	// std::cerr << pairsWithEnoughCoverage << " pairs with enough coverage" << std::endl;
+	// std::cerr << "check if pairs might be haplotype informative" << std::endl;
+	// for (auto covpair : checkablePairsCoverage)
+	// {
+	// 	if (covpair.second < approxOneHapCoverage * 1.5) continue;
+	// 	auto pair = covpair.first;
+	// 	if (((pair.first & firstBitUint64_t) && resultFw[pair.first & maskUint64_t]) || (((pair.first ^ firstBitUint64_t) & firstBitUint64_t) && resultBw[pair.first & maskUint64_t]))
+	// 	{
+	// 		if (((pair.second & firstBitUint64_t) && resultFw[pair.second & maskUint64_t]) || (((pair.second ^ firstBitUint64_t) & firstBitUint64_t) && resultBw[pair.second & maskUint64_t]))
+	// 		{
+	// 			continue;
+	// 		}
+	// 	}
+	// 	phmap::flat_hash_map<size_t, std::vector<uint64_t>> firstPositionsInReads;
+	// 	phmap::flat_hash_map<size_t, std::vector<uint64_t>> secondPositionsInReads;
+	// 	for (const auto& pair2 : forkPositionsInReads.at(pair.first))
+	// 	{
+	// 		firstPositionsInReads[pair2.first].emplace_back(pair2.second);
+	// 	}
+	// 	for (const auto& pair2 : forkPositionsInReads.at(pair.second))
+	// 	{
+	// 		secondPositionsInReads[pair2.first].emplace_back(pair2.second);
+	// 	}
+	// 	phmap::flat_hash_map<std::tuple<size_t, uint64_t, uint64_t>, size_t> allelePairsHereMap;
+	// 	for (const auto& pair2 : firstPositionsInReads)
+	// 	{
+	// 		size_t read = pair2.first;
+	// 		if (secondPositionsInReads.count(read) == 0) continue;
+	// 		for (const uint64_t firstpos : pair2.second)
+	// 		{
+	// 			for (const uint64_t secondpos : secondPositionsInReads.at(read))
+	// 			{
+	// 				if ((firstpos & firstBitUint64_t) == (secondpos & firstBitUint64_t)) continue;
+	// 				if (firstpos & firstBitUint64_t)
+	// 				{
+	// 					assert((secondpos ^ firstBitUint64_t) & firstBitUint64_t);
+	// 					size_t i = firstpos & maskUint64_t;
+	// 					size_t j = secondpos & maskUint64_t;
+	// 					if (forkEdgesFw[read][i].readPos < forkEdgesBw[read][j].readPos) continue;
+	// 					allelePairsHereMap[std::make_tuple(forkEdgesFw[read][i].readPos - forkEdgesBw[read][j].readPos, forkEdgesFw[read][i].allele, forkEdgesBw[read][j].allele)] += 1;
+	// 				}
+	// 				else
+	// 				{
+	// 					assert(secondpos & firstBitUint64_t);
+	// 					size_t j = firstpos & maskUint64_t;
+	// 					size_t i = secondpos & maskUint64_t;
+	// 					if (forkEdgesFw[read][i].readPos < forkEdgesBw[read][j].readPos) continue;
+	// 					allelePairsHereMap[std::make_tuple(forkEdgesFw[read][i].readPos - forkEdgesBw[read][j].readPos, forkEdgesFw[read][i].allele, forkEdgesBw[read][j].allele)] += 1;
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// 	std::vector<std::tuple<size_t, uint64_t, uint64_t, size_t>> allelePairsHere;
+	// 	for (auto t : allelePairsHereMap)
+	// 	{
+	// 		allelePairsHere.emplace_back(std::get<0>(t.first), std::get<1>(t.first), std::get<2>(t.first), t.second);
+	// 	}
+	// 	std::sort(allelePairsHere.begin(), allelePairsHere.end());
+	// 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> allelesInCluster;
+	// 	allelesInCluster[std::make_pair(std::get<1>(allelePairsHere[0]), std::get<2>(allelePairsHere[0]))] += std::get<3>(allelePairsHere[0]);
+	// 	for (size_t i = 1; i < allelePairsHere.size(); i++)
+	// 	{
+	// 		if (std::get<0>(allelePairsHere[i]) > std::get<0>(allelePairsHere[i-1])+clusteringMaxDistance)
+	// 		{
+	// 			if (isUsableCluster(allelesInCluster, approxOneHapCoverage, forkMainCoverage[pair.first], forkAlleleCount.at(pair.first), forkMainCoverage[pair.second], forkAlleleCount.at(pair.second), forkAlleleCoverage))
+	// 			{
+	// 				if (pair.first & firstBitUint64_t)
+	// 				{
+	// 					resultFw[pair.first & maskUint64_t] = true;
+	// 				}
+	// 				else
+	// 				{
+	// 					resultBw[pair.first & maskUint64_t] = true;
+	// 				}
+	// 				if (pair.second & firstBitUint64_t)
+	// 				{
+	// 					resultFw[pair.second & maskUint64_t] = true;
+	// 				}
+	// 				else
+	// 				{
+	// 					resultBw[pair.second & maskUint64_t] = true;
+	// 				}
+	// 				break;
+	// 			}
+	// 			allelesInCluster.clear();
+	// 		}
+	// 		allelesInCluster[std::make_pair(std::get<1>(allelePairsHere[i]), std::get<2>(allelePairsHere[i]))] += std::get<3>(allelePairsHere[i]);
+	// 	}
+	// 	if (isUsableCluster(allelesInCluster, approxOneHapCoverage, forkMainCoverage[pair.first], forkAlleleCount.at(pair.first), forkMainCoverage[pair.second], forkAlleleCount.at(pair.second), forkAlleleCoverage))
+	// 	{
+	// 		if (pair.first & firstBitUint64_t)
+	// 		{
+	// 			resultFw[pair.first & maskUint64_t] = true;
+	// 		}
+	// 		else
+	// 		{
+	// 			resultBw[pair.first & maskUint64_t] = true;
+	// 		}
+	// 		if (pair.second & firstBitUint64_t)
+	// 		{
+	// 			resultFw[pair.second & maskUint64_t] = true;
+	// 		}
+	// 		else
+	// 		{
+	// 			resultBw[pair.second & maskUint64_t] = true;
+	// 		}
+	// 	}
+	// }
+	return std::make_pair(std::move(resultBw), std::move(resultFw));
+}
+
+std::vector<std::vector<HaplotypeInformativeSite>> getHaplotypeInformativeForks(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+{
+	std::vector<bool> hasGoodForkFw;
+	std::vector<bool> hasGoodForkBw;
+	phmap::flat_hash_map<uint64_t, size_t> forkAlleleCount;
+	std::tie(hasGoodForkBw, hasGoodForkFw, forkAlleleCount) = getGoodForks(unitigGraph, approxOneHapCoverage);
+	for (size_t i = 0; i < hasGoodForkFw.size(); i++)
+	{
+		if (hasGoodForkFw[i]) std::cerr << "maybe good fork >" << i << std::endl;
+		if (hasGoodForkBw[i]) std::cerr << "maybe good fork <" << i << std::endl;
+	}
+	std::vector<std::vector<HaplotypeInformativeSite>> readForkEdgesFw;
+	std::vector<std::vector<HaplotypeInformativeSite>> readForkEdgesBw;
+	std::tie(readForkEdgesBw, readForkEdgesFw) = getReadForkEdges(hasGoodForkBw, hasGoodForkFw, unitigGraph, readPaths);
+	std::vector<bool> hasHaplotypeInformativeForkFw;
+	std::vector<bool> hasHaplotypeInformativeForkBw;
+	std::tie(hasHaplotypeInformativeForkBw, hasHaplotypeInformativeForkFw) = getHaplotypeInformativeForkPairs(readForkEdgesBw, readForkEdgesFw, unitigGraph.nodeCount(), forkAlleleCount, approxOneHapCoverage);
+	for (size_t i = 0; i < hasHaplotypeInformativeForkFw.size(); i++)
+	{
+		if (hasHaplotypeInformativeForkFw[i]) std::cerr << "haplotype informative fork >" << i << std::endl;
+		if (hasHaplotypeInformativeForkBw[i]) std::cerr << "haplotype informative fork <" << i << std::endl;
+	}
+	std::vector<std::vector<HaplotypeInformativeSite>> result;
+	result.resize(readPaths.size());
+	for (size_t i = 0; i < readForkEdgesFw.size(); i++)
+	{
+		for (auto site : readForkEdgesFw[i])
+		{
+			if ((site.bubble & firstBitUint64_t) && !hasHaplotypeInformativeForkFw[site.bubble & maskUint64_t]) continue;
+			if (((site.bubble ^ firstBitUint64_t) & firstBitUint64_t) && !hasHaplotypeInformativeForkBw[site.bubble & maskUint64_t]) continue;
+			result[i].emplace_back(site);
+		}
+	}
+	for (size_t i = 0; i < readForkEdgesBw.size(); i++)
+	{
+		for (auto site : readForkEdgesBw[i])
+		{
+			if ((site.bubble & firstBitUint64_t) && !hasHaplotypeInformativeForkBw[site.bubble & maskUint64_t]) continue;
+			if (((site.bubble ^ firstBitUint64_t) & firstBitUint64_t) && !hasHaplotypeInformativeForkFw[site.bubble & maskUint64_t]) continue;
+			result[i].emplace_back();
+			result[i].back().readPos += 1;
+			result[i].back().bubble ^= firstBitUint64_t;
+			result[i].back().allele ^= firstBitUint64_t;
+		}
+	}
+	return result;
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHaploforks(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t resolveLength)
+{
+	std::vector<bool> hasGoodForkFw;
+	std::vector<bool> hasGoodForkBw;
+	phmap::flat_hash_map<uint64_t, size_t> forkAlleleCount;
+	std::tie(hasGoodForkBw, hasGoodForkFw, forkAlleleCount) = getGoodForks(unitigGraph, approxOneHapCoverage);
+	for (size_t i = 0; i < hasGoodForkFw.size(); i++)
+	{
+		if (hasGoodForkFw[i]) std::cerr << "maybe good fork >" << i << std::endl;
+		if (hasGoodForkBw[i]) std::cerr << "maybe good fork <" << i << std::endl;
+	}
+	std::vector<std::vector<HaplotypeInformativeSite>> readForkEdgesFw;
+	std::vector<std::vector<HaplotypeInformativeSite>> readForkEdgesBw;
+	std::tie(readForkEdgesBw, readForkEdgesFw) = getReadForkEdges(hasGoodForkBw, hasGoodForkFw, unitigGraph, readPaths);
+	std::vector<bool> hasHaplotypeInformativeForkFw;
+	std::vector<bool> hasHaplotypeInformativeForkBw;
+	std::tie(hasHaplotypeInformativeForkBw, hasHaplotypeInformativeForkFw) = getHaplotypeInformativeForkPairs(readForkEdgesBw, readForkEdgesFw, unitigGraph.nodeCount(), forkAlleleCount, approxOneHapCoverage);
+	for (size_t i = 0; i < hasHaplotypeInformativeForkFw.size(); i++)
+	{
+		if (hasHaplotypeInformativeForkFw[i]) std::cerr << "haplotype informative fork >" << i << std::endl;
+		if (hasHaplotypeInformativeForkBw[i]) std::cerr << "haplotype informative fork <" << i << std::endl;
+	}
+	std::vector<bool> informativeNode;
+	informativeNode.resize(unitigGraph.nodeCount(), false);
+	auto edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	for (size_t i = 0; i < hasHaplotypeInformativeForkFw.size(); i++)
+	{
+		if (hasHaplotypeInformativeForkFw[i])
+		{
+			for (auto edge : edges.getEdges(std::make_pair(i, true)))
+			{
+				informativeNode[edge.first] = true;
+			}
+		}
+		if (hasHaplotypeInformativeForkBw[i])
+		{
+			for (auto edge : edges.getEdges(std::make_pair(i, false)))
+			{
+				informativeNode[edge.first] = true;
+			}
+		}
+	}
+	std::vector<AnchorChain> fakeChains;
+	for (size_t i = 0; i < informativeNode.size(); i++)
+	{
+		if (!informativeNode[i]) continue;
+		std::cerr << "fork informative node " << i << std::endl;
+		fakeChains.emplace_back();
+		fakeChains.back().ploidy = 1;
+		fakeChains.back().nodes.emplace_back(i);
+		fakeChains.back().nodeOffsets.emplace_back(0);
+	}
+	std::vector<std::vector<ChainPosition>> fakePositions = getReadChainPositions(unitigGraph, readPaths, fakeChains);
+	std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>>> hetInfoPerRead;
+	hetInfoPerRead.resize(readPaths.size());
+	UnitigGraph unzippedGraph;
+	std::vector<ReadPathBundle> unzippedReadPaths;
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(fakeChains, unitigGraph, readPaths, hetInfoPerRead, fakePositions, resolveLength);
+	RankBitvector kept;
+	kept.resize(unzippedGraph.nodeCount());
+	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
+	{
+		kept.set(i, unzippedGraph.coverages[i] >= 2);
+	}
+	return filterUnitigGraph(unzippedGraph, unzippedReadPaths, kept);
+
+}

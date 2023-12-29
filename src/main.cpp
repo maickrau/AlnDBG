@@ -117,7 +117,7 @@ void forbidAlnsFromDifferentHaplotypes(const UnitigGraph& unitigGraph, const std
 }
 */
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> getInitialGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const size_t k, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> getInitialGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const size_t k, const double approxOneHapCoverage, const std::string& prefix)
 {
 	UnitigGraph unitigGraph;
 	std::vector<ReadPathBundle> readUnitigGraphPaths;
@@ -128,9 +128,12 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> getInitialGraph(const std::v
 //	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraph(unitigGraph, readUnitigGraphPaths, getGraphPhaseBlockNodes(unitigGraph, readUnitigGraphPaths, 17));
 //	forbidAlnsFromDifferentHaplotypes(unitigGraph, readUnitigGraphPaths, matches, readNames);
 //	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
-	auto nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLinearizable(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = popHaploidChainBubbles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+	auto nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
+	writeGraph(prefix + "graph.gfa", unitigGraph, nodeSequences, k);
+//	writeGraph(outputFileName, unitigGraph, k);
+	writePaths(prefix + "paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 	return std::make_pair(std::move(unitigGraph), std::move(readUnitigGraphPaths));
 }
 
@@ -154,6 +157,11 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	writeGraph("onephase-graph.gfa", unitigGraph, nodeSequences, k);
 	writePaths("onephase-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphHaploforks(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 2000);
+	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
+	writeGraph("one1phase-graph.gfa", unitigGraph, nodeSequences, k);
+	writePaths("one1phase-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+
 	std::tie(unitigGraph, readUnitigGraphPaths) = connectChainGaps(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage, 4, 2);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = popHaploidChainBubbles(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
@@ -311,6 +319,91 @@ bool annotationsMismatch(const std::vector<std::vector<ChainPosition>>& readAnno
 	return false;
 }
 
+bool annotationsMismatch(const std::vector<std::vector<HaplotypeInformativeSite>>& readAnnotations, const std::vector<size_t>& readLengths, const size_t leftRead, const size_t rightRead, const size_t leftStart, const size_t rightStart, const bool rightFw)
+{
+	if (readAnnotations[leftRead].size() == 0) return false;
+	if (readAnnotations[rightRead].size() == 0) return false;
+	std::vector<HaplotypeInformativeSite> annotationsLeft;
+	std::vector<HaplotypeInformativeSite> annotationsRight;
+	for (const auto chain : readAnnotations[leftRead])
+	{
+		annotationsLeft.emplace_back(chain);
+		annotationsLeft.back().readPos -= (int)leftStart;
+	}
+	for (const auto chain : readAnnotations[rightRead])
+	{
+		if (rightFw)
+		{
+			annotationsRight.emplace_back(chain);
+			annotationsRight.back().readPos -= (int)rightStart;
+		}
+		else
+		{
+			annotationsRight.emplace_back(chain);
+			annotationsRight.back().bubble ^= firstBitUint64_t;
+			annotationsRight.back().allele ^= firstBitUint64_t;
+			annotationsRight.back().readPos = readLengths[rightRead] - annotationsRight.back().readPos;
+		}
+	}
+	int leftReadStart = -(int)leftStart;
+	int rightReadStart = -(int)rightStart;
+	int leftReadEnd = leftReadStart + (int)readLengths[leftRead];
+	int rightReadEnd = rightReadStart + (int)readLengths[rightRead];
+	assert(leftReadEnd > 0);
+	assert(rightReadEnd > 0);
+	size_t missingCount = 0;
+	size_t mismatchCount = 0;
+	for (size_t i = 0; i < annotationsLeft.size(); i++)
+	{
+		if (annotationsLeft[i].readPos < rightReadStart+1000) continue;
+		if (annotationsLeft[i].readPos > rightReadEnd-1000) continue;
+		bool hasMatch = false;
+		bool hasMismatch = false;
+		for (size_t j = 0; j < annotationsRight.size(); j++)
+		{
+			if (annotationsRight[j].bubble != annotationsLeft[i].bubble) continue;
+			if (annotationsRight[j].readPos < annotationsLeft[i].readPos-100) continue;
+			if (annotationsRight[j].readPos > annotationsLeft[i].readPos+100) continue;
+			if (annotationsRight[j].allele != annotationsLeft[i].allele)
+			{
+				hasMismatch = true;
+			}
+			else
+			{
+				hasMatch = true;
+			}
+		}
+		if (!hasMatch && hasMismatch) mismatchCount += 1;
+		if (!hasMatch) missingCount += 1;
+	}
+	for (size_t i = 0; i < annotationsRight.size(); i++)
+	{
+		if (annotationsRight[i].readPos < rightReadStart+1000) continue;
+		if (annotationsRight[i].readPos > rightReadEnd-1000) continue;
+		bool hasMatch = false;
+		bool hasMismatch = false;
+		for (size_t j = 0; j < annotationsLeft.size(); j++)
+		{
+			if (annotationsLeft[j].bubble != annotationsRight[i].bubble) continue;
+			if (annotationsLeft[j].readPos < annotationsRight[i].readPos-100) continue;
+			if (annotationsLeft[j].readPos > annotationsRight[i].readPos+100) continue;
+			if (annotationsLeft[j].allele != annotationsRight[i].allele)
+			{
+				hasMismatch = true;
+			}
+			else
+			{
+				hasMatch = true;
+			}
+		}
+		if (!hasMatch && hasMismatch) mismatchCount += 1;
+		if (!hasMatch) mismatchCount += 1;
+	}
+	if (mismatchCount >= 1) return true;
+	if (missingCount >= 3) return true;
+	return false;
+}
+
 std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIndex, const std::vector<TwobitString>& readSequences, size_t numThreads, const std::vector<size_t>& rawReadLengths, const size_t minAlignmentLength, const size_t k, const size_t graphk, const size_t graphd, const size_t maxIndexCoverage, const std::vector<std::vector<ChainPosition>>& readAnnotations)
 {
 	std::mutex printMutex;
@@ -387,6 +480,30 @@ std::vector<MatchGroup> getMatches(const MatchIndex& matchIndex, const std::vect
 	return getMatchesFilteredByAnnotation(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, maxIndexCoverage, tmp);
 }
 
+std::vector<MatchGroup> filterMatchesByAnnotations(const std::vector<MatchGroup>& initialMatches, const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<ChainPosition>>& chainAnnotations, const std::vector<std::vector<HaplotypeInformativeSite>>& haplotypeEdgeAnnotations)
+{
+	std::vector<MatchGroup> result;
+	size_t filteredByChain = 0;
+	size_t filteredByHaplotypeEdge = 0;
+	for (size_t i = 0; i < initialMatches.size(); i++)
+	{
+		if (annotationsMismatch(chainAnnotations, rawReadLengths, initialMatches[i].leftRead, initialMatches[i].rightRead, initialMatches[i].leftStart, initialMatches[i].rightStart, initialMatches[i].rightFw))
+		{
+			filteredByChain += 1;
+			continue;
+		}
+		if (annotationsMismatch(haplotypeEdgeAnnotations, rawReadLengths, initialMatches[i].leftRead, initialMatches[i].rightRead, initialMatches[i].leftStart, initialMatches[i].rightStart, initialMatches[i].rightFw))
+		{
+			filteredByHaplotypeEdge += 1;
+			continue;
+		}
+		result.emplace_back(initialMatches[i]);
+	}
+	std::cerr << "filtered out " << filteredByChain << " matches by chain" << std::endl;
+	std::cerr << "filtered out " << filteredByHaplotypeEdge << " matches by haplotype edges" << std::endl;
+	return result;
+}
+
 int main(int argc, char** argv)
 {
 	size_t numThreads = std::stoi(argv[1]);
@@ -437,13 +554,38 @@ int main(int argc, char** argv)
 		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
 	}
 	auto rawReadLengths = storage.getRawReadLengths();
-	std::vector<MatchGroup> matches = getMatches(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, 100);
+	std::vector<MatchGroup> initialMatches = getMatches(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, 100);
+	std::vector<MatchGroup> filteredMatches = initialMatches;
 //	doHaplofilter(matches, readKmerLengths);
-	{
-		auto initial = getInitialGraph(readKmerLengths, readNames, readSequences, matches, minCoverage, graphk, approxOneHapCoverage);
-		auto chains = getAnchorChains(initial.first, initial.second, approxOneHapCoverage);
-		auto readAnnotations = getReadChainPositions(initial.first, initial.second, chains);
-		matches = getMatchesFilteredByAnnotation(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, 100, readAnnotations);
-	}
-	makeGraph(readKmerLengths, readNames, readSequences, matches, minCoverage, "graph.gfa", graphk, approxOneHapCoverage);
+	// {
+	// 	auto initial = getInitialGraph(readKmerLengths, readNames, readSequences, filteredMatches, minCoverage, graphk, approxOneHapCoverage, "initial1");
+	// 	auto chains = getAnchorChains(initial.first, initial.second, approxOneHapCoverage);
+	// 	auto readAnnotations = getReadChainPositions(initial.first, initial.second, chains);
+	// 	auto haplotypeEdgeAnnotations = getHaplotypeInformativeForks(initial.first, initial.second, approxOneHapCoverage);
+	// 	assert(haplotypeEdgeAnnotations.size() == readNames.size());
+	// 	filteredMatches = filterMatchesByAnnotations(initialMatches, rawReadLengths, readAnnotations, haplotypeEdgeAnnotations);
+	// 	std::cerr << filteredMatches.size() << " filtered matches out of " << initialMatches.size() << " initial matches" << std::endl;
+	// }
+	// {
+	// 	auto initial = getInitialGraph(readKmerLengths, readNames, readSequences, filteredMatches, minCoverage, graphk, approxOneHapCoverage, "initial2");
+	// 	auto chains = getAnchorChains(initial.first, initial.second, approxOneHapCoverage);
+	// 	auto readAnnotations = getReadChainPositions(initial.first, initial.second, chains);
+	// 	filteredMatches = filterMatchesByAnnotations(initialMatches, rawReadLengths, readAnnotations);
+	// 	std::cerr << filteredMatches.size() << " filtered matches out of " << initialMatches.size() << " initial matches" << std::endl;
+	// }
+	// {
+	// 	auto initial = getInitialGraph(readKmerLengths, readNames, readSequences, filteredMatches, minCoverage, graphk, approxOneHapCoverage, "initial3");
+	// 	auto chains = getAnchorChains(initial.first, initial.second, approxOneHapCoverage);
+	// 	auto readAnnotations = getReadChainPositions(initial.first, initial.second, chains);
+	// 	filteredMatches = filterMatchesByAnnotations(initialMatches, rawReadLengths, readAnnotations);
+	// 	std::cerr << filteredMatches.size() << " filtered matches out of " << initialMatches.size() << " initial matches" << std::endl;
+	// }
+	// {
+	// 	auto initial = getInitialGraph(readKmerLengths, readNames, readSequences, filteredMatches, minCoverage, graphk, approxOneHapCoverage, "initial4");
+	// 	auto chains = getAnchorChains(initial.first, initial.second, approxOneHapCoverage);
+	// 	auto readAnnotations = getReadChainPositions(initial.first, initial.second, chains);
+	// 	filteredMatches = filterMatchesByAnnotations(initialMatches, rawReadLengths, readAnnotations);
+	// 	std::cerr << filteredMatches.size() << " filtered matches out of " << initialMatches.size() << " initial matches" << std::endl;
+	// }
+	makeGraph(readKmerLengths, readNames, readSequences, initialMatches, minCoverage, "graph.gfa", graphk, approxOneHapCoverage);
 }
