@@ -3,6 +3,7 @@
 #include "AnchorFinder.h"
 #include "Common.h"
 #include "MBGCommon.h"
+#include "UnionFind.h"
 
 std::tuple<uint64_t, uint64_t, uint64_t> canon(std::pair<size_t, bool> first, std::pair<size_t, bool> second, std::pair<size_t, bool> third)
 {
@@ -381,7 +382,45 @@ void setReachableAnchors(const SparseEdgeContainer& edges, std::vector<std::vect
 
 void extendAnchors(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, std::vector<bool>& anchor)
 {
+	size_t maxTangleCheckSize = 100;
 	SparseEdgeContainer edges = getActiveEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount());
+	std::vector<bool> tryExtendingThese;
+	tryExtendingThese.resize(unitigGraph.nodeCount(), true);
+	{
+		std::vector<size_t> tipParent;
+		tipParent.resize(unitigGraph.nodeCount()*2);
+		for (size_t i = 0; i < unitigGraph.nodeCount()*2; i++)
+		{
+			tipParent[i] = i;
+		}
+		for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+		{
+			if (!anchor[i])
+			{
+				merge(tipParent, i*2, i*2+1);
+			}
+			for (auto edge : edges.getEdges(std::make_pair(i, true)))
+			{
+				merge(tipParent, i*2+1, edge.first*2 + (edge.second ? 0 : 1));
+			}
+			for (auto edge : edges.getEdges(std::make_pair(i, false)))
+			{
+				merge(tipParent, i*2, edge.first*2 + (edge.second ? 0 : 1));
+			}
+		}
+		phmap::flat_hash_map<size_t, size_t> clusterCoverage;
+		for (size_t i = 0; i < unitigGraph.nodeCount()*2; i++)
+		{
+			clusterCoverage[find(tipParent, i)] += 1;
+		}
+		for (size_t i = 0; i < tryExtendingThese.size(); i++)
+		{
+			if (anchor[i]) continue;
+			assert(find(tipParent, i*2) == find(tipParent, i*2+1));
+			if (clusterCoverage[find(tipParent, i*2)] < maxTangleCheckSize) continue;
+			tryExtendingThese[i] = false;
+		}
+	}
 	std::vector<std::vector<uint64_t>> forwardReachableAnchors;
 	std::vector<std::vector<uint64_t>> backwardReachableAnchors;
 	forwardReachableAnchors.resize(unitigGraph.nodeCount());
@@ -390,12 +429,14 @@ void extendAnchors(const UnitigGraph& unitigGraph, const std::vector<ReadPathBun
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
 		if (!anchor[i]) continue;
+		if (!tryExtendingThese[i]) continue;
 		setReachableAnchors(edges, forwardReachableAnchors, backwardReachableAnchors, i + firstBitUint64_t, anchor);
 		setReachableAnchors(edges, forwardReachableAnchors, backwardReachableAnchors, i, anchor);
 	}
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
 		if (anchor[i]) continue;
+		if (!tryExtendingThese[i]) continue;
 		if (forwardReachableAnchors[i].size() != 1 && backwardReachableAnchors[i].size() != 1) continue;
 		if (forwardReachableAnchors[i].size() == 0 || backwardReachableAnchors[i].size() == 0) continue;
 		bool anyNotBlocked = false;

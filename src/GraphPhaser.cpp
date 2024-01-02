@@ -6,6 +6,7 @@
 #include "GraphPhaser.h"
 #include "Common.h"
 #include "AnchorFinder.h"
+#include "UnionFind.h"
 
 class PhaseBlock
 {
@@ -51,6 +52,7 @@ public:
 	Context reverse() const
 	{
 		Context result = *this;
+		result.mergedhash = std::numeric_limits<size_t>::max();
 		std::swap(result.preHets, result.postHets);
 		std::swap(result.preChains, result.postChains);
 		std::reverse(result.preHets.begin(), result.preHets.end());
@@ -1347,27 +1349,6 @@ std::vector<PhaseBlock> getChainPhaseBlocksMEC(const size_t coreNodeChainIndex, 
 	assert(bubblei == allelesPerHaplotype[0].size());
 	if (rawResult.bubbleIndices.size() < 2) return std::vector<PhaseBlock> {};
 	return splitPhaseBlocks(rawResult, readAssignments, allelesPerHaplotype, mergedAllelesPerRead, ploidy);
-}
-
-std::pair<size_t, size_t> find(std::vector<std::vector<std::pair<size_t, size_t>>>& parent, std::pair<size_t, size_t> index)
-{
-	while (true)
-	{
-		std::pair<size_t, size_t> oneparent = parent[index.first][index.second];
-		std::pair<size_t, size_t> twoparent = parent[oneparent.first][oneparent.second];
-		if (oneparent == twoparent) break;
-		parent[index.first][index.second] = parent[twoparent.first][twoparent.second];
-	}
-	return parent[index.first][index.second];
-}
-
-void merge(std::vector<std::vector<std::pair<size_t, size_t>>>& parent, std::pair<size_t, size_t> left, std::pair<size_t, size_t> right)
-{
-	left = find(parent, left);
-	right = find(parent, right);
-	assert(parent[left.first][left.second] == left);
-	assert(parent[right.first][right.second] == right);
-	parent[right.first][right.second] = left;
 }
 
 std::vector<PhaseBlock> getChainPhaseBlocksSpanners(const size_t coreNodeChainIndex, const std::vector<ReadDiagonalAlleles>& allelesPerRead, const std::vector<uint64_t>& coreNodeChain, const size_t ploidy, const size_t alleleCount, const double approxOneHapCoverage)
@@ -2835,6 +2816,30 @@ Context getContext(const int contextWindowStartPos, const size_t nodeStartPos, c
 	return result;
 }
 
+Context getCheapContext(const int contextWindowStartPos, const std::vector<std::tuple<size_t, size_t, uint64_t>>& processedHetInfos, const std::vector<ChainPosition>& chainPositionsInReads, const size_t contextLength)
+{
+	Context result;
+	std::vector<std::pair<int, uint64_t>> hets;
+	for (auto m : processedHetInfos)
+	{
+		if ((int)std::get<1>(m) < contextWindowStartPos) continue;
+		if ((int)std::get<0>(m) >= contextWindowStartPos+(int)contextLength) continue;
+		hets.emplace_back((std::get<0>(m) + std::get<1>(m))*0.5, std::get<2>(m));
+	}
+	std::sort(hets.begin(), hets.end());
+	for (auto pair : hets) result.overlapHets.emplace_back(pair.second);
+	std::vector<std::pair<int, uint64_t>> chains;
+	for (auto m : chainPositionsInReads)
+	{
+		if (m.chainEndPosInRead < contextWindowStartPos) continue;
+		if (m.chainStartPosInRead >= contextWindowStartPos+(int)contextLength) continue;
+		chains.emplace_back((m.chainEndPosInRead + m.chainStartPosInRead)/2, m.chain);
+	}
+	std::sort(chains.begin(), chains.end());
+	for (auto pair : chains) result.overlapChains.emplace_back(pair.second);
+	return result;
+}
+
 template <typename F>
 void iterateContextNodes(const std::vector<bool>& checkTheseNodes, const UnitigGraph& unitigGraph, const ReadPathBundle& readPath, const std::vector<size_t>& contextCheckStartPoses, const std::vector<std::tuple<size_t, size_t, uint64_t>>& processedHetInfos, const std::vector<ChainPosition>& chainPositionsInReads, const size_t resolveLength, F callback)
 {
@@ -2882,6 +2887,92 @@ void iterateContextNodes(const std::vector<bool>& checkTheseNodes, const UnitigG
 	}
 }
 
+template <typename F>
+void iterateContextNodes(const std::vector<std::vector<std::tuple<size_t, size_t, size_t, size_t>>>& nodePositionsInReads, const size_t checkThisNode, const std::vector<ReadPathBundle>& readPaths, const UnitigGraph& unitigGraph, const std::vector<std::vector<std::pair<size_t, size_t>>>& cheapContextsFw, const std::vector<std::vector<std::pair<size_t, size_t>>>& cheapContextsBw, const size_t resolveLength, F callback)
+{
+	for (auto t : nodePositionsInReads[checkThisNode])
+	{
+		size_t i = std::get<0>(t);
+		size_t j = std::get<1>(t);
+		size_t k = std::get<2>(t);
+		size_t readPos = std::get<3>(t);
+		uint64_t node = readPaths[i].paths[j].path[k];
+		assert((node & maskUint64_t) == checkThisNode);
+		int minCheck = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t] - (int)resolveLength;
+		minCheck = std::max(minCheck, 0);
+		int maxCheck = (int)readPos;
+		maxCheck = std::min(maxCheck, (int)readPaths[i].readLength - (int)resolveLength);
+		phmap::flat_hash_set<size_t> contexts;
+		if (node & firstBitUint64_t)
+		{
+			for (auto pair : cheapContextsFw[i])
+			{
+				if ((int)pair.first < minCheck) continue;
+				if ((int)pair.first >= maxCheck) continue;
+				contexts.insert(pair.second);
+			}
+		}
+		else
+		{
+			// for (auto pair : cheapContextsFw[i])
+			for (auto pair : cheapContextsBw[i])
+			{
+				if ((int)pair.first < minCheck) continue;
+				if ((int)pair.first >= maxCheck) continue;
+				contexts.insert(pair.second);
+			}
+		}
+		assert(contexts.size() >= 0);
+		std::vector<size_t> contextVec { contexts.begin(), contexts.end() };
+		callback(i, j, k, contextVec);
+	}
+}
+
+template <typename F>
+void iterateContextNodes(const std::vector<std::vector<std::tuple<size_t, size_t, size_t, size_t>>>& nodePositionsInReads, const size_t checkThisNode, const std::vector<ReadPathBundle>& readPaths, const UnitigGraph& unitigGraph, const std::vector<std::vector<size_t>>& contextCheckStartPoses, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& processedHetInfos, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const size_t resolveLength, F callback)
+{
+	for (auto t : nodePositionsInReads[checkThisNode])
+	{
+		size_t i = std::get<0>(t);
+		size_t j = std::get<1>(t);
+		size_t k = std::get<2>(t);
+		size_t readPos = std::get<3>(t);
+		uint64_t node = readPaths[i].paths[j].path[k];
+		assert((node & maskUint64_t) == checkThisNode);
+		size_t startPos = readPos;
+		if (k == 0) startPos += readPaths[i].paths[j].pathLeftClipKmers;
+		size_t endPos = readPos;
+		if (k == readPaths[i].paths[j].path.size()-1) endPos -= readPaths[i].paths[j].pathRightClipKmers;
+		assert(startPos >= unitigGraph.lengths[node & maskUint64_t]);
+		startPos -= unitigGraph.lengths[node & maskUint64_t];
+		int minCheck = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t] - (int)resolveLength;
+		minCheck = std::max(minCheck, 0);
+		int maxCheck = (int)readPos;
+		maxCheck = std::min(maxCheck, (int)readPaths[i].readLength - (int)resolveLength);
+		phmap::flat_hash_set<Context> contexts;
+		phmap::flat_hash_set<int> checkThese;
+		checkThese.insert(minCheck);
+		checkThese.insert(maxCheck-1);
+		for (auto pos : contextCheckStartPoses[i])
+		{
+			if ((int)pos < minCheck) continue;
+			if ((int)pos >= maxCheck) continue;
+			checkThese.insert(pos);
+		}
+		for (int pos : checkThese)
+		{
+			Context context = getContext(pos, startPos, endPos, processedHetInfos[i], chainPositionsInReads[i], resolveLength, node & firstBitUint64_t);
+			contexts.emplace(std::move(context));
+		}
+		if (contexts.size() == 0)
+		{
+			contexts.emplace();
+		}
+		std::vector<Context> contextVec { contexts.begin(), contexts.end() };
+		callback(i, j, k, contextVec);
+	}
+}
+
 Context find(phmap::flat_hash_map<Context, Context>& parent, const Context& key)
 {
 	if (parent.count(key) == 0)
@@ -2926,7 +3017,7 @@ void markNonCheckable(std::vector<bool>& checkTheseNodes, const uint64_t startNo
 	}
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const std::vector<AnchorChain>& anchorChains, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>>>& hetInfoPerRead, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const size_t resolveLength)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const bool cheap, const std::vector<AnchorChain>& anchorChains, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>>>& hetInfoPerRead, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const size_t resolveLength, const double approxOneHapCoverage)
 {
 	const size_t minContextCoverage = 3;
 	assert(readPaths.size() == hetInfoPerRead.size());
@@ -2946,9 +3037,26 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const std::vect
 			checkTheseNodes[anchorChains[i].nodes[j] & maskUint64_t] = false;
 		}
 	}
-	std::vector<phmap::flat_hash_map<Context, Context>> nodeParent;
-	phmap::flat_hash_map<Context, size_t> contextCoverage;
-	nodeParent.resize(unitigGraph.nodeCount());
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		if (unitigGraph.lengths[i] >= resolveLength) checkTheseNodes[i] = false;
+	}
+	std::vector<std::vector<std::tuple<size_t, size_t, size_t, size_t>>> nodePositionsInReads;
+	nodePositionsInReads.resize(unitigGraph.nodeCount());
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			size_t readPos = readPaths[i].paths[j].readStartPos;
+			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
+			{
+				uint64_t node = readPaths[i].paths[j].path[k];
+				readPos += unitigGraph.lengths[node & maskUint64_t];
+				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
+				nodePositionsInReads[node & maskUint64_t].emplace_back(i, j, k, readPos);
+			}
+		}
+	}
 	phmap::flat_hash_map<std::tuple<size_t, size_t, size_t>, uint64_t> bubbleAlleleToIndex;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> processedHetInfos;
 	processedHetInfos.resize(readPaths.size());
@@ -2965,109 +3073,414 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const std::vect
 			processedHetInfos[i].emplace_back(std::get<0>(t), std::get<1>(t), bubbleAlleleToIndex.at(key) + (std::get<3>(t) ? firstBitUint64_t : 0));
 		}
 	}
+	std::vector<std::vector<std::pair<size_t, size_t>>> cheapContextsFw;
+	std::vector<std::vector<std::pair<size_t, size_t>>> cheapContextsBw;
 	std::vector<std::vector<size_t>> contextCheckStartPoses;
-	contextCheckStartPoses.resize(readPaths.size());
-	for (size_t i = 0; i < readPaths.size(); i++)
+	if (cheap)
 	{
-		for (auto t : hetInfoPerRead[i])
+		cheapContextsFw.resize(readPaths.size());
+		cheapContextsBw.resize(readPaths.size());
+		for (size_t i = 0; i < readPaths.size(); i++)
 		{
-			assert(std::get<0>(t) < readPaths[i].readLength);
-			if (std::get<0>(t)+1 >= resolveLength) contextCheckStartPoses[i].emplace_back(std::get<0>(t)+1-resolveLength);
-			assert(std::get<1>(t) >= 0);
-			if ((int)std::get<1>(t)+1 < (int)readPaths[i].readLength - (int)resolveLength) contextCheckStartPoses[i].emplace_back(std::get<1>(t)+1);
-		}
-		for (auto t : chainPositionsInReads[i])
-		{
-			assert(t.chainStartPosInRead < (int)readPaths[i].readLength);
-			if (t.chainStartPosInRead+1 > (int)resolveLength) contextCheckStartPoses[i].emplace_back(t.chainStartPosInRead+1-(int)resolveLength);
-			assert(t.chainEndPosInRead >= 0);
-			if (t.chainEndPosInRead+1 < (int)readPaths[i].readLength - (int)resolveLength) contextCheckStartPoses[i].emplace_back(t.chainEndPosInRead+1);
-		}
-		contextCheckStartPoses[i].push_back(0);
-		contextCheckStartPoses[i].push_back(readPaths[i].readLength - resolveLength);
-		phmap::flat_hash_set<size_t> uniq { contextCheckStartPoses[i].begin(), contextCheckStartPoses[i].end() };
-		contextCheckStartPoses[i].clear();
-		contextCheckStartPoses[i].insert(contextCheckStartPoses[i].end(), uniq.begin(), uniq.end());
-		std::sort(contextCheckStartPoses[i].begin(), contextCheckStartPoses[i].end());
-	}
-	std::cerr << "counting context coverages" << std::endl;
-	for (size_t i = 0; i < readPaths.size(); i++)
-	{
-		phmap::flat_hash_set<Context> contexts;
-		iterateContextNodes(checkTheseNodes, unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&contexts](const size_t j, const size_t k, const std::vector<Context>& nodecontexts)
-		{
-			contexts.insert(nodecontexts.begin(), nodecontexts.end());
-		});
-		for (const auto& context : contexts)
-		{
-			contextCoverage[context] += 1;
-		}
-	}
-	std::cerr << "merging per-node contexts" << std::endl;
-	for (size_t i = 0; i < readPaths.size(); i++)
-	{
-		iterateContextNodes(checkTheseNodes, unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&nodeParent, &contextCoverage, &readPaths, i, minContextCoverage](const size_t j, const size_t k, const std::vector<Context>& contexts)
-		{
-			uint64_t node = readPaths[i].paths[j].path[k];
-			Context anyContext;
-			for (const auto& context : contexts)
+			std::vector<size_t> contextCheckStartPosesThisRead;
+			for (auto t : hetInfoPerRead[i])
 			{
-				if (contextCoverage[context] < minContextCoverage) continue;
-				anyContext = context;
-				find(nodeParent[node & maskUint64_t], context);
+				assert(std::get<0>(t) < readPaths[i].readLength);
+				if (std::get<0>(t)+1 >= resolveLength) contextCheckStartPosesThisRead.emplace_back(std::get<0>(t)+1-resolveLength);
+				assert(std::get<1>(t) >= 0);
+				if ((int)std::get<1>(t)+1 < (int)readPaths[i].readLength - (int)resolveLength) contextCheckStartPosesThisRead.emplace_back(std::get<1>(t)+1);
 			}
-			for (const auto& context : contexts)
+			for (auto t : chainPositionsInReads[i])
 			{
-				if (contextCoverage[context] < minContextCoverage) continue;
-				merge(nodeParent[node & maskUint64_t], context, anyContext);
+				assert(t.chainStartPosInRead < (int)readPaths[i].readLength);
+				if (t.chainStartPosInRead+1 > (int)resolveLength) contextCheckStartPosesThisRead.emplace_back(t.chainStartPosInRead+1-(int)resolveLength);
+				assert(t.chainEndPosInRead >= 0);
+				if (t.chainEndPosInRead+1 < (int)readPaths[i].readLength - (int)resolveLength) contextCheckStartPosesThisRead.emplace_back(t.chainEndPosInRead+1);
 			}
-		});
-	}
-	std::cerr << "getting context clusters" << std::endl;
-	UnitigGraph resultGraph = unitigGraph;
-	std::vector<ReadPathBundle> resultPaths = readPaths;
-	std::vector<phmap::flat_hash_map<Context, size_t>> contextToNewNodeNumber;
-	contextToNewNodeNumber.resize(unitigGraph.nodeCount());
-	size_t nextNodeNumber = unitigGraph.nodeCount();
-	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
-	{
-		phmap::flat_hash_set<Context> keys;
-		for (const auto& pair : nodeParent[i])
-		{
-			keys.insert(pair.first);
-		}
-		phmap::flat_hash_set<Context> clusters;
-		for (const auto& key : keys)
-		{
-			clusters.insert(find(nodeParent[i], key));
-		}
-		for (const auto& cluster : clusters)
-		{
-			contextToNewNodeNumber[i][cluster] = nextNodeNumber;
-			resultGraph.lengths.emplace_back(unitigGraph.lengths[i]);
-			resultGraph.coverages.emplace_back(0);
-			nextNodeNumber += 1;
-		}
-	}
-	std::cerr << "replacing nodes" << std::endl;
-	for (size_t i = 0; i < readPaths.size(); i++)
-	{
-		iterateContextNodes(checkTheseNodes, unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&nodeParent, &readPaths, &contextCoverage, &contextToNewNodeNumber, &resultPaths, i, minContextCoverage](const size_t j, const size_t k, const std::vector<Context>& contexts)
-		{
-			uint64_t node = readPaths[i].paths[j].path[k];
-			for (const auto& context : contexts)
+			for (size_t j = 0; j < readPaths[i].paths.size(); j++)
 			{
-				if (contextCoverage[context] < minContextCoverage) continue;
-				auto cluster = find(nodeParent[node & maskUint64_t], context);
-				if (contextToNewNodeNumber[node & maskUint64_t].count(cluster) == 1)
+				size_t readPos = readPaths[i].paths[j].readStartPos;
+				for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 				{
-					// std::cerr << "replace read " << i << " " << j << " " << k << " (" << (node & maskUint64_t) << ") with " << contextToNewNodeNumber[node & maskUint64_t].at(cluster) << std::endl;
-					resultPaths[i].paths[j].path[k] = (node & firstBitUint64_t) + (contextToNewNodeNumber[node & maskUint64_t].at(cluster));
-					break;
+					uint64_t node = readPaths[i].paths[j].path[k];
+					readPos += unitigGraph.lengths[node & maskUint64_t];
+					if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
+					if ((int)readPos+1 < (int)readPaths[i].readLength - (int)resolveLength) contextCheckStartPosesThisRead.push_back(readPos+1);
+					if (readPos > resolveLength + unitigGraph.lengths[node & maskUint64_t]) contextCheckStartPosesThisRead.push_back(readPos - resolveLength - unitigGraph.lengths[node & maskUint64_t]);
 				}
 			}
-		});
+			contextCheckStartPosesThisRead.push_back(0);
+			contextCheckStartPosesThisRead.push_back(readPaths[i].readLength - resolveLength);
+			phmap::flat_hash_set<size_t> uniq { contextCheckStartPosesThisRead.begin(), contextCheckStartPosesThisRead.end() };
+			contextCheckStartPosesThisRead.clear();
+			contextCheckStartPosesThisRead.insert(contextCheckStartPosesThisRead.end(), uniq.begin(), uniq.end());
+			std::sort(contextCheckStartPosesThisRead.begin(), contextCheckStartPosesThisRead.end());
+			for (auto pos : contextCheckStartPosesThisRead)
+			{
+				Context context = getCheapContext(pos, processedHetInfos[i], chainPositionsInReads[i], resolveLength);
+				cheapContextsFw[i].emplace_back(pos, context.getHash());
+				cheapContextsBw[i].emplace_back(pos, context.reverse().getHash());
+				assert(context.getHash() == context.reverse().reverse().getHash());
+			}
+			std::sort(cheapContextsFw[i].begin(), cheapContextsFw[i].end());
+			std::sort(cheapContextsBw[i].begin(), cheapContextsBw[i].end());
+		}
 	}
+	else
+	{
+		contextCheckStartPoses.resize(readPaths.size());
+		for (size_t i = 0; i < readPaths.size(); i++)
+		{
+			for (auto t : hetInfoPerRead[i])
+			{
+				assert(std::get<0>(t) < readPaths[i].readLength);
+				if (std::get<0>(t)+1 >= resolveLength) contextCheckStartPoses[i].emplace_back(std::get<0>(t)+1-resolveLength);
+				assert(std::get<1>(t) >= 0);
+				if ((int)std::get<1>(t)+1 < (int)readPaths[i].readLength - (int)resolveLength) contextCheckStartPoses[i].emplace_back(std::get<1>(t)+1);
+			}
+			for (auto t : chainPositionsInReads[i])
+			{
+				assert(t.chainStartPosInRead < (int)readPaths[i].readLength);
+				if (t.chainStartPosInRead+1 > (int)resolveLength) contextCheckStartPoses[i].emplace_back(t.chainStartPosInRead+1-(int)resolveLength);
+				assert(t.chainEndPosInRead >= 0);
+				if (t.chainEndPosInRead+1 < (int)readPaths[i].readLength - (int)resolveLength) contextCheckStartPoses[i].emplace_back(t.chainEndPosInRead+1);
+			}
+			contextCheckStartPoses[i].push_back(0);
+			contextCheckStartPoses[i].push_back(readPaths[i].readLength - resolveLength);
+			phmap::flat_hash_set<size_t> uniq { contextCheckStartPoses[i].begin(), contextCheckStartPoses[i].end() };
+			contextCheckStartPoses[i].clear();
+			contextCheckStartPoses[i].insert(contextCheckStartPoses[i].end(), uniq.begin(), uniq.end());
+			std::sort(contextCheckStartPoses[i].begin(), contextCheckStartPoses[i].end());
+		}
+	}
+	size_t nextNodeNumber = unitigGraph.nodeCount();
+	UnitigGraph resultGraph = unitigGraph;
+	std::vector<ReadPathBundle> resultPaths = readPaths;
+	for (size_t node = 0; node < unitigGraph.nodeCount(); node++)
+	{
+		std::cerr << "hap phase check node " << node << "/" << unitigGraph.nodeCount() << " " << (checkTheseNodes[node] ? "yes" : "no") << std::endl;
+		if (!checkTheseNodes[node]) continue;
+		if (cheap)
+		{
+			phmap::flat_hash_map<size_t, phmap::flat_hash_set<size_t>> contextsPerRead;
+			std::vector<std::vector<size_t>> totalNodeContexts;
+			iterateContextNodes(nodePositionsInReads, node, readPaths, unitigGraph, cheapContextsFw, cheapContextsBw, resolveLength, [&contextsPerRead, &totalNodeContexts](const size_t i, const size_t j, const size_t k, const std::vector<size_t>& nodecontexts)
+			{
+				for (const auto& context : nodecontexts)
+				{
+					contextsPerRead[i].insert(context);
+				}
+				totalNodeContexts.emplace_back(nodecontexts);
+			});
+			phmap::flat_hash_map<size_t, size_t> contextCoverage;
+			for (const auto& pair : contextsPerRead)
+			{
+				for (auto context : pair.second)
+				{
+					contextCoverage[context] += 1;
+				}
+			}
+			size_t nodeContextsWithOnlyMinor = 0;
+			for (const auto& contextGroup : totalNodeContexts)
+			{
+				bool hasMajor = false;
+				for (auto context : contextGroup)
+				{
+					if (contextCoverage[context] >= minContextCoverage)
+					{
+						hasMajor = true;
+						break;
+					}
+				}
+				if (!hasMajor) nodeContextsWithOnlyMinor += 1;
+			}
+			std::cerr << "node-contexts with minor only " << nodeContextsWithOnlyMinor << " vs " << totalNodeContexts.size() << std::endl;
+			if (nodeContextsWithOnlyMinor > approxOneHapCoverage * 0.25 || nodeContextsWithOnlyMinor > totalNodeContexts.size() * 0.1)
+			{
+				std::cerr << "too many minor-only node-contexts" << std::endl;
+				checkTheseNodes[node] = false;
+				continue;
+			}
+			phmap::flat_hash_map<size_t, size_t> nodeParent;
+			iterateContextNodes(nodePositionsInReads, node, readPaths, unitigGraph, cheapContextsFw, cheapContextsBw, resolveLength, [&nodeParent, &contextCoverage, &readPaths, minContextCoverage](const size_t i, const size_t j, const size_t k, const std::vector<size_t>& contexts)
+			{
+				size_t anyContext;
+				for (size_t context : contexts)
+				{
+					if (contextCoverage[context] < minContextCoverage) continue;
+					anyContext = context;
+					if (nodeParent.count(context) == 0) nodeParent[context] = context;
+				}
+				for (size_t context : contexts)
+				{
+					if (contextCoverage[context] < minContextCoverage) continue;
+					merge(nodeParent, context, anyContext);
+				}
+			});
+			if (nodeParent.size() == 1)
+			{
+				std::cerr << "only one context" << std::endl;
+				checkTheseNodes[node] = false;
+				continue;
+			}
+			phmap::flat_hash_map<size_t, size_t> contextToNewNodeNumber;
+			phmap::flat_hash_set<size_t> keys;
+			for (const auto& pair : nodeParent)
+			{
+				keys.insert(pair.first);
+			}
+			phmap::flat_hash_set<size_t> clusters;
+			for (const auto& key : keys)
+			{
+				clusters.insert(find(nodeParent, key));
+			}
+			size_t splitNum = 0;
+			for (const auto& cluster : clusters)
+			{
+				contextToNewNodeNumber[cluster] = nextNodeNumber;
+				resultGraph.lengths.emplace_back(unitigGraph.lengths[node]);
+				resultGraph.coverages.emplace_back(0);
+				nextNodeNumber += 1;
+				splitNum += 1;
+			}
+			if (splitNum == 1 || splitNum == 0)
+			{
+				std::cerr << "only " << splitNum << " clusters" << std::endl;
+				checkTheseNodes[node] = false;
+				continue;
+			}
+			std::cerr << "split node " << node << " into " << splitNum << " nodes" << std::endl;
+			iterateContextNodes(nodePositionsInReads, node, readPaths, unitigGraph, cheapContextsFw, cheapContextsBw, resolveLength, [&nodeParent, &readPaths, &contextCoverage, &contextToNewNodeNumber, &resultPaths, minContextCoverage](const size_t i, const size_t j, const size_t k, const std::vector<size_t>& contexts)
+			{
+				uint64_t node = readPaths[i].paths[j].path[k];
+				for (const auto& context : contexts)
+				{
+					if (contextCoverage[context] < minContextCoverage) continue;
+					auto cluster = find(nodeParent, context);
+					if (contextToNewNodeNumber.count(cluster) == 1)
+					{
+						// std::cerr << "replace read " << i << " " << j << " " << k << " (" << (node & maskUint64_t) << ") with " << contextToNewNodeNumber[node & maskUint64_t].at(cluster) << std::endl;
+						resultPaths[i].paths[j].path[k] = (node & firstBitUint64_t) + (contextToNewNodeNumber.at(cluster));
+						break;
+					}
+				}
+			});
+		}
+		else
+		{
+			phmap::flat_hash_map<Context, size_t> contextCoverage;
+			std::vector<std::vector<Context>> totalNodeContexts;
+			iterateContextNodes(nodePositionsInReads, node, readPaths, unitigGraph, contextCheckStartPoses, processedHetInfos, chainPositionsInReads, resolveLength, [&contextCoverage, &totalNodeContexts](const size_t i, const size_t j, const size_t k, const std::vector<Context>& nodecontexts)
+			{
+				for (const auto& context : nodecontexts)
+				{
+					contextCoverage[context] += 1;
+				}
+				totalNodeContexts.emplace_back(nodecontexts);
+			});
+			size_t nodeContextsWithOnlyMinor = 0;
+			for (const auto& contextGroup : totalNodeContexts)
+			{
+				bool hasMajor = false;
+				for (const auto& context : contextGroup)
+				{
+					if (contextCoverage[context] >= minContextCoverage)
+					{
+						hasMajor = true;
+						break;
+					}
+				}
+				if (!hasMajor) nodeContextsWithOnlyMinor += 1;
+			}
+			std::cerr << "node-contexts with minor only " << nodeContextsWithOnlyMinor << " vs " << totalNodeContexts.size() << std::endl;
+			if (nodeContextsWithOnlyMinor > approxOneHapCoverage * 0.25 || nodeContextsWithOnlyMinor > totalNodeContexts.size() * 0.1)
+			{
+				std::cerr << "too many minor-only node-contexts" << std::endl;
+				checkTheseNodes[node] = false;
+				continue;
+			}
+			phmap::flat_hash_map<Context, Context> nodeParent;
+			iterateContextNodes(nodePositionsInReads, node, readPaths,unitigGraph, contextCheckStartPoses, processedHetInfos, chainPositionsInReads, resolveLength, [&nodeParent, &contextCoverage, &readPaths, minContextCoverage](const size_t i, const size_t j, const size_t k, const std::vector<Context>& contexts)
+			{
+				Context anyContext;
+				for (const auto& context : contexts)
+				{
+					if (contextCoverage[context] < minContextCoverage) continue;
+					anyContext = context;
+					find(nodeParent, context);
+				}
+				for (const auto& context : contexts)
+				{
+					if (contextCoverage[context] < minContextCoverage) continue;
+					merge(nodeParent, context, anyContext);
+				}
+			});
+			phmap::flat_hash_map<Context, size_t> contextToNewNodeNumber;
+			phmap::flat_hash_set<Context> keys;
+			for (const auto& pair : nodeParent)
+			{
+				keys.insert(pair.first);
+			}
+			phmap::flat_hash_set<Context> clusters;
+			for (const auto& key : keys)
+			{
+				clusters.insert(find(nodeParent, key));
+			}
+			size_t splitNum = 0;
+			for (const auto& cluster : clusters)
+			{
+				contextToNewNodeNumber[cluster] = nextNodeNumber;
+				resultGraph.lengths.emplace_back(unitigGraph.lengths[node]);
+				resultGraph.coverages.emplace_back(0);
+				nextNodeNumber += 1;
+				splitNum += 1;
+			}
+			if (splitNum == 1 || splitNum == 0)
+			{
+				std::cerr << "only " << splitNum << " clusters" << std::endl;
+				checkTheseNodes[node] = false;
+				continue;
+			}
+			std::cerr << "split node " << node << " into " << splitNum << " nodes" << std::endl;
+			iterateContextNodes(nodePositionsInReads, node, readPaths, unitigGraph, contextCheckStartPoses, processedHetInfos, chainPositionsInReads, resolveLength, [&nodeParent, &readPaths, &contextCoverage, &contextToNewNodeNumber, &resultPaths, minContextCoverage](const size_t i, const size_t j, const size_t k, const std::vector<Context>& contexts)
+			{
+				uint64_t node = readPaths[i].paths[j].path[k];
+				for (const auto& context : contexts)
+				{
+					if (contextCoverage[context] < minContextCoverage) continue;
+					auto cluster = find(nodeParent, context);
+					if (contextToNewNodeNumber.count(cluster) == 1)
+					{
+						// std::cerr << "replace read " << i << " " << j << " " << k << " (" << (node & maskUint64_t) << ") with " << contextToNewNodeNumber[node & maskUint64_t].at(cluster) << std::endl;
+						resultPaths[i].paths[j].path[k] = (node & firstBitUint64_t) + (contextToNewNodeNumber.at(cluster));
+						break;
+					}
+				}
+			});
+		}
+	}
+	// std::vector<phmap::flat_hash_map<Context, Context>> nodeParent;
+	// phmap::flat_hash_map<Context, size_t> contextCoverage;
+	// nodeParent.resize(unitigGraph.nodeCount());
+	// phmap::flat_hash_map<std::tuple<size_t, size_t, size_t>, uint64_t> bubbleAlleleToIndex;
+	// std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> processedHetInfos;
+	// processedHetInfos.resize(readPaths.size());
+	// for (size_t i = 0; i < hetInfoPerRead.size(); i++)
+	// {
+	// 	for (const auto t : hetInfoPerRead[i])
+	// 	{
+	// 		std::tuple<size_t, size_t, size_t> key { std::get<2>(t), std::get<4>(t), std::get<5>(t) };
+	// 		if (bubbleAlleleToIndex.count(key) == 0)
+	// 		{
+	// 			size_t index = bubbleAlleleToIndex.size();
+	// 			bubbleAlleleToIndex[key] = index;
+	// 		}
+	// 		processedHetInfos[i].emplace_back(std::get<0>(t), std::get<1>(t), bubbleAlleleToIndex.at(key) + (std::get<3>(t) ? firstBitUint64_t : 0));
+	// 	}
+	// }
+	// std::vector<std::vector<size_t>> contextCheckStartPoses;
+	// contextCheckStartPoses.resize(readPaths.size());
+	// for (size_t i = 0; i < readPaths.size(); i++)
+	// {
+	// 	for (auto t : hetInfoPerRead[i])
+	// 	{
+	// 		assert(std::get<0>(t) < readPaths[i].readLength);
+	// 		if (std::get<0>(t)+1 >= resolveLength) contextCheckStartPoses[i].emplace_back(std::get<0>(t)+1-resolveLength);
+	// 		assert(std::get<1>(t) >= 0);
+	// 		if ((int)std::get<1>(t)+1 < (int)readPaths[i].readLength - (int)resolveLength) contextCheckStartPoses[i].emplace_back(std::get<1>(t)+1);
+	// 	}
+	// 	for (auto t : chainPositionsInReads[i])
+	// 	{
+	// 		assert(t.chainStartPosInRead < (int)readPaths[i].readLength);
+	// 		if (t.chainStartPosInRead+1 > (int)resolveLength) contextCheckStartPoses[i].emplace_back(t.chainStartPosInRead+1-(int)resolveLength);
+	// 		assert(t.chainEndPosInRead >= 0);
+	// 		if (t.chainEndPosInRead+1 < (int)readPaths[i].readLength - (int)resolveLength) contextCheckStartPoses[i].emplace_back(t.chainEndPosInRead+1);
+	// 	}
+	// 	contextCheckStartPoses[i].push_back(0);
+	// 	contextCheckStartPoses[i].push_back(readPaths[i].readLength - resolveLength);
+	// 	phmap::flat_hash_set<size_t> uniq { contextCheckStartPoses[i].begin(), contextCheckStartPoses[i].end() };
+	// 	contextCheckStartPoses[i].clear();
+	// 	contextCheckStartPoses[i].insert(contextCheckStartPoses[i].end(), uniq.begin(), uniq.end());
+	// 	std::sort(contextCheckStartPoses[i].begin(), contextCheckStartPoses[i].end());
+	// }
+	// std::cerr << "counting context coverages" << std::endl;
+	// for (size_t i = 0; i < readPaths.size(); i++)
+	// {
+	// 	phmap::flat_hash_set<Context> contexts;
+	// 	iterateContextNodes(checkTheseNodes, unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&contexts](const size_t j, const size_t k, const std::vector<Context>& nodecontexts)
+	// 	{
+	// 		contexts.insert(nodecontexts.begin(), nodecontexts.end());
+	// 	});
+	// 	for (const auto& context : contexts)
+	// 	{
+	// 		contextCoverage[context] += 1;
+	// 	}
+	// }
+	// std::cerr << "merging per-node contexts" << std::endl;
+	// for (size_t i = 0; i < readPaths.size(); i++)
+	// {
+	// 	iterateContextNodes(checkTheseNodes, unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&nodeParent, &contextCoverage, &readPaths, i, minContextCoverage](const size_t j, const size_t k, const std::vector<Context>& contexts)
+	// 	{
+	// 		uint64_t node = readPaths[i].paths[j].path[k];
+	// 		Context anyContext;
+	// 		for (const auto& context : contexts)
+	// 		{
+	// 			if (contextCoverage[context] < minContextCoverage) continue;
+	// 			anyContext = context;
+	// 			find(nodeParent[node & maskUint64_t], context);
+	// 		}
+	// 		for (const auto& context : contexts)
+	// 		{
+	// 			if (contextCoverage[context] < minContextCoverage) continue;
+	// 			merge(nodeParent[node & maskUint64_t], context, anyContext);
+	// 		}
+	// 	});
+	// }
+	// std::cerr << "getting context clusters" << std::endl;
+	// UnitigGraph resultGraph = unitigGraph;
+	// std::vector<ReadPathBundle> resultPaths = readPaths;
+	// std::vector<phmap::flat_hash_map<Context, size_t>> contextToNewNodeNumber;
+	// contextToNewNodeNumber.resize(unitigGraph.nodeCount());
+	// size_t nextNodeNumber = unitigGraph.nodeCount();
+	// for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	// {
+	// 	phmap::flat_hash_set<Context> keys;
+	// 	for (const auto& pair : nodeParent[i])
+	// 	{
+	// 		keys.insert(pair.first);
+	// 	}
+	// 	phmap::flat_hash_set<Context> clusters;
+	// 	for (const auto& key : keys)
+	// 	{
+	// 		clusters.insert(find(nodeParent[i], key));
+	// 	}
+	// 	for (const auto& cluster : clusters)
+	// 	{
+	// 		contextToNewNodeNumber[i][cluster] = nextNodeNumber;
+	// 		resultGraph.lengths.emplace_back(unitigGraph.lengths[i]);
+	// 		resultGraph.coverages.emplace_back(0);
+	// 		nextNodeNumber += 1;
+	// 	}
+	// }
+	// std::cerr << "replacing nodes" << std::endl;
+	// for (size_t i = 0; i < readPaths.size(); i++)
+	// {
+	// 	iterateContextNodes(checkTheseNodes, unitigGraph, readPaths[i], contextCheckStartPoses[i], processedHetInfos[i], chainPositionsInReads[i], resolveLength, [&nodeParent, &readPaths, &contextCoverage, &contextToNewNodeNumber, &resultPaths, i, minContextCoverage](const size_t j, const size_t k, const std::vector<Context>& contexts)
+	// 	{
+	// 		uint64_t node = readPaths[i].paths[j].path[k];
+	// 		for (const auto& context : contexts)
+	// 		{
+	// 			if (contextCoverage[context] < minContextCoverage) continue;
+	// 			auto cluster = find(nodeParent[node & maskUint64_t], context);
+	// 			if (contextToNewNodeNumber[node & maskUint64_t].count(cluster) == 1)
+	// 			{
+	// 				// std::cerr << "replace read " << i << " " << j << " " << k << " (" << (node & maskUint64_t) << ") with " << contextToNewNodeNumber[node & maskUint64_t].at(cluster) << std::endl;
+	// 				resultPaths[i].paths[j].path[k] = (node & firstBitUint64_t) + (contextToNewNodeNumber[node & maskUint64_t].at(cluster));
+	// 				break;
+	// 			}
+	// 		}
+	// 	});
+	// }
 	RankBitvector kept;
 	kept.resize(resultGraph.nodeCount());
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
@@ -3107,7 +3520,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHapmers(const Unit
 	std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>>> hetInfoPerRead = getHetInfoPerRead(unitigGraph, readPaths, anchorChains, allelesPerReadPerChain, readPaths.size(), approxOneHapCoverage);
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
-	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(anchorChains, unitigGraph, readPaths, hetInfoPerRead, chainPositionsInReads, resolveLength);
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(false, anchorChains, unitigGraph, readPaths, hetInfoPerRead, chainPositionsInReads, resolveLength, approxOneHapCoverage);
 	RankBitvector kept;
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
@@ -3117,7 +3530,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHapmers(const Unit
 	return filterUnitigGraph(unzippedGraph, unzippedReadPaths, kept);
 }
 
-phmap::flat_hash_map<uint64_t, std::pair<uint64_t, size_t>> getUniqueLocallyUniqueNodeEdges(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const phmap::flat_hash_set<size_t>& notUniques)
+phmap::flat_hash_map<uint64_t, std::pair<uint64_t, size_t>> getUniqueLocallyUniqueNodeEdges(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<bool>& uniques)
 {
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<int>> distances;
 	for (size_t i = 0; i < readPaths.size(); i++)
@@ -3132,8 +3545,7 @@ phmap::flat_hash_map<uint64_t, std::pair<uint64_t, size_t>> getUniqueLocallyUniq
 				uint64_t node = readPaths[i].paths[j].path[k];
 				readPos += unitigGraph.lengths[node & maskUint64_t];
 				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
-				if (notUniques.count(node & maskUint64_t) == 1) continue;
-				if (unitigGraph.coverages[node & maskUint64_t] < approxOneHapCoverage * 0.5) continue;
+				if (!uniques[node & maskUint64_t]) continue;
 				if (lastLocalUniq == std::numeric_limits<size_t>::max())
 				{
 					lastLocalUniq = node;
@@ -3190,7 +3602,7 @@ phmap::flat_hash_map<uint64_t, std::pair<uint64_t, size_t>> getUniqueLocallyUniq
 	return result;
 }
 
-void makeFakeLocalUniqGraph(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const phmap::flat_hash_set<size_t>& notUniques)
+void makeFakeLocalUniqGraph(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<bool>& uniques)
 {
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<int>> distances;
 	for (size_t i = 0; i < readPaths.size(); i++)
@@ -3205,8 +3617,7 @@ void makeFakeLocalUniqGraph(const UnitigGraph& unitigGraph, const std::vector<Re
 				uint64_t node = readPaths[i].paths[j].path[k];
 				readPos += unitigGraph.lengths[node & maskUint64_t];
 				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
-				if (notUniques.count(node & maskUint64_t) == 1) continue;
-				if (unitigGraph.coverages[node & maskUint64_t] < approxOneHapCoverage * 0.5) continue;
+				if (!uniques[node & maskUint64_t]) continue;
 				if (lastLocalUniq == std::numeric_limits<size_t>::max())
 				{
 					lastLocalUniq = node;
@@ -3237,8 +3648,7 @@ void makeFakeLocalUniqGraph(const UnitigGraph& unitigGraph, const std::vector<Re
 	std::ofstream graph { "localuniqgraph.gfa" };
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
-		if (unitigGraph.coverages[i] < approxOneHapCoverage * 0.5) continue;
-		if (notUniques.count(i) == 1) continue;
+		if (!uniques[i]) continue;
 		graph << "S\t" << i << "\t*\tLN:i:" << unitigGraph.lengths[i] << "\tll:i:" << unitigGraph.coverages[i] << "\tFC:i:" << (unitigGraph.coverages[i]*unitigGraph.lengths[i]) << std::endl;
 	}
 	size_t edgenum = 0;
@@ -3283,20 +3693,36 @@ AnchorChain getLocallyUniqueChain(const phmap::flat_hash_map<uint64_t, std::pair
 	return result;
 }
 
-std::vector<std::vector<ChainPosition>> getReadLocalUniqChains(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t minLength, const size_t resolveLength)
+std::pair<std::vector<std::vector<ChainPosition>>, std::vector<bool>> getReadLocalUniqChains(const std::vector<AnchorChain>& anchorChains, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t maxCopyCount, const size_t minLength, const size_t uniqSpanLength)
 {
 	const size_t notSameNodeDistance = 100;
-	phmap::flat_hash_set<size_t> notUniques;
+	std::vector<bool> uniques;
+	uniques.resize(unitigGraph.nodeCount(), false);
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		if (unitigGraph.coverages[i] < approxOneHapCoverage * 0.5) continue;
+		if (unitigGraph.coverages[i] > approxOneHapCoverage * ((double)maxCopyCount + 0.5)) continue;
+		uniques[i] = true;
+	}
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
 		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
 		{
-			phmap::flat_hash_set<size_t> found;
+			phmap::flat_hash_map<size_t, size_t> found;
+			size_t readPos = readPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 			{
 				size_t node = readPaths[i].paths[j].path[k] & maskUint64_t;
-				if (found.count(node) == 1) notUniques.insert(node);
-				found.insert(node);
+				readPos += unitigGraph.lengths[node & maskUint64_t];
+				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
+				if (found.count(node) == 1)
+				{
+					if (found.at(node) + uniqSpanLength >= readPos)
+					{
+						uniques[node & maskUint64_t] = false;
+					}
+				}
+				found[node] = readPos;
 			}
 		}
 	}
@@ -3311,33 +3737,91 @@ std::vector<std::vector<ChainPosition>> getReadLocalUniqChains(const UnitigGraph
 				uint64_t node = readPaths[i].paths[j].path[k];
 				readPos += unitigGraph.lengths[node & maskUint64_t];
 				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
-				if (notUniques.count(node & maskUint64_t) == 1) continue;
+				if (!uniques[node & maskUint64_t]) continue;
 				nodePositions[node].emplace_back(readPos);
 			}
 		}
 		for (auto& pair : nodePositions)
 		{
-			if (notUniques.count(pair.first & maskUint64_t) == 1) continue;
+			if (!uniques[pair.first & maskUint64_t]) continue;
 			std::sort(pair.second.begin(), pair.second.end());
 			for (size_t j = 1; j < pair.second.size(); j++)
 			{
 				if (pair.second[j] < pair.second[j-1] + notSameNodeDistance) continue;
-				if (pair.second[j] > pair.second[j-1] + resolveLength) continue;
-				notUniques.insert(pair.first);
+				if (pair.second[j] > pair.second[j-1] + uniqSpanLength) continue;
+				uniques[pair.first & maskUint64_t] = false;
 				break;
 			}
 		}
 	}
-	makeFakeLocalUniqGraph(unitigGraph, readPaths, approxOneHapCoverage, notUniques);
-	auto edges = getUniqueLocallyUniqueNodeEdges(unitigGraph, readPaths, approxOneHapCoverage, notUniques);
+	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	{
+		if (unitigGraph.lengths[i] < uniqSpanLength) continue;
+		uniques[i] = true;
+	}
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		if (anchorChains[i].ploidy != 1) continue;
+		for (auto node : anchorChains[i].nodes)
+		{
+			uniques[node & maskUint64_t] = true;
+		}
+	}
+	makeFakeLocalUniqGraph(unitigGraph, readPaths, uniques);
+	// {
+	// 	auto edges = getUniqueLocallyUniqueNodeEdges(unitigGraph, readPaths, uniques);
+	// 	std::vector<bool> checked;
+	// 	checked.resize(unitigGraph.nodeCount(), false);
+	// 	std::vector<AnchorChain> fakeChains;
+	// 	std::vector<bool> inChain;
+	// 	inChain.resize(unitigGraph.nodeCount(), false);
+	// 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	// 	{
+	// 		if (checked[i]) continue;
+	// 		if (!uniques[i]) continue;
+	// 		AnchorChain chain = getLocallyUniqueChain(edges, i, unitigGraph);
+	// 		assert(chain.nodes.size() >= 1);
+	// 		size_t totalChainLength = 0;
+	// 		for (uint64_t node : chain.nodes)
+	// 		{
+	// 			assert(!checked[node & maskUint64_t]);
+	// 			checked[node & maskUint64_t] = true;
+	// 			totalChainLength += unitigGraph.lengths[node & maskUint64_t];
+	// 		}
+	// 		if (totalChainLength < minLength) continue;
+	// 		for (uint64_t node : chain.nodes)
+	// 		{
+	// 			inChain[node & maskUint64_t] = true;
+	// 		}
+	// 	}
+	// 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	// 	{
+	// 		if (!inChain[i]) uniques[i] = false;
+	// 	}
+	// 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	// 	{
+	// 		if (unitigGraph.lengths[i] < uniqSpanLength) continue;
+	// 		uniques[i] = true;
+	// 	}
+	// 	for (size_t i = 0; i < anchorChains.size(); i++)
+	// 	{
+	// 		if (anchorChains[i].ploidy != 1) continue;
+	// 		for (auto node : anchorChains[i].nodes)
+	// 		{
+	// 			uniques[node & maskUint64_t] = true;
+	// 		}
+	// 	}
+	// }
+	auto edges = getUniqueLocallyUniqueNodeEdges(unitigGraph, readPaths, uniques);
 	std::vector<bool> checked;
 	checked.resize(unitigGraph.nodeCount(), false);
 	std::vector<AnchorChain> fakeChains;
+	std::vector<bool> inChain;
+	inChain.resize(unitigGraph.nodeCount(), false);
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
 		if (checked[i]) continue;
-		if (notUniques.count(i) == 1) continue;
-		if (unitigGraph.coverages[i] < approxOneHapCoverage * 0.5) continue;
+		if (!uniques[i]) continue;
 		AnchorChain chain = getLocallyUniqueChain(edges, i, unitigGraph);
 		assert(chain.nodes.size() >= 1);
 		size_t totalChainLength = 0;
@@ -3345,6 +3829,7 @@ std::vector<std::vector<ChainPosition>> getReadLocalUniqChains(const UnitigGraph
 		{
 			assert(!checked[node & maskUint64_t]);
 			checked[node & maskUint64_t] = true;
+			inChain[node & maskUint64_t] = true;
 			totalChainLength += unitigGraph.lengths[node & maskUint64_t];
 		}
 		if (totalChainLength < minLength) continue;
@@ -3357,14 +3842,100 @@ std::vector<std::vector<ChainPosition>> getReadLocalUniqChains(const UnitigGraph
 		std::cerr << std::endl;
 	}
 	std::cerr << fakeChains.size() << " local-uniq chains" << std::endl;
-	return getReadChainPositions(unitigGraph, readPaths, fakeChains);
+	return std::make_pair(getReadChainPositions(unitigGraph, readPaths, fakeChains), std::move(uniques));
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t uniqSpanLength, const size_t resolveLength)
+void fixFakeSinglePloidyChains(std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
+{
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, size_t>> chainEdgeCoverage;
+	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
+	{
+		uint64_t lastChain = std::numeric_limits<size_t>::max();
+		for (size_t j = 0; j < chainPositionsInReads[i].size(); j++)
+		{
+			if (anchorChains[chainPositionsInReads[i][j].chain & maskUint64_t].ploidy != 1) continue;
+			if (lastChain == std::numeric_limits<size_t>::max())
+			{
+				lastChain = chainPositionsInReads[i][j].chain;
+				continue;
+			}
+			uint64_t thisChain = chainPositionsInReads[i][j].chain;
+			chainEdgeCoverage[lastChain][thisChain] += 1;
+			chainEdgeCoverage[thisChain ^ firstBitUint64_t][lastChain ^ firstBitUint64_t] += 1;
+			lastChain = thisChain;
+		}
+	}
+	phmap::flat_hash_map<uint64_t, uint64_t> uniqueEdge;
+	for (const auto& pair : chainEdgeCoverage)
+	{
+		uint64_t bestEdge = 0;
+		size_t bestEdgeCoverage = 0;
+		for (auto pair2 : pair.second)
+		{
+			if (pair2.second <= bestEdgeCoverage) continue;
+			bestEdgeCoverage = pair2.second;
+			bestEdge = pair2.first;
+		}
+		if (bestEdgeCoverage < approxOneHapCoverage * 0.5) continue;
+		bool valid = true;
+		for (auto pair2 : pair.second)
+		{
+			if (pair2.second < approxOneHapCoverage * 0.25) continue;
+			if (pair2.first == bestEdge) continue;
+			valid = false;
+			break;
+		}
+		if (valid) uniqueEdge[pair.first] = bestEdge;
+	}
+	phmap::flat_hash_set<size_t> actuallyDiploid;
+	for (const auto& pair : chainEdgeCoverage)
+	{
+		if (pair.second.size() < 2) continue;
+		if (uniqueEdge.count(pair.first) == 1) continue;
+		size_t numSolids = 0;
+		bool allSolidsMatched = true;
+		for (auto pair2 : pair.second)
+		{
+			if (pair2.second < approxOneHapCoverage * 0.25) continue;
+			if (pair2.second < approxOneHapCoverage * 0.5)
+			{
+				allSolidsMatched = false;
+				continue;
+			}
+			numSolids += 1;
+			if (uniqueEdge.count(pair2.first ^ firstBitUint64_t) == 0)
+			{
+				allSolidsMatched = false;
+				break;
+			}
+			if (uniqueEdge.at(pair2.first ^ firstBitUint64_t) != (pair.first ^ firstBitUint64_t))
+			{
+				allSolidsMatched = false;
+				break;
+			}
+		}
+		if (numSolids != 2) continue;
+		if (!allSolidsMatched) continue;
+		actuallyDiploid.insert(pair.first & maskUint64_t);
+	}
+	for (auto chain : actuallyDiploid)
+	{
+		std::cerr << "fixed chain " << chain << " from plody " << anchorChains[chain].ploidy << " to " << 2 << std::endl;
+		anchorChains[chain].ploidy = 2;
+	}
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t uniqSpanLength, const size_t resolveLength, const size_t maxCopyCount)
 {
 	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
-	std::vector<std::vector<ChainPosition>> localUniqPositions = getReadLocalUniqChains(unitigGraph, readPaths, approxOneHapCoverage, 100, uniqSpanLength);
+	{
+		std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
+		fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
+	}
+	std::vector<bool> localUniqs;
+	std::vector<std::vector<ChainPosition>> localUniqPositions;
+	std::tie(localUniqPositions, localUniqs) = getReadLocalUniqChains(anchorChains, unitigGraph, readPaths, approxOneHapCoverage, maxCopyCount, 100, uniqSpanLength);
 	// for (size_t i = 0; i < chainPositionsInReads.size(); i++)
 	// {
 	// 	for (auto chain : chainPositionsInReads[i])
@@ -3376,7 +3947,182 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(cons
 	hetInfoPerRead.resize(readPaths.size());
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
-	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(anchorChains, unitigGraph, readPaths, hetInfoPerRead, localUniqPositions, resolveLength);
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(false, anchorChains, unitigGraph, readPaths, hetInfoPerRead, localUniqPositions, resolveLength, approxOneHapCoverage);
+	RankBitvector kept;
+	kept.resize(unzippedGraph.nodeCount());
+	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
+	{
+		kept.set(i, unzippedGraph.coverages[i] >= 2);
+	}
+	return filterUnitigGraph(unzippedGraph, unzippedReadPaths, kept);
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const std::vector<bool>& localUniq)
+{
+	std::cerr << "split nodes by chain location" << std::endl;
+	size_t maxClusterDistance = 100;
+	assert(chainPositionsInReads.size() == readPaths.size());
+	UnitigGraph resultGraph = unitigGraph;
+	std::vector<ReadPathBundle> resultPaths = readPaths;
+	std::vector<std::vector<std::tuple<size_t, size_t, size_t, size_t>>> nodeReadPositions;
+	nodeReadPositions.resize(unitigGraph.nodeCount());
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			size_t readPos = readPaths[i].paths[j].readStartPos;
+			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
+			{
+				uint64_t node = readPaths[i].paths[j].path[k];
+				readPos += unitigGraph.lengths[node & maskUint64_t];
+				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
+				if (localUniq[node & maskUint64_t]) continue;
+				nodeReadPositions[node & maskUint64_t].emplace_back(i, j, k, readPos);
+			}
+		}
+	}
+	for (size_t iii = 0; iii < nodeReadPositions.size(); iii++)
+	{
+		if (localUniq[iii]) continue;
+		phmap::flat_hash_map<uint64_t, std::vector<size_t>> nodePositionsInChains;
+		for (auto t : nodeReadPositions[iii])
+		{
+			size_t i = std::get<0>(t);
+			size_t j = std::get<1>(t);
+			size_t k = std::get<2>(t);
+			size_t readPos = std::get<3>(t);
+			uint64_t node = readPaths[i].paths[j].path[k];
+			assert((node & maskUint64_t) == iii);
+			uint64_t uniqueChain = std::numeric_limits<size_t>::max();
+			size_t chainPosition = 0;
+			for (auto chain : chainPositionsInReads[i])
+			{
+				if (chain.chainStartPosInRead > (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]) continue;
+				if (chain.chainEndPosInRead < (int)readPos) continue;
+				if (uniqueChain == std::numeric_limits<size_t>::max())
+				{
+					uniqueChain = chain.chain;
+					if ((node ^ firstBitUint64_t) & firstBitUint64_t)
+					{
+						uniqueChain ^= firstBitUint64_t;
+					}
+				}
+				else
+				{
+					uniqueChain = std::numeric_limits<size_t>::max()-1;
+				}
+				assert((int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]/2 >= chain.chainStartPosInRead);
+				chainPosition = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]/2 - chain.chainStartPosInRead;
+				if ((node ^ firstBitUint64_t) & firstBitUint64_t)
+				{
+					assert(chain.chainEndPosInRead >= ((int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]/2));
+					chainPosition = chain.chainEndPosInRead - ((int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]/2);
+				}
+			}
+			if (uniqueChain >= std::numeric_limits<size_t>::max()-1) continue;
+			nodePositionsInChains[uniqueChain].emplace_back(chainPosition);
+		}
+		phmap::flat_hash_map<uint64_t, std::vector<std::pair<size_t, size_t>>> nodePosSplitters;
+		for (auto& pair : nodePositionsInChains)
+		{
+			assert(pair.second.size() >= 1);
+			std::sort(pair.second.begin(), pair.second.end());
+			assert(pair.second[0] >= 0);
+			nodePosSplitters[pair.first].emplace_back(0, resultGraph.nodeCount());
+			resultGraph.lengths.emplace_back(unitigGraph.lengths[iii]);
+			resultGraph.coverages.emplace_back(0);
+			// std::cerr << "node " << i << " chain " << pair.first << " (" << (pair.first & maskUint64_t) << ") coverage " << pair.second.size() << std::endl;
+			// std::cerr << "node " << i << " has splitter at chain " << pair.first << " (" << (pair.first & maskUint64_t) << ") chainpos " << nodePosSplitters[i][pair.first].back().first << " to node " << nodePosSplitters[i][pair.first].back().second << std::endl;
+			for (size_t j = 1; j < pair.second.size(); j++)
+			{
+				assert(pair.second[j] >= pair.second[j-1]);
+				if (pair.second[j] - pair.second[j-1] > maxClusterDistance)
+				{
+					nodePosSplitters[pair.first].emplace_back((pair.second[j] - pair.second[j-1])/2, resultGraph.nodeCount());
+					// std::cerr << "node " << i << " has splitter at chain " << pair.first << " (" << (pair.first & maskUint64_t) << ") chainpos " << nodePosSplitters[i][pair.first].back().first << " to node " << nodePosSplitters[i][pair.first].back().second << std::endl;
+					resultGraph.lengths.emplace_back(unitigGraph.lengths[iii]);
+					resultGraph.coverages.emplace_back(0);
+				}
+			}
+		}
+		for (auto t : nodeReadPositions[iii])
+		{
+			size_t i = std::get<0>(t);
+			size_t j = std::get<1>(t);
+			size_t k = std::get<2>(t);
+			size_t readPos = std::get<3>(t);
+			uint64_t node = readPaths[i].paths[j].path[k];
+			assert((node & maskUint64_t) == iii);
+			uint64_t uniqueChain = std::numeric_limits<size_t>::max();
+			size_t chainPosition = 0;
+			for (auto chain : chainPositionsInReads[i])
+			{
+				if (chain.chainStartPosInRead > (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]) continue;
+				if (chain.chainEndPosInRead < (int)readPos) continue;
+				if (uniqueChain == std::numeric_limits<size_t>::max())
+				{
+					uniqueChain = chain.chain;
+					if ((node ^ firstBitUint64_t) & firstBitUint64_t)
+					{
+						uniqueChain ^= firstBitUint64_t;
+					}
+				}
+				else
+				{
+					uniqueChain = std::numeric_limits<size_t>::max()-1;
+				}
+				assert((int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]/2 >= chain.chainStartPosInRead);
+				chainPosition = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]/2 - chain.chainStartPosInRead;
+				if ((node ^ firstBitUint64_t) & firstBitUint64_t)
+				{
+					assert(chain.chainEndPosInRead >= ((int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]/2));
+					chainPosition = chain.chainEndPosInRead - ((int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]/2);
+				}
+			}
+			if (uniqueChain >= std::numeric_limits<size_t>::max()-1) continue;
+			assert(nodePosSplitters.count(uniqueChain) == 1);
+			size_t replacement = std::numeric_limits<size_t>::max();
+			for (auto pair : nodePosSplitters.at(uniqueChain))
+			{
+				if (pair.first > chainPosition) break;
+				replacement = pair.second;
+			}
+			assert(replacement < resultGraph.nodeCount());
+			assert((replacement & firstBitUint64_t) == 0);
+			// std::cerr << "replace read " << i << " node " << node << " (" << (node & maskUint64_t) << ") pos " << ((int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]/2) << " chain " << uniqueChain << " (" << (uniqueChain & maskUint64_t) << ") chainpos " << chainPosition << " with " << replacement << std::endl;
+			resultPaths[i].paths[j].path[k] = replacement + (node & firstBitUint64_t);
+		}
+	}
+	RankBitvector kept;
+	kept.resize(resultGraph.nodeCount());
+	for (size_t i = 0; i < kept.size(); i++)
+	{
+		kept.set(i, true);
+	}
+	std::cerr << "unitigify" << std::endl;
+	return filterUnitigGraph(resultGraph, resultPaths, kept);
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmersLocation(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t uniqSpanLength, const size_t maxCopyCount)
+{
+	std::cerr << "unzip local uniqmer chain location" << std::endl;
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
+	std::vector<bool> localUniqs;
+	std::vector<std::vector<ChainPosition>> localUniqPositions;
+	std::tie(localUniqPositions, localUniqs) = getReadLocalUniqChains(anchorChains, unitigGraph, readPaths, approxOneHapCoverage, maxCopyCount, 100, uniqSpanLength);
+	// for (size_t i = 0; i < chainPositionsInReads.size(); i++)
+	// {
+	// 	for (auto chain : chainPositionsInReads[i])
+	// 	{
+	// 		std::cerr << "read " << i << " chain " << (chain.chain & maskUint64_t) << " " << ((chain.chain & firstBitUint64_t) ? "fw" : "bw") << " (" << (anchorChains[chain.chain].nodes[0] & maskUint64_t) << " " << (anchorChains[chain.chain].nodes.back() & maskUint64_t) << ") " << chain.chainStartPosInRead << " " << chain.chainEndPosInRead << std::endl;
+	// 	}
+	// }
+	std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>>> hetInfoPerRead;
+	hetInfoPerRead.resize(readPaths.size());
+	UnitigGraph unzippedGraph;
+	std::vector<ReadPathBundle> unzippedReadPaths;
+	std::tie(unzippedGraph, unzippedReadPaths) = splitNodesByChainLocation(unitigGraph, readPaths, localUniqPositions, localUniqs);
 	RankBitvector kept;
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
@@ -3388,6 +4134,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(cons
 
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphChainmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t resolveLength)
 {
+	std::cerr << "unzip chainmers" << std::endl;
 	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
@@ -3398,15 +4145,12 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphChainmers(const Un
 	// 		std::cerr << "read " << i << " chain " << (chain.chain & maskUint64_t) << " " << ((chain.chain & firstBitUint64_t) ? "fw" : "bw") << " (" << (anchorChains[chain.chain].nodes[0] & maskUint64_t) << " " << (anchorChains[chain.chain].nodes.back() & maskUint64_t) << ") " << chain.chainStartPosInRead << " " << chain.chainEndPosInRead << std::endl;
 	// 	}
 	// }
-	SparseEdgeContainer validChainEdges = getValidChainEdges(chainPositionsInReads, approxOneHapCoverage);
-	std::vector<std::vector<std::vector<std::vector<uint64_t>>>> allelesPerChain;
-	std::vector<std::vector<ReadDiagonalAlleles>> allelesPerReadPerChain;
-	std::tie(allelesPerChain, allelesPerReadPerChain) = getRawReadInfoPerChain(anchorChains, readPaths, unitigGraph, validChainEdges, chainPositionsInReads);
 	std::vector<std::vector<std::tuple<size_t, size_t, size_t, bool, size_t, size_t>>> hetInfoPerRead;
 	hetInfoPerRead.resize(readPaths.size());
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
-	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(anchorChains, unitigGraph, readPaths, hetInfoPerRead, chainPositionsInReads, resolveLength);
+	std::cerr << "unzip chainmers hapmers" << std::endl;
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(false, anchorChains, unitigGraph, readPaths, hetInfoPerRead, chainPositionsInReads, resolveLength, approxOneHapCoverage);
 	RankBitvector kept;
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
@@ -3645,22 +4389,6 @@ VectorWithDirection<size_t> getNodeTipTangleAssignmentsUniqueChains(const Unitig
 		}
 	}
 	return result;
-}
-
-size_t find(phmap::flat_hash_map<size_t, size_t>& parent, size_t val)
-{
-	while (parent.at(val) != parent.at(parent.at(val)))
-	{
-		parent[val] = parent.at(parent.at(val));
-	}
-	return parent.at(val);
-}
-
-void merge(phmap::flat_hash_map<size_t, size_t>& parent, size_t left, size_t right)
-{
-	left = find(parent, left);
-	right = find(parent, right);
-	parent[right] = left;
 }
 
 phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, VectorWithDirection<size_t>& nodeTipBelongsToTangle, const double approxOneHapCoverage, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads)
@@ -4142,86 +4870,6 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const bo
 	return filterUnitigGraph(resultGraph, resultPaths, kept);
 }
 
-void fixFakeSinglePloidyChains(std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
-{
-	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, size_t>> chainEdgeCoverage;
-	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
-	{
-		uint64_t lastChain = std::numeric_limits<size_t>::max();
-		for (size_t j = 0; j < chainPositionsInReads[i].size(); j++)
-		{
-			if (anchorChains[chainPositionsInReads[i][j].chain & maskUint64_t].ploidy != 1) continue;
-			if (lastChain == std::numeric_limits<size_t>::max())
-			{
-				lastChain = chainPositionsInReads[i][j].chain;
-				continue;
-			}
-			uint64_t thisChain = chainPositionsInReads[i][j].chain;
-			chainEdgeCoverage[lastChain][thisChain] += 1;
-			chainEdgeCoverage[thisChain ^ firstBitUint64_t][lastChain ^ firstBitUint64_t] += 1;
-			lastChain = thisChain;
-		}
-	}
-	phmap::flat_hash_map<uint64_t, uint64_t> uniqueEdge;
-	for (const auto& pair : chainEdgeCoverage)
-	{
-		uint64_t bestEdge = 0;
-		size_t bestEdgeCoverage = 0;
-		for (auto pair2 : pair.second)
-		{
-			if (pair2.second <= bestEdgeCoverage) continue;
-			bestEdgeCoverage = pair2.second;
-			bestEdge = pair2.first;
-		}
-		if (bestEdgeCoverage < approxOneHapCoverage * 0.5) continue;
-		bool valid = true;
-		for (auto pair2 : pair.second)
-		{
-			if (pair2.second < approxOneHapCoverage * 0.25) continue;
-			if (pair2.first == bestEdge) continue;
-			valid = false;
-			break;
-		}
-		if (valid) uniqueEdge[pair.first] = bestEdge;
-	}
-	phmap::flat_hash_set<size_t> actuallyDiploid;
-	for (const auto& pair : chainEdgeCoverage)
-	{
-		if (pair.second.size() < 2) continue;
-		if (uniqueEdge.count(pair.first) == 1) continue;
-		size_t numSolids = 0;
-		bool allSolidsMatched = true;
-		for (auto pair2 : pair.second)
-		{
-			if (pair2.second < approxOneHapCoverage * 0.25) continue;
-			if (pair2.second < approxOneHapCoverage * 0.5)
-			{
-				allSolidsMatched = false;
-				continue;
-			}
-			numSolids += 1;
-			if (uniqueEdge.count(pair2.first ^ firstBitUint64_t) == 0)
-			{
-				allSolidsMatched = false;
-				break;
-			}
-			if (uniqueEdge.at(pair2.first ^ firstBitUint64_t) != (pair.first ^ firstBitUint64_t))
-			{
-				allSolidsMatched = false;
-				break;
-			}
-		}
-		if (numSolids != 2) continue;
-		if (!allSolidsMatched) continue;
-		actuallyDiploid.insert(pair.first & maskUint64_t);
-	}
-	for (auto chain : actuallyDiploid)
-	{
-		std::cerr << "fixed chain " << chain << " from plody " << anchorChains[chain].ploidy << " to " << 2 << std::endl;
-		anchorChains[chain].ploidy = 2;
-	}
-}
-
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
 	std::cerr << "try gap fill" << std::endl;
@@ -4685,7 +5333,6 @@ std::pair<std::vector<bool>, std::vector<bool>> getHaplotypeInformativeForkPairs
 			forkAlleleCoverage[site.allele] += 1;
 		}
 	}
-	size_t pairsWithEnoughCoverage = 0;
 	std::cerr << "find checkable pairs" << std::endl;
 	std::vector<bool> resultFw;
 	std::vector<bool> resultBw;
@@ -5042,7 +5689,7 @@ std::vector<std::vector<HaplotypeInformativeSite>> getHaplotypeInformativeForks(
 	return result;
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHaploforks(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t resolveLength)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHaploforks(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t resolveLength, const bool cheapUnzip)
 {
 	std::vector<bool> hasGoodForkFw;
 	std::vector<bool> hasGoodForkBw;
@@ -5090,7 +5737,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHaploforks(const U
 		if (!informativeNode[i]) continue;
 		std::cerr << "fork informative node " << i << std::endl;
 		fakeChains.emplace_back();
-		fakeChains.back().ploidy = 1;
+		fakeChains.back().ploidy = 0;
 		fakeChains.back().nodes.emplace_back(i);
 		fakeChains.back().nodeOffsets.emplace_back(0);
 	}
@@ -5099,7 +5746,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHaploforks(const U
 	hetInfoPerRead.resize(readPaths.size());
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
-	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(fakeChains, unitigGraph, readPaths, hetInfoPerRead, fakePositions, resolveLength);
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipHapmers(cheapUnzip, fakeChains, unitigGraph, readPaths, hetInfoPerRead, fakePositions, resolveLength, approxOneHapCoverage);
 	RankBitvector kept;
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)

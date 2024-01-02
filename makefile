@@ -7,10 +7,10 @@ SRCDIR=src
 
 LIBS=`pkg-config --libs zlib`
 
-_DEPS = KmerGraph.h KmerMatcher.h MatchGroup.h UnitigGraph.h GraphCleaner.h AlnHaploFilter.h GraphPhaser.h Common.h GraphResolver.h AnchorFinder.h
+_DEPS = KmerGraph.h KmerMatcher.h MatchGroup.h UnitigGraph.h GraphCleaner.h AlnHaploFilter.h GraphPhaser.h Common.h GraphResolver.h AnchorFinder.h UnionFind.h
 DEPS = $(patsubst %, $(SRCDIR)/%, $(_DEPS))
 
-_OBJ = KmerGraph.o KmerMatcher.o UnitigGraph.o GraphCleaner.o AlnHaploFilter.o GraphPhaser.o Common.o GraphResolver.o AnchorFinder.o
+_OBJ = KmerGraph.o KmerMatcher.o UnitigGraph.o GraphCleaner.o AlnHaploFilter.o GraphPhaser.o Common.o GraphResolver.o AnchorFinder.o UnionFind.o
 OBJ = $(patsubst %, $(ODIR)/%, $(_OBJ))
 
 LINKFLAGS = $(CPPFLAGS) -Wl,-Bstatic $(LIBS) -Wl,-Bdynamic -Wl,--as-needed -lpthread -pthread -static-libstdc++

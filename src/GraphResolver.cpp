@@ -31,9 +31,10 @@ phmap::flat_hash_set<size_t> getPossiblyResolvableNodes(const UnitigGraph& uniti
 			totalBwCoverage += edgeCoverage;
 			if (edgeCoverage < averageOneHaplotypeCoverage * 0.5) valid = false;
 		}
-		if (valid) result.insert(i);
+		if (!valid) continue;
 		if (unitigGraph.coverages[i] + averageOneHaplotypeCoverage < totalBwCoverage) continue;
 		if (unitigGraph.coverages[i] > totalBwCoverage + averageOneHaplotypeCoverage) continue;
+		result.insert(i);
 	}
 	return result;
 }
