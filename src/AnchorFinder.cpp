@@ -470,7 +470,9 @@ size_t getPloidy(const std::vector<uint64_t>& nodes, const UnitigGraph& unitigGr
 		coverageSum += unitigGraph.lengths[node & maskUint64_t] * unitigGraph.coverages[node & maskUint64_t];
 	}
 	assert(coverageDivisor > 0);
-	return (coverageSum / coverageDivisor) / approxOneHapCoverage + 0.5;
+	size_t estimatedPloidy = (coverageSum / coverageDivisor) / approxOneHapCoverage + 0.5;
+	if (coverageDivisor > 10000 && estimatedPloidy == 0 && (coverageSum / coverageDivisor) >= 3) estimatedPloidy = 1;
+	return estimatedPloidy;
 }
 
 std::vector<uint64_t> getChainOneWay(const uint64_t start, const SparseEdgeContainer& edges)
@@ -578,8 +580,8 @@ void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vecto
 				}
 				if (distances.count(std::make_pair(lastAnchor, node)) == 1)
 				{
-					int distance = readOffset - lastAnchorOffset + lastAnchorPlus;
-					assert(distance >= 0);
+					int distance = (int)readOffset - (int)lastAnchorOffset + (int)lastAnchorPlus;
+					// assert(distance >= 0);
 					if (k == 0) distance -= (int)readPaths[i].paths[j].pathLeftClipKmers;
 					if (distance >= 0) distances.at(std::make_pair(lastAnchor, node)).emplace_back(distance);
 					lastAnchor = node;
@@ -592,8 +594,8 @@ void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vecto
 				}
 				if (distances.count(std::make_pair(node ^ firstBitUint64_t, lastAnchor ^ firstBitUint64_t)) == 1)
 				{
-					int distance = readOffset - lastAnchorOffset + lastAnchorPlus;
-					assert(distance >= 0);
+					int distance = (int)readOffset - (int)lastAnchorOffset + (int)lastAnchorPlus;
+					// assert(distance >= 0);
 					if (k == 0) distance -= (int)readPaths[i].paths[j].pathLeftClipKmers;
 					distance += (int)unitigGraph.lengths[node & maskUint64_t] - (int)unitigGraph.lengths[lastAnchor & maskUint64_t];
 					if (distance >= 0) distances.at(std::make_pair(node ^ firstBitUint64_t, lastAnchor ^ firstBitUint64_t)).emplace_back(distance);
@@ -823,6 +825,7 @@ void refineAnchorChainPloidies(std::vector<AnchorChain>& anchorChains, const Spa
 			}
 		}
 		size_t refinedPloidy = coverageSum / (double)coverageDivisor / approxOneHapCoverage + 0.5;
+		if (refinedPloidy == 0 && coverageDivisor > 10000 && coverageSum / (double)coverageDivisor >= 3) refinedPloidy = 1;
 		for (const uint64_t chain : chainsOfChains[i])
 		{
 			// if (anchorChains[chain & maskUint64_t].ploidy != refinedPloidy)

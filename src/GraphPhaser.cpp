@@ -2609,11 +2609,92 @@ SparseEdgeContainer getValidChainEdges(const std::vector<std::vector<ChainPositi
 	return result;
 }
 
+void fixFakeSinglePloidyChains(std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
+{
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, size_t>> chainEdgeCoverage;
+	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
+	{
+		uint64_t lastChain = std::numeric_limits<size_t>::max();
+		for (size_t j = 0; j < chainPositionsInReads[i].size(); j++)
+		{
+			if (anchorChains[chainPositionsInReads[i][j].chain & maskUint64_t].ploidy != 1) continue;
+			if (lastChain == std::numeric_limits<size_t>::max())
+			{
+				lastChain = chainPositionsInReads[i][j].chain;
+				continue;
+			}
+			uint64_t thisChain = chainPositionsInReads[i][j].chain;
+			chainEdgeCoverage[lastChain][thisChain] += 1;
+			chainEdgeCoverage[thisChain ^ firstBitUint64_t][lastChain ^ firstBitUint64_t] += 1;
+			lastChain = thisChain;
+		}
+	}
+	phmap::flat_hash_map<uint64_t, uint64_t> uniqueEdge;
+	for (const auto& pair : chainEdgeCoverage)
+	{
+		uint64_t bestEdge = 0;
+		size_t bestEdgeCoverage = 0;
+		for (auto pair2 : pair.second)
+		{
+			if (pair2.second <= bestEdgeCoverage) continue;
+			bestEdgeCoverage = pair2.second;
+			bestEdge = pair2.first;
+		}
+		if (bestEdgeCoverage < approxOneHapCoverage * 0.5) continue;
+		bool valid = true;
+		for (auto pair2 : pair.second)
+		{
+			if (pair2.second < approxOneHapCoverage * 0.25) continue;
+			if (pair2.first == bestEdge) continue;
+			valid = false;
+			break;
+		}
+		if (valid) uniqueEdge[pair.first] = bestEdge;
+	}
+	phmap::flat_hash_set<size_t> actuallyDiploid;
+	for (const auto& pair : chainEdgeCoverage)
+	{
+		if (pair.second.size() < 2) continue;
+		if (uniqueEdge.count(pair.first) == 1) continue;
+		size_t numSolids = 0;
+		bool allSolidsMatched = true;
+		for (auto pair2 : pair.second)
+		{
+			if (pair2.second < approxOneHapCoverage * 0.25) continue;
+			if (pair2.second < approxOneHapCoverage * 0.5)
+			{
+				allSolidsMatched = false;
+				continue;
+			}
+			numSolids += 1;
+			if (uniqueEdge.count(pair2.first ^ firstBitUint64_t) == 0)
+			{
+				allSolidsMatched = false;
+				break;
+			}
+			if (uniqueEdge.at(pair2.first ^ firstBitUint64_t) != (pair.first ^ firstBitUint64_t))
+			{
+				allSolidsMatched = false;
+				break;
+			}
+		}
+		if (numSolids != 2) continue;
+		if (!allSolidsMatched) continue;
+		actuallyDiploid.insert(pair.first & maskUint64_t);
+	}
+	for (auto chain : actuallyDiploid)
+	{
+		std::cerr << "fixed chain " << chain << " from plody " << anchorChains[chain].ploidy << " to " << 2 << std::endl;
+		anchorChains[chain].ploidy = 2;
+	}
+}
+
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLinearizable(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
 	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
+	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
 	// for (size_t i = 0; i < chainPositionsInReads.size(); i++)
 	// {
 	// 	for (auto chain : chainPositionsInReads[i])
@@ -3685,7 +3766,7 @@ AnchorChain getLocallyUniqueChain(const phmap::flat_hash_map<uint64_t, std::pair
 		uint64_t next = edges.at(pos).first;
 		if (edges.count(next ^ firstBitUint64_t) == 0) break;
 		if ((next & maskUint64_t) == (pos & maskUint64_t)) break;
-		if ((next ^ firstBitUint64_t) == chainstart) break;
+		if (next == chainstart) break;
 		result.nodes.push_back(next);
 		result.nodeOffsets.push_back(result.nodeOffsets.back() + edges.at(pos).second + unitigGraph.lengths[pos & maskUint64_t]);
 		pos = next;
@@ -3843,86 +3924,6 @@ std::pair<std::vector<std::vector<ChainPosition>>, std::vector<bool>> getReadLoc
 	}
 	std::cerr << fakeChains.size() << " local-uniq chains" << std::endl;
 	return std::make_pair(getReadChainPositions(unitigGraph, readPaths, fakeChains), std::move(uniques));
-}
-
-void fixFakeSinglePloidyChains(std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
-{
-	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, size_t>> chainEdgeCoverage;
-	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
-	{
-		uint64_t lastChain = std::numeric_limits<size_t>::max();
-		for (size_t j = 0; j < chainPositionsInReads[i].size(); j++)
-		{
-			if (anchorChains[chainPositionsInReads[i][j].chain & maskUint64_t].ploidy != 1) continue;
-			if (lastChain == std::numeric_limits<size_t>::max())
-			{
-				lastChain = chainPositionsInReads[i][j].chain;
-				continue;
-			}
-			uint64_t thisChain = chainPositionsInReads[i][j].chain;
-			chainEdgeCoverage[lastChain][thisChain] += 1;
-			chainEdgeCoverage[thisChain ^ firstBitUint64_t][lastChain ^ firstBitUint64_t] += 1;
-			lastChain = thisChain;
-		}
-	}
-	phmap::flat_hash_map<uint64_t, uint64_t> uniqueEdge;
-	for (const auto& pair : chainEdgeCoverage)
-	{
-		uint64_t bestEdge = 0;
-		size_t bestEdgeCoverage = 0;
-		for (auto pair2 : pair.second)
-		{
-			if (pair2.second <= bestEdgeCoverage) continue;
-			bestEdgeCoverage = pair2.second;
-			bestEdge = pair2.first;
-		}
-		if (bestEdgeCoverage < approxOneHapCoverage * 0.5) continue;
-		bool valid = true;
-		for (auto pair2 : pair.second)
-		{
-			if (pair2.second < approxOneHapCoverage * 0.25) continue;
-			if (pair2.first == bestEdge) continue;
-			valid = false;
-			break;
-		}
-		if (valid) uniqueEdge[pair.first] = bestEdge;
-	}
-	phmap::flat_hash_set<size_t> actuallyDiploid;
-	for (const auto& pair : chainEdgeCoverage)
-	{
-		if (pair.second.size() < 2) continue;
-		if (uniqueEdge.count(pair.first) == 1) continue;
-		size_t numSolids = 0;
-		bool allSolidsMatched = true;
-		for (auto pair2 : pair.second)
-		{
-			if (pair2.second < approxOneHapCoverage * 0.25) continue;
-			if (pair2.second < approxOneHapCoverage * 0.5)
-			{
-				allSolidsMatched = false;
-				continue;
-			}
-			numSolids += 1;
-			if (uniqueEdge.count(pair2.first ^ firstBitUint64_t) == 0)
-			{
-				allSolidsMatched = false;
-				break;
-			}
-			if (uniqueEdge.at(pair2.first ^ firstBitUint64_t) != (pair.first ^ firstBitUint64_t))
-			{
-				allSolidsMatched = false;
-				break;
-			}
-		}
-		if (numSolids != 2) continue;
-		if (!allSolidsMatched) continue;
-		actuallyDiploid.insert(pair.first & maskUint64_t);
-	}
-	for (auto chain : actuallyDiploid)
-	{
-		std::cerr << "fixed chain " << chain << " from plody " << anchorChains[chain].ploidy << " to " << 2 << std::endl;
-		anchorChains[chain].ploidy = 2;
-	}
 }
 
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t uniqSpanLength, const size_t resolveLength, const size_t maxCopyCount)
@@ -4212,7 +4213,7 @@ std::vector<std::tuple<uint64_t, uint64_t, size_t>> getGapFills(const std::vecto
 				if (!endsInTip[to & maskUint64_t]) continue;
 			}
 			int gapLength = chainPositionsInReads[i][j].chainStartPosInRead - chainPositionsInReads[i][j-1].chainEndPosInRead;
-			std::cerr << "gap support chain " << (from & maskUint64_t) << " to " << (to & maskUint64_t) << " length " << gapLength << std::endl;
+			std::cerr << "read " << i << " gap support chain " << (from & maskUint64_t) << " to " << (to & maskUint64_t) << " length " << gapLength << std::endl;
 			if (gapLength < 50) gapLength = 50;
 			auto key = canon(from, to);
 			gapfillLengths[key].emplace_back(gapLength);
@@ -4223,6 +4224,7 @@ std::vector<std::tuple<uint64_t, uint64_t, size_t>> getGapFills(const std::vecto
 	phmap::flat_hash_map<uint64_t, uint64_t> hasUniqueConnection;
 	for (const auto& pair : gapfillEdges)
 	{
+		std::cerr << "check unique connection chain " << ((pair.first & firstBitUint64_t) ? ">" : "<") << (pair.first & maskUint64_t) << std::endl;
 		uint64_t from = pair.first;
 		size_t bestCoverage = 0;
 		uint64_t bestEdge = 0;
@@ -4237,7 +4239,11 @@ std::vector<std::tuple<uint64_t, uint64_t, size_t>> getGapFills(const std::vecto
 				bestCoverage = gapfillLengths.at(key).size();
 			}
 		}
-		if (bestCoverage < minSafeCoverage) continue;
+		if (bestCoverage < minSafeCoverage)
+		{
+			std::cerr << "not enough coverage (" << bestCoverage << " vs " << minSafeCoverage << ")" << std::endl;
+			continue;
+		}
 		bool valid = true;
 		for (uint64_t to : pair.second)
 		{
@@ -4245,9 +4251,17 @@ std::vector<std::tuple<uint64_t, uint64_t, size_t>> getGapFills(const std::vecto
 			auto key = canon(from, to);
 			assert(gapfillLengths.count(key) == 1);
 			assert(gapfillLengths.at(key).size() >= 1);
-			if (gapfillLengths.at(key).size() > maxSpuriousCoverage) valid = false;
+			if (gapfillLengths.at(key).size() > maxSpuriousCoverage)
+			{
+				std::cerr << "has other spurious (" << gapfillLengths.at(key).size() << " vs " << maxSpuriousCoverage << ")" << std::endl;
+				valid = false;
+			}
 		}
-		if (valid) hasUniqueConnection[from] = bestEdge;
+		if (valid)
+		{
+			std::cerr << "unique connection from chain " << ((from & firstBitUint64_t) ? ">" : "<") << (from & maskUint64_t) << " to " << ((bestEdge & firstBitUint64_t) ? ">" : "<") << (bestEdge & maskUint64_t) << " coverage " << bestCoverage << std::endl;
+			hasUniqueConnection[from] = bestEdge;
+		}
 	}
 	std::vector<std::tuple<uint64_t, uint64_t, size_t>> result;
 	for (const auto& pair : gapfillLengths)
@@ -4259,6 +4273,7 @@ std::vector<std::tuple<uint64_t, uint64_t, size_t>> getGapFills(const std::vecto
 		if (hasUniqueConnection.count(to ^ firstBitUint64_t) == 0) continue;
 		if (hasUniqueConnection.at(to ^ firstBitUint64_t) != (from ^ firstBitUint64_t)) continue;
 		if (pair.second.size() < minSafeCoverage) continue;
+		std::cerr << "fill chain " << ((from & firstBitUint64_t) ? ">" : "<") << (from & maskUint64_t) << " to " << ((to & firstBitUint64_t) ? ">" : "<") << (to & maskUint64_t) << std::endl;
 		result.emplace_back(from, to, pair.second[pair.second.size()/2]);
 	}
 	return result;
@@ -4324,6 +4339,15 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> connectChainGaps(const Uniti
 	std::cerr << "try gap fill" << std::endl;
 	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		std::cerr << "chain " << i << " ploidy " << anchorChains[i].ploidy << " size " << anchorChains[i].nodes.size();
+		for (auto node : anchorChains[i].nodes)
+		{
+			std::cerr << " " << (node & maskUint64_t);
+		}
+		std::cerr << std::endl;
+	}
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	std::vector<bool> endsInTip;
 	std::vector<bool> startsWithTip;
@@ -4391,7 +4415,7 @@ VectorWithDirection<size_t> getNodeTipTangleAssignmentsUniqueChains(const Unitig
 	return result;
 }
 
-phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, VectorWithDirection<size_t>& nodeTipBelongsToTangle, const double approxOneHapCoverage, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads)
+phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, VectorWithDirection<size_t>& nodeTipBelongsToTangle, const size_t minValidCoverage, const size_t maxSpuriousCoverage, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads)
 {
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> spannerCoverages;
 	phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<uint64_t>> spannerEdges;
@@ -4439,7 +4463,7 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool
 				bestCoverage = spannerCoverages.at(key);
 			}
 		}
-		if (bestCoverage < approxOneHapCoverage * 0.5) continue;
+		if (bestCoverage < minValidCoverage) continue;
 		bool valid = true;
 		for (uint64_t to : pair.second)
 		{
@@ -4447,7 +4471,7 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool
 			auto key = canon(from, to);
 			assert(spannerCoverages.count(key) == 1);
 			assert(spannerCoverages.at(key) >= 1);
-			if (spannerCoverages.at(key) > 3) valid = false;
+			if (spannerCoverages.at(key) > maxSpuriousCoverage) valid = false;
 		}
 		if (!valid) continue;
 		hasUniqueConnection[from] = bestEdge;
@@ -4549,7 +4573,6 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool
 			{
 				otherNode = anchorChains[otherChain & maskUint64_t].nodes[0] ^ firstBitUint64_t;
 			}
-			assert(nodeTipBelongsToTangle[std::make_pair(otherNode & maskUint64_t, otherNode & firstBitUint64_t)] == i);
 			if (hasUniqueConnection.count(hasUniqueConnection.at(tip) ^ firstBitUint64_t) == 0)
 			{
 				allValid = false;
@@ -4560,6 +4583,7 @@ phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> getTangleSpanners(const bool
 				allValid = false;
 				break;
 			}
+			assert(nodeTipBelongsToTangle[std::make_pair(otherNode & maskUint64_t, otherNode & firstBitUint64_t)] == i);
 		}
 		if (!allValid) continue;
 		for (uint64_t tip : chainsPerTangle[i])
@@ -4870,6 +4894,21 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const bo
 	return filterUnitigGraph(resultGraph, resultPaths, kept);
 }
 
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTanglesBipartite(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+{
+	std::cerr << "try bipartite spanning" << std::endl;
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
+	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
+	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
+	VectorWithDirection<size_t> nodeTipBelongsToTangle = getNodeTipTangleAssignmentsUniqueChains(unitigGraph, anchorChains);
+	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> validSpans = getTangleSpanners(removeContained, unitigGraph, readPaths, nodeTipBelongsToTangle, 2, 1, anchorChains, chainPositionsInReads);
+	UnitigGraph resultGraph;
+	std::vector<ReadPathBundle> resultPaths;
+	std::tie(resultGraph, resultPaths) = applyTangleSpanners(false, unitigGraph, readPaths, nodeTipBelongsToTangle, validSpans, chainPositionsInReads, anchorChains);
+	return std::make_pair(std::move(resultGraph), std::move(resultPaths));
+}
+
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
 	std::cerr << "try gap fill" << std::endl;
@@ -4878,7 +4917,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const 
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
 	VectorWithDirection<size_t> nodeTipBelongsToTangle = getNodeTipTangleAssignmentsUniqueChains(unitigGraph, anchorChains);
-	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> validSpans = getTangleSpanners(false, unitigGraph, readPaths, nodeTipBelongsToTangle, approxOneHapCoverage, anchorChains, chainPositionsInReads);
+	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> validSpans = getTangleSpanners(removeContained, unitigGraph, readPaths, nodeTipBelongsToTangle, approxOneHapCoverage * 0.5, 3, anchorChains, chainPositionsInReads);
 	UnitigGraph resultGraph;
 	std::vector<ReadPathBundle> resultPaths;
 	std::tie(resultGraph, resultPaths) = applyTangleSpanners(false, unitigGraph, readPaths, nodeTipBelongsToTangle, validSpans, chainPositionsInReads, anchorChains);
@@ -5015,7 +5054,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveUniqueChainContainedT
 	if (!splitAnything) return std::make_pair(unitigGraph, readPaths);
 	chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	VectorWithDirection<size_t> nodeTipBelongsToTangle = getNodeTipTangleAssignmentsUniqueChains(unitigGraph, anchorChains);
-	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> validSpans = getTangleSpanners(false, unitigGraph, readPaths, nodeTipBelongsToTangle, approxOneHapCoverage, anchorChains, chainPositionsInReads);
+	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> validSpans = getTangleSpanners(false, unitigGraph, readPaths, nodeTipBelongsToTangle, approxOneHapCoverage * 0.5, 3, anchorChains, chainPositionsInReads);
 	UnitigGraph resultGraph;
 	std::vector<ReadPathBundle> resultPaths;
 	std::tie(resultGraph, resultPaths) = applyTangleSpanners(false, unitigGraph, readPaths, nodeTipBelongsToTangle, validSpans, chainPositionsInReads, anchorChains);
@@ -5026,6 +5065,8 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const 
 {
 	auto result = resolveSpannedTangles(false, unitigGraph, readPaths, approxOneHapCoverage);
 	result = resolveSpannedTangles(true, result.first, result.second, approxOneHapCoverage);
+	result = resolveSpannedTanglesBipartite(false, result.first, result.second, approxOneHapCoverage);
+	result = resolveSpannedTanglesBipartite(true, result.first, result.second, approxOneHapCoverage);
 	result = resolveUniqueChainContainedTangles(result.first, result.second, approxOneHapCoverage);
 	return result;
 }
