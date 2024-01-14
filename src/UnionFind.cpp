@@ -52,3 +52,34 @@ void merge(std::vector<size_t>& parent, size_t left, size_t right)
 	right = find(parent, right);
 	parent[right] = left;
 }
+
+std::pair<size_t, bool> find(std::vector<std::pair<size_t, bool>>& parent, size_t val)
+{
+	assert(val < parent.size());
+	std::pair<size_t, bool> result;
+	while (parent[val].first != parent[parent[val].first].first)
+	{
+		if (parent[val].second)
+		{
+			parent[val] = parent[parent[val].first];
+		}
+		else
+		{
+			parent[val] = parent[parent[val].first];
+			parent[val].second = !parent[val].second;
+		}
+	}
+	return parent[val];
+}
+
+void merge(std::vector<std::pair<size_t, bool>>& parent, size_t left, size_t right, bool fw)
+{
+	std::pair<size_t, bool> leftp = find(parent, left);
+	std::pair<size_t, bool> rightp = find(parent, right);
+	if (leftp.first == rightp.first)
+	{
+		assert(leftp.second ^ rightp.second ^ fw);
+		return;
+	}
+	parent[rightp.first] = std::make_pair(leftp.first, rightp.second ^ leftp.second ^ fw);
+}
