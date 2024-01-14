@@ -15,6 +15,7 @@
 #include "GraphPhaser.h"
 #include "GraphResolver.h"
 #include "AnchorFinder.h"
+#include "ChunkmerFilter.h"
 
 void writePaths(const std::string& filename, const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readUnitigGraphPaths, const size_t k)
 {
@@ -488,12 +489,12 @@ bool annotationsMismatch(const std::vector<std::vector<HaplotypeInformativeSite>
 	return false;
 }
 
-std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIndex, const std::vector<TwobitString>& readSequences, size_t numThreads, const std::vector<size_t>& rawReadLengths, const size_t minAlignmentLength, const size_t k, const size_t graphk, const size_t graphd, const size_t maxIndexCoverage, const std::vector<std::vector<ChainPosition>>& readAnnotations)
+std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIndex, const std::vector<TwobitString>& readSequences, size_t numThreads, const std::vector<size_t>& rawReadLengths, const size_t minAlignmentLength, const size_t k, const size_t graphk, const size_t graphd, const size_t maxIndexCoverage, const std::vector<bool>& usableChunkmers, const std::vector<std::vector<ChainPosition>>& readAnnotations)
 {
 	std::mutex printMutex;
 	std::vector<MatchGroup> matches;
 	size_t countFiltered = 0;
-	auto result = matchIndex.iterateMatchChains(numThreads, 2, maxIndexCoverage, 50, rawReadLengths, [&printMutex, &matches, minAlignmentLength, &rawReadLengths, k, graphd, &readAnnotations, &countFiltered](const size_t left, const size_t leftstart, const size_t leftend, const bool leftFw, const size_t right, const size_t rightstart, const size_t rightend, const bool rightFw)
+	auto result = matchIndex.iterateMatchChains(numThreads, 2, maxIndexCoverage, 50, rawReadLengths, usableChunkmers, [&printMutex, &matches, minAlignmentLength, &rawReadLengths, k, graphd, &readAnnotations, &countFiltered](const size_t left, const size_t leftstart, const size_t leftend, const bool leftFw, const size_t right, const size_t rightstart, const size_t rightend, const bool rightFw)
 	{
 		if (leftend+1-leftstart < minAlignmentLength) return;
 		if (rightend+1-rightstart < minAlignmentLength) return;
@@ -557,11 +558,11 @@ std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIn
 	return matches;
 }
 
-std::vector<MatchGroup> getMatches(const MatchIndex& matchIndex, const std::vector<TwobitString>& readSequences, size_t numThreads, const std::vector<size_t>& rawReadLengths, const size_t minAlignmentLength, const size_t k, const size_t graphk, const size_t graphd, const size_t maxIndexCoverage)
+std::vector<MatchGroup> getMatches(const MatchIndex& matchIndex, const std::vector<TwobitString>& readSequences, size_t numThreads, const std::vector<size_t>& rawReadLengths, const size_t minAlignmentLength, const size_t k, const size_t graphk, const size_t graphd, const std::vector<bool>& usableChunkmers, const size_t maxIndexCoverage)
 {
 	std::vector<std::vector<ChainPosition>> tmp;
 	tmp.resize(rawReadLengths.size());
-	return getMatchesFilteredByAnnotation(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, maxIndexCoverage, tmp);
+	return getMatchesFilteredByAnnotation(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, maxIndexCoverage, usableChunkmers, tmp);
 }
 
 std::vector<MatchGroup> filterMatchesByAnnotations(const std::vector<MatchGroup>& initialMatches, const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<ChainPosition>>& chainAnnotations, const std::vector<std::vector<HaplotypeInformativeSite>>& haplotypeEdgeAnnotations)
@@ -638,7 +639,8 @@ int main(int argc, char** argv)
 		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
 	}
 	auto rawReadLengths = storage.getRawReadLengths();
-	std::vector<MatchGroup> initialMatches = getMatches(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, std::numeric_limits<size_t>::max());
+	std::vector<bool> usableChunkmers = getFilteredValidChunks(matchIndex, rawReadLengths, std::numeric_limits<size_t>::max(), 20000, 5);
+	std::vector<MatchGroup> initialMatches = getMatches(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, usableChunkmers, std::numeric_limits<size_t>::max());
 	std::vector<MatchGroup> filteredMatches = initialMatches;
 //	doHaplofilter(matches, readKmerLengths);
 	// {
