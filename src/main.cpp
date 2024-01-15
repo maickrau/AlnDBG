@@ -555,6 +555,45 @@ std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIn
 	std::cerr << countFiltered << " mapping matches filtered by annotation mismatch" << std::endl;
 	std::cerr << matches.size() << " mapping matches" << std::endl;
 	addKmerMatches(numThreads, readSequences, matches, graphk, graphd);
+	size_t filteredFromKmerGaps = 0;
+	size_t countRemainingKmerMatches = 0;
+	for (size_t i = matches.size()-1; i < matches.size(); i--)
+	{
+		size_t lastKmerLeftMatchPos = 0;
+		size_t lastKmerRightMatchPos = 0;
+		bool remove = false;
+		for (size_t j = 0; j < matches[i].matches.size(); j++)
+		{
+			assert(j == 0 || matches[i].matches[j].leftStart >= matches[i].matches[j-1].leftStart);
+			if (matches[i].matches[j].leftStart > lastKmerLeftMatchPos + 500)
+			{
+				remove = true;
+				break;
+			}
+			if (matches[i].matches[j].rightStart > lastKmerRightMatchPos + 500)
+			{
+				remove = true;
+				break;
+			}
+			lastKmerLeftMatchPos = std::max(lastKmerLeftMatchPos, (size_t)matches[i].matches[j].leftStart + (size_t)matches[i].matches[j].length);
+			lastKmerRightMatchPos = std::max(lastKmerRightMatchPos, (size_t)matches[i].matches[j].rightStart + (size_t)matches[i].matches[j].length);
+		}
+		if (matches[i].leftEnd - matches[i].leftStart > lastKmerLeftMatchPos + 500) remove = true;
+		if (matches[i].rightEnd - matches[i].rightStart > lastKmerRightMatchPos + 500) remove = true;
+		if (remove)
+		{
+			std::swap(matches[i], matches.back());
+			matches.pop_back();
+			filteredFromKmerGaps += 1;
+		}
+		else
+		{
+			countRemainingKmerMatches += matches[i].matches.size();
+		}
+	}
+	std::cerr << filteredFromKmerGaps << " mapping matches filtered by k-mer gaps" << std::endl;
+	std::cerr << matches.size() << " mapping matches" << std::endl;
+	std::cerr << countRemainingKmerMatches << " kmer matches" << std::endl;
 	return matches;
 }
 
@@ -639,7 +678,7 @@ int main(int argc, char** argv)
 		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
 	}
 	auto rawReadLengths = storage.getRawReadLengths();
-	std::vector<bool> usableChunkmers = getFilteredValidChunks(matchIndex, rawReadLengths, std::numeric_limits<size_t>::max(), 20000, 5);
+	std::vector<bool> usableChunkmers = getFilteredValidChunks(matchIndex, rawReadLengths, std::numeric_limits<size_t>::max(), 10000, 10);
 	std::vector<MatchGroup> initialMatches = getMatches(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, usableChunkmers, std::numeric_limits<size_t>::max());
 	std::vector<MatchGroup> filteredMatches = initialMatches;
 //	doHaplofilter(matches, readKmerLengths);
