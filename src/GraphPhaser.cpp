@@ -2691,6 +2691,8 @@ void fixFakeSinglePloidyChains(std::vector<AnchorChain>& anchorChains, const std
 
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLinearizable(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
+	std::cerr << "try phase diploid chains" << std::endl;
+	std::cerr << "get anchor chains" << std::endl;
 	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);

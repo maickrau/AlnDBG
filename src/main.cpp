@@ -505,38 +505,39 @@ std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIn
 		}
 		std::lock_guard<std::mutex> lock { printMutex };
 		assert(leftFw);
-		size_t numAlnChunks = std::max(leftend+1-leftstart, rightend+1-rightstart)/(std::numeric_limits<uint16_t>::max()-k-graphd-100)+1;
-		assert(numAlnChunks >= 1);
-		if (numAlnChunks == 1)
+		matches.emplace_back();
+		matches.back().leftRead = left;
+		matches.back().rightRead = right;
+		matches.back().rightFw = rightFw;
+		matches.back().leftStart = leftstart;
+		matches.back().leftEnd = leftend;
+		matches.back().rightStart = rightstart;
+		matches.back().rightEnd = rightend;
+		double slope = (double)(rightend-rightstart) / (double)(leftend-leftstart);
+		if (rightstart*slope < leftstart)
 		{
-			matches.emplace_back();
-			matches.back().leftRead = left;
-			matches.back().rightRead = right;
-			matches.back().rightFw = rightFw;
-			matches.back().leftStart = leftstart;
-			matches.back().leftEnd = leftend+1;
-			matches.back().rightStart = rightstart;
-			matches.back().rightEnd = rightend+1;
+			matches.back().leftStart -= rightstart*slope;
+			matches.back().rightStart = 0;
 		}
 		else
 		{
-			assert(numAlnChunks >= 2);
-			size_t leftPerChunk = (double)(leftend+1-leftstart)/(double)numAlnChunks;
-			size_t rightPerChunk = (double)(rightend+1-rightstart)/(double)numAlnChunks;
-			for (size_t i = 0; i < numAlnChunks; i++)
-			{
-				matches.emplace_back();
-				matches.back().leftRead = left;
-				matches.back().rightRead = right;
-				matches.back().rightFw = rightFw;
-				matches.back().leftStart = leftstart + i * leftPerChunk;
-				matches.back().leftEnd = leftstart + (i+1) * leftPerChunk + k + graphd;
-				matches.back().rightStart = rightstart + i * rightPerChunk;
-				matches.back().rightEnd = rightstart + (i+1) * rightPerChunk + k + graphd;
-			}
-			matches.back().leftEnd = leftend+1;
-			matches.back().rightEnd = rightend+1;
+			assert(rightstart >= (size_t)(leftstart/slope));
+			matches.back().rightStart -= leftstart/slope;
+			matches.back().leftStart = 0;
 		}
+		if ((rawReadLengths[right]-rightend-1)*slope < (rawReadLengths[left]-leftend-1))
+		{
+			matches.back().leftEnd += (rawReadLengths[right]-rightend-1)*slope;
+			assert(matches.back().leftEnd < rawReadLengths[left]);
+			matches.back().rightEnd = rawReadLengths[right]-1;
+		}
+		else
+		{
+			matches.back().rightEnd += (rawReadLengths[left]-leftend-1)/slope;
+			assert(matches.back().rightEnd < rawReadLengths[right]);
+			matches.back().leftEnd = rawReadLengths[left]-1;
+		}
+		std::cerr << "match " << leftstart << " " << leftend << " " << rawReadLengths[left] << " " << rightstart << " " << rightend << " " << rawReadLengths[right] << " became " << matches.back().leftStart << " " << matches.back().leftEnd << " " << matches.back().rightStart << " " << matches.back().rightEnd << std::endl;
 	});
 	std::stable_sort(matches.begin(), matches.end(), [](const auto& left, const auto& right){
 		if (left.leftRead < right.leftRead) return true;
@@ -554,43 +555,43 @@ std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIn
 	std::cerr << result.maxPerChunk << " max windowchunk size" << std::endl;
 	std::cerr << countFiltered << " mapping matches filtered by annotation mismatch" << std::endl;
 	std::cerr << matches.size() << " mapping matches" << std::endl;
-	addKmerMatches(numThreads, readSequences, matches, graphk, graphd);
+	matches = addKmerMatches(numThreads, readSequences, matches, graphk, graphd);
 	size_t filteredFromKmerGaps = 0;
 	size_t countRemainingKmerMatches = 0;
-	for (size_t i = matches.size()-1; i < matches.size(); i--)
-	{
-		size_t lastKmerLeftMatchPos = 0;
-		size_t lastKmerRightMatchPos = 0;
-		bool remove = false;
-		for (size_t j = 0; j < matches[i].matches.size(); j++)
-		{
-			assert(j == 0 || matches[i].matches[j].leftStart >= matches[i].matches[j-1].leftStart);
-			if (matches[i].matches[j].leftStart > lastKmerLeftMatchPos + 500)
-			{
-				remove = true;
-				break;
-			}
-			if (matches[i].matches[j].rightStart > lastKmerRightMatchPos + 500)
-			{
-				remove = true;
-				break;
-			}
-			lastKmerLeftMatchPos = std::max(lastKmerLeftMatchPos, (size_t)matches[i].matches[j].leftStart + (size_t)matches[i].matches[j].length);
-			lastKmerRightMatchPos = std::max(lastKmerRightMatchPos, (size_t)matches[i].matches[j].rightStart + (size_t)matches[i].matches[j].length);
-		}
-		if (matches[i].leftEnd - matches[i].leftStart > lastKmerLeftMatchPos + 500) remove = true;
-		if (matches[i].rightEnd - matches[i].rightStart > lastKmerRightMatchPos + 500) remove = true;
-		if (remove)
-		{
-			std::swap(matches[i], matches.back());
-			matches.pop_back();
-			filteredFromKmerGaps += 1;
-		}
-		else
-		{
-			countRemainingKmerMatches += matches[i].matches.size();
-		}
-	}
+	// for (size_t i = matches.size()-1; i < matches.size(); i--)
+	// {
+	// 	size_t lastKmerLeftMatchPos = 0;
+	// 	size_t lastKmerRightMatchPos = 0;
+	// 	bool remove = false;
+	// 	for (size_t j = 0; j < matches[i].matches.size(); j++)
+	// 	{
+	// 		assert(j == 0 || matches[i].matches[j].leftStart >= matches[i].matches[j-1].leftStart);
+	// 		if (matches[i].matches[j].leftStart > lastKmerLeftMatchPos + 500)
+	// 		{
+	// 			remove = true;
+	// 			break;
+	// 		}
+	// 		if (matches[i].matches[j].rightStart > lastKmerRightMatchPos + 500)
+	// 		{
+	// 			remove = true;
+	// 			break;
+	// 		}
+	// 		lastKmerLeftMatchPos = std::max(lastKmerLeftMatchPos, (size_t)matches[i].matches[j].leftStart + (size_t)matches[i].matches[j].length);
+	// 		lastKmerRightMatchPos = std::max(lastKmerRightMatchPos, (size_t)matches[i].matches[j].rightStart + (size_t)matches[i].matches[j].length);
+	// 	}
+	// 	if (matches[i].leftEnd - matches[i].leftStart > lastKmerLeftMatchPos + 500) remove = true;
+	// 	if (matches[i].rightEnd - matches[i].rightStart > lastKmerRightMatchPos + 500) remove = true;
+	// 	if (remove)
+	// 	{
+	// 		std::swap(matches[i], matches.back());
+	// 		matches.pop_back();
+	// 		filteredFromKmerGaps += 1;
+	// 	}
+	// 	else
+	// 	{
+	// 		countRemainingKmerMatches += matches[i].matches.size();
+	// 	}
+	// }
 	std::cerr << filteredFromKmerGaps << " mapping matches filtered by k-mer gaps" << std::endl;
 	std::cerr << matches.size() << " mapping matches" << std::endl;
 	std::cerr << countRemainingKmerMatches << " kmer matches" << std::endl;

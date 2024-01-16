@@ -5,6 +5,6 @@
 #include "MatchGroup.h"
 #include "TwobitString.h"
 
-void addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t graphk, const size_t graphd);
+std::vector<MatchGroup> addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& readSequences, const std::vector<MatchGroup>& matches, const size_t graphk, const size_t graphd);
 
 #endif

@@ -323,16 +323,18 @@ void removeContainedKmerMatches(MatchGroup& matches)
 	}
 }
 
-void addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t graphk, const size_t graphd)
+std::vector<MatchGroup> addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& readSequences, const std::vector<MatchGroup>& matches, const size_t graphk, const size_t graphd)
 {
 	std::atomic<size_t> kmerMatchCount;
 	kmerMatchCount = 0;
 	size_t nextIndex = 0;
 	std::mutex indexMutex;
+	std::mutex resultMutex;
 	std::vector<std::thread> threads;
+	std::vector<MatchGroup> result;
 	for (size_t i = 0; i < numThreads; i++)
 	{
-		threads.emplace_back([&matches, &readSequences, graphk, graphd, &nextIndex, &indexMutex, &kmerMatchCount](){
+		threads.emplace_back([&matches, &readSequences, graphk, graphd, &nextIndex, &indexMutex, &resultMutex, &kmerMatchCount, &result](){
 			while (true)
 			{
 				size_t startIndex = 0;
@@ -347,10 +349,83 @@ void addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& re
 				if (startIndex >= matches.size()) break;
 				for (size_t i = startIndex; i < endIndex; i++)
 				{
-					getKmerMatches(readSequences, matches[i], graphk, graphd);
-					removeContainedKmerMatches(matches[i]);
-					std::sort(matches[i].matches.begin(), matches[i].matches.end(), [](auto left, auto right) { return left.leftStart < right.leftStart; });
-					kmerMatchCount += matches[i].matches.size();
+					std::vector<MatchGroup> tmp;
+					size_t leftstart = matches[i].leftStart;
+					size_t leftend = matches[i].leftEnd;
+					size_t rightstart = matches[i].rightStart;
+					size_t rightend = matches[i].rightEnd;
+					size_t left = matches[i].leftRead;
+					size_t right = matches[i].rightRead;
+					bool rightFw = matches[i].rightFw;
+					size_t numAlnChunks = std::max(leftend+1-leftstart, rightend+1-rightstart)/(std::numeric_limits<uint16_t>::max()-graphk-graphd-100)+1;
+					assert(numAlnChunks >= 1);
+					if (numAlnChunks == 1)
+					{
+						tmp.emplace_back();
+						tmp.back().leftRead = left;
+						tmp.back().rightRead = right;
+						tmp.back().rightFw = rightFw;
+						tmp.back().leftStart = leftstart;
+						tmp.back().leftEnd = leftend+1;
+						tmp.back().rightStart = rightstart;
+						tmp.back().rightEnd = rightend+1;
+					}
+					else
+					{
+						assert(numAlnChunks >= 2);
+						size_t leftPerChunk = (double)(leftend+1-leftstart)/(double)numAlnChunks;
+						size_t rightPerChunk = (double)(rightend+1-rightstart)/(double)numAlnChunks;
+						for (size_t l = 0; l < numAlnChunks; l++)
+						{
+							tmp.emplace_back();
+							tmp.back().leftRead = left;
+							tmp.back().rightRead = right;
+							tmp.back().rightFw = rightFw;
+							tmp.back().leftStart = leftstart + l * leftPerChunk;
+							tmp.back().leftEnd = leftstart + (l+1) * leftPerChunk + graphk + graphd;
+							tmp.back().rightStart = rightstart + l * rightPerChunk;
+							tmp.back().rightEnd = rightstart + (l+1) * rightPerChunk + graphk + graphd;
+						}
+						tmp.back().leftEnd = leftend+1;
+						tmp.back().rightEnd = rightend+1;
+					}
+					bool valid = true;
+					size_t lastLeftEnd = leftstart;
+					size_t lastRightEnd = rightstart;
+					for (size_t j = 0; j < tmp.size(); j++)
+					{
+						getKmerMatches(readSequences, tmp[j], graphk, graphd);
+						removeContainedKmerMatches(tmp[j]);
+						std::sort(tmp[j].matches.begin(), tmp[j].matches.end(), [](auto left, auto right) { return left.leftStart < right.leftStart; });
+						for (auto match : tmp[j].matches)
+						{
+							if (tmp[j].leftStart + (size_t)match.leftStart > lastLeftEnd + 1000)
+							{
+								valid = false;
+								break;
+							}
+							if (tmp[j].rightStart + (size_t)match.rightStart > lastRightEnd + 1000)
+							{
+								valid = false;
+								break;
+							}
+							lastLeftEnd = tmp[j].leftStart + (size_t)match.leftStart + (size_t)match.length;
+							lastRightEnd = tmp[j].rightStart + (size_t)match.rightStart + (size_t)match.length;
+						}
+						if (!valid) break;
+					}
+					if (lastLeftEnd+1000 < leftend) valid = false;
+					if (lastRightEnd+1000 < rightend) valid = false;
+					if (valid)
+					{
+						std::lock_guard<std::mutex> lock { resultMutex };
+						kmerMatchCount += matches[i].matches.size();
+						result.insert(result.end(), tmp.begin(), tmp.end());
+						for (size_t j = 0; j < tmp.size(); j++)
+						{
+							kmerMatchCount += tmp[j].matches.size();
+						}
+					}
 				}
 			}
 		});
@@ -360,4 +435,5 @@ void addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& re
 		threads[i].join();
 	}
 	std::cerr << kmerMatchCount << " kmer matches" << std::endl;
+	return result;
 }
