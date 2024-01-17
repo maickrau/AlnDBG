@@ -113,6 +113,31 @@ bool isReachableWithoutNodeEvenBackwards(const uint64_t startNode, const uint64_
 	return false;
 }
 
+bool cutsGraph(const UnitigGraph& unitigGraph, const SparseEdgeContainer& edges, const uint64_t midNode, const std::vector<bool>& anchor)
+{
+	phmap::flat_hash_set<uint64_t> reachableFromBw;
+	std::vector<uint64_t> checkStack;
+	checkStack.emplace_back(midNode);
+	while (checkStack.size() >= 1)
+	{
+		auto top = checkStack.back();
+		checkStack.pop_back();
+		if (reachableFromBw.count(top) == 1) continue;
+		if (top == midNode + firstBitUint64_t) return false;
+		reachableFromBw.insert(top);
+		if (!anchor[top & maskUint64_t])
+		{
+			checkStack.emplace_back(top ^ firstBitUint64_t);
+		}
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			checkStack.emplace_back(edge.first + (edge.second ? 0 : firstBitUint64_t));
+		}
+	}
+	assert(reachableFromBw.count(midNode + firstBitUint64_t) == 0);
+	return true;
+}
+
 bool blocksGraphPath(const UnitigGraph& unitigGraph, const SparseEdgeContainer& edges, const uint64_t startNode, const uint64_t midNode, const uint64_t endNode, const std::vector<bool>& anchor)
 {
 	if (!isReachableWithoutNodeEvenBackwards(startNode, endNode, std::numeric_limits<size_t>::max(), edges, anchor)) return false;
@@ -439,20 +464,7 @@ void extendAnchors(const UnitigGraph& unitigGraph, const std::vector<ReadPathBun
 		if (!tryExtendingThese[i]) continue;
 		if (forwardReachableAnchors[i].size() != 1 && backwardReachableAnchors[i].size() != 1) continue;
 		if (forwardReachableAnchors[i].size() == 0 || backwardReachableAnchors[i].size() == 0) continue;
-		bool anyNotBlocked = false;
-		for (size_t j = 0; j < forwardReachableAnchors[i].size(); j++)
-		{
-			for (size_t k = 0; k < backwardReachableAnchors[i].size(); k++)
-			{
-				if (!blocksGraphPath(unitigGraph, edges, backwardReachableAnchors[i][k], i, forwardReachableAnchors[i][j] ^ firstBitUint64_t, anchorsBeforeExtension))
-				{
-					anyNotBlocked = true;
-					break;
-				}
-			}
-			if (anyNotBlocked) break;
-		}
-		if (anyNotBlocked) continue;
+		if (!cutsGraph(unitigGraph, edges, i, anchorsBeforeExtension)) continue;
 		anchor[i] = true;
 	}
 }

@@ -87,6 +87,7 @@ std::pair<bool, bool> extendBreakpointsFwBw(const std::vector<size_t>& readLengt
 
 std::vector<RankBitvector> extendBreakpoints(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches)
 {
+	size_t numChunks = 25;
 	std::vector<RankBitvector> breakpoints;
 	breakpoints.resize(readLengths.size());
 	for (size_t i = 0; i < readLengths.size(); i++)
@@ -95,8 +96,12 @@ std::vector<RankBitvector> extendBreakpoints(const std::vector<size_t>& readLeng
 		breakpoints[i].set(0, true);
 		breakpoints[i].set(readLengths[i], true);
 	}
+	std::vector<phmap::flat_hash_set<size_t>> readHasMatch;
+	readHasMatch.resize(readLengths.size());
 	for (size_t groupi = 0; groupi < matches.size(); groupi++)
 	{
+		readHasMatch[matches[groupi].leftRead].emplace(matches[groupi].rightRead);
+		readHasMatch[matches[groupi].rightRead].emplace(matches[groupi].leftRead);
 		for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
 		{
 			breakpoints[matches[groupi].leftRead].set(matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, true);
@@ -113,23 +118,148 @@ std::vector<RankBitvector> extendBreakpoints(const std::vector<size_t>& readLeng
 			}
 		}
 	}
+	std::vector<size_t> readOrder;
+	readOrder.resize(readLengths.size(), std::numeric_limits<size_t>::max());
+	std::vector<size_t> stackone;
+	std::vector<size_t> stacktwo;
+	size_t nextOrder = 0;
+	for (size_t i = 0; i < readOrder.size(); i++)
+	{
+		if (readOrder[i] != std::numeric_limits<size_t>::max()) continue;
+		if (readHasMatch[i].size() == 0) continue;
+		stackone.emplace_back(i);
+		while (stackone.size() > 0 || stacktwo.size() > 0)
+		{
+			if (stackone.size() == 0)
+			{
+				while (stacktwo.size() > 0)
+				{
+					stackone.emplace_back(stacktwo.back());
+					stacktwo.pop_back();
+				}
+			}
+			assert(stackone.size() >= 1);
+			auto top = stackone.back();
+			stackone.pop_back();
+			if (readOrder[top] != std::numeric_limits<size_t>::max()) continue;
+			readOrder[top] = nextOrder;
+			nextOrder += 1;
+			for (auto read : readHasMatch[top])
+			{
+				if (readOrder[read] != std::numeric_limits<size_t>::max()) continue;
+				stacktwo.emplace_back(read);
+			}
+		}
+	}
+	std::cerr << nextOrder << " / " << readOrder.size() << " reads have an alignment" << std::endl;
+	assert(nextOrder <= readOrder.size());
+	size_t chunkSize = nextOrder / numChunks + 1;
+	std::vector<std::vector<size_t>> fwMatchChunks;
+	fwMatchChunks.resize(numChunks);
+	std::vector<std::vector<size_t>> bwMatchChunks;
+	bwMatchChunks.resize(numChunks);
+	std::vector<size_t> leftoverMatchesFw;
+	std::vector<size_t> leftoverMatchesBw;
+	for (size_t i = 0; i < matches.size(); i++)
+	{
+		if (readOrder[matches[i].leftRead] / chunkSize == readOrder[matches[i].rightRead] / chunkSize)
+		{
+			size_t chunk = readOrder[matches[i].leftRead] / chunkSize;
+			if (matches[i].rightFw)
+			{
+				fwMatchChunks[chunk].emplace_back(i);
+			}
+			else
+			{
+				bwMatchChunks[chunk].emplace_back(i);
+			}
+		}
+		else
+		{
+			if (matches[i].rightFw)
+			{
+				leftoverMatchesFw.emplace_back(i);
+			}
+			else
+			{
+				leftoverMatchesBw.emplace_back(i);
+			}
+		}
+	}
+	std::cerr << "match chunk sizes:" << std::endl;
+	for (size_t i = 0; i < fwMatchChunks.size(); i++)
+	{
+		std::cerr << i << " " << fwMatchChunks[i].size() << " " << bwMatchChunks[i].size() << std::endl;
+	}
+	std::cerr << "leftover " << leftoverMatchesFw.size() << " " << leftoverMatchesBw.size() << std::endl;
+	std::vector<bool> shouldDoChunk;
+	shouldDoChunk.resize(fwMatchChunks.size(), true);
+	std::cerr << "iterate breakpoints" << std::endl;
 	while (true)
 	{
 		bool changed = false;
-		for (size_t groupi = 0; groupi < matches.size(); groupi++)
+		for (size_t i = 0; i < fwMatchChunks.size(); i++)
+		{
+			if (!shouldDoChunk[i]) continue;
+			shouldDoChunk[i] = false;
+			std::cerr << "iterate breakpoints chunk " << i << std::endl;
+			while (true)
+			{
+				while (true)
+				{
+					bool fwChanged = false;
+					for (size_t groupi : fwMatchChunks[i])
+					{
+						for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
+						{
+							std::pair<bool, bool> addedAny;
+							addedAny = extendBreakpointsFwFw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+							if (addedAny.first || addedAny.second) fwChanged = true;
+						}
+					}
+					if (fwChanged) changed = true;
+					if (!fwChanged) break;
+				}
+				bool bwChanged = false;
+				for (size_t groupi : bwMatchChunks[i])
+				{
+					for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
+					{
+						std::pair<bool, bool> addedAny;
+						addedAny = extendBreakpointsFwBw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+						if (addedAny.first || addedAny.second) bwChanged = true;
+					}
+				}
+				if (bwChanged) changed = true;
+				if (!bwChanged) break;
+			}
+		}
+		for (size_t groupi : leftoverMatchesFw)
 		{
 			for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
 			{
 				std::pair<bool, bool> addedAny;
-				if (matches[groupi].rightFw)
+				addedAny = extendBreakpointsFwFw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+				if (addedAny.first || addedAny.second)
 				{
-					addedAny = extendBreakpointsFwFw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+					changed = true;
+					shouldDoChunk[readOrder[matches[groupi].leftRead] / chunkSize] = true;
+					shouldDoChunk[readOrder[matches[groupi].rightRead] / chunkSize] = true;
 				}
-				else
+			}
+		}
+		for (size_t groupi : leftoverMatchesBw)
+		{
+			for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
+			{
+				std::pair<bool, bool> addedAny;
+				addedAny = extendBreakpointsFwBw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+				if (addedAny.first || addedAny.second)
 				{
-					addedAny = extendBreakpointsFwBw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+					changed = true;
+					shouldDoChunk[readOrder[matches[groupi].leftRead] / chunkSize] = true;
+					shouldDoChunk[readOrder[matches[groupi].rightRead] / chunkSize] = true;
 				}
-				if (addedAny.first || addedAny.second) changed = true;
 			}
 		}
 		if (!changed) break;
