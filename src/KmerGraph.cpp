@@ -1,5 +1,7 @@
 #include <iostream>
 #include <cassert>
+#include <thread>
+#include <chrono>
 #include "MBGCommon.h"
 #include "KmerGraph.h"
 #include "Common.h"
@@ -85,7 +87,7 @@ std::pair<bool, bool> extendBreakpointsFwBw(const std::vector<size_t>& readLengt
 	return std::make_pair(addedAnyLeft, addedAnyRight);
 }
 
-std::vector<RankBitvector> extendBreakpoints(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches)
+std::vector<RankBitvector> extendBreakpoints(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t numThreads)
 {
 	size_t numChunks = 25;
 	std::vector<RankBitvector> breakpoints;
@@ -195,74 +197,115 @@ std::vector<RankBitvector> extendBreakpoints(const std::vector<size_t>& readLeng
 	std::vector<bool> shouldDoChunk;
 	shouldDoChunk.resize(fwMatchChunks.size(), true);
 	std::cerr << "iterate breakpoints" << std::endl;
-	while (true)
+	std::vector<std::thread> threads;
+	std::atomic<bool> allDone;
+	std::atomic<size_t> threadsComputingNow;
+	threadsComputingNow = 0;
+	allDone = false;
+	std::mutex chunkPickerMutex;
+	std::mutex leftoverMutex;
+	for (size_t thread = 0; thread < numThreads; thread++)
 	{
-		bool changed = false;
-		for (size_t i = 0; i < fwMatchChunks.size(); i++)
+		threads.emplace_back([thread, &threads, &allDone, &fwMatchChunks, &bwMatchChunks, &shouldDoChunk, &chunkPickerMutex, &leftoverMutex, &threadsComputingNow, &matches, &breakpoints, &readLengths, numThreads, chunkSize, &readOrder, &leftoverMatchesBw, &leftoverMatchesFw]()
 		{
-			if (!shouldDoChunk[i]) continue;
-			shouldDoChunk[i] = false;
-			std::cerr << "iterate breakpoints chunk " << i << std::endl;
 			while (true)
 			{
+				size_t i = std::numeric_limits<size_t>::max();
+				{
+					std::lock_guard<std::mutex> lock { chunkPickerMutex };
+					for (size_t chunk = 0; chunk < fwMatchChunks.size(); chunk++)
+					{
+						if (!shouldDoChunk[chunk]) continue;
+						shouldDoChunk[chunk] = false;
+						i = chunk;
+						break;
+					}
+				}
+				if (i == std::numeric_limits<size_t>::max())
+				{
+					if (allDone) return;
+					if (leftoverMutex.try_lock())
+					{
+						while (threadsComputingNow > 0)
+						{
+							std::this_thread::sleep_for(std::chrono::milliseconds(10));
+						}
+						std::lock_guard<std::mutex> lock { chunkPickerMutex };
+						assert(threadsComputingNow == 0);
+						bool changed = false;
+						for (size_t groupi : leftoverMatchesFw)
+						{
+							for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
+							{
+								std::pair<bool, bool> addedAny;
+								addedAny = extendBreakpointsFwFw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+								if (addedAny.first || addedAny.second)
+								{
+									changed = true;
+									shouldDoChunk[readOrder[matches[groupi].leftRead] / chunkSize] = true;
+									shouldDoChunk[readOrder[matches[groupi].rightRead] / chunkSize] = true;
+								}
+							}
+						}
+						for (size_t groupi : leftoverMatchesBw)
+						{
+							for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
+							{
+								std::pair<bool, bool> addedAny;
+								addedAny = extendBreakpointsFwBw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+								if (addedAny.first || addedAny.second)
+								{
+									changed = true;
+									shouldDoChunk[readOrder[matches[groupi].leftRead] / chunkSize] = true;
+									shouldDoChunk[readOrder[matches[groupi].rightRead] / chunkSize] = true;
+								}
+							}
+						}
+						if (!changed) allDone = true;
+						leftoverMutex.unlock();
+					}
+					if (allDone) return;
+					std::this_thread::sleep_for(std::chrono::milliseconds(10));
+					continue;
+				}
+				assert(threadsComputingNow < numThreads);
+				threadsComputingNow += 1;
 				while (true)
 				{
-					bool fwChanged = false;
-					for (size_t groupi : fwMatchChunks[i])
+					while (true)
+					{
+						bool fwChanged = false;
+						for (size_t groupi : fwMatchChunks[i])
+						{
+							for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
+							{
+								std::pair<bool, bool> addedAny;
+								addedAny = extendBreakpointsFwFw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+								if (addedAny.first || addedAny.second) fwChanged = true;
+							}
+						}
+						if (!fwChanged) break;
+					}
+					bool bwChanged = false;
+					for (size_t groupi : bwMatchChunks[i])
 					{
 						for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
 						{
 							std::pair<bool, bool> addedAny;
-							addedAny = extendBreakpointsFwFw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
-							if (addedAny.first || addedAny.second) fwChanged = true;
+							addedAny = extendBreakpointsFwBw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
+							if (addedAny.first || addedAny.second) bwChanged = true;
 						}
 					}
-					if (fwChanged) changed = true;
-					if (!fwChanged) break;
+					if (!bwChanged) break;
 				}
-				bool bwChanged = false;
-				for (size_t groupi : bwMatchChunks[i])
-				{
-					for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
-					{
-						std::pair<bool, bool> addedAny;
-						addedAny = extendBreakpointsFwBw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
-						if (addedAny.first || addedAny.second) bwChanged = true;
-					}
-				}
-				if (bwChanged) changed = true;
-				if (!bwChanged) break;
+				assert(threadsComputingNow >= 1);
+				threadsComputingNow -= 1;
 			}
-		}
-		for (size_t groupi : leftoverMatchesFw)
-		{
-			for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
-			{
-				std::pair<bool, bool> addedAny;
-				addedAny = extendBreakpointsFwFw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
-				if (addedAny.first || addedAny.second)
-				{
-					changed = true;
-					shouldDoChunk[readOrder[matches[groupi].leftRead] / chunkSize] = true;
-					shouldDoChunk[readOrder[matches[groupi].rightRead] / chunkSize] = true;
-				}
-			}
-		}
-		for (size_t groupi : leftoverMatchesBw)
-		{
-			for (size_t posi = 0; posi < matches[groupi].matches.size(); posi++)
-			{
-				std::pair<bool, bool> addedAny;
-				addedAny = extendBreakpointsFwBw(readLengths, breakpoints, matches[groupi].leftRead, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart, matches[groupi].leftStart + matches[groupi].matches[posi].leftStart+matches[groupi].matches[posi].length, matches[groupi].rightRead, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart, matches[groupi].rightStart + matches[groupi].matches[posi].rightStart+matches[groupi].matches[posi].length);
-				if (addedAny.first || addedAny.second)
-				{
-					changed = true;
-					shouldDoChunk[readOrder[matches[groupi].leftRead] / chunkSize] = true;
-					shouldDoChunk[readOrder[matches[groupi].rightRead] / chunkSize] = true;
-				}
-			}
-		}
-		if (!changed) break;
+		});
+	}
+	for (size_t i = 0; i < numThreads; i++)
+	{
+		threads[i].join();
 	}
 	for (size_t i = 0; i < breakpoints.size(); i++) breakpoints[i].buildRanks();
 	return breakpoints;
@@ -568,10 +611,10 @@ std::vector<ReadPathBundle> getReadPathsAndDestroySegments(std::vector<std::vect
 	return result;
 }
 
-std::pair<KmerGraph, std::vector<ReadPathBundle>> makeKmerGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage)
+std::pair<KmerGraph, std::vector<ReadPathBundle>> makeKmerGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage, const size_t numThreads)
 {
 	KmerGraph result;
-	std::vector<RankBitvector> breakpoints = extendBreakpoints(readLengths, matches);
+	std::vector<RankBitvector> breakpoints = extendBreakpoints(readLengths, matches, numThreads);
 	size_t countBreakpoints = 0;
 	for (size_t i = 0; i < breakpoints.size(); i++)
 	{

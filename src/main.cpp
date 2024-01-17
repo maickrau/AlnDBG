@@ -67,11 +67,11 @@ bool haplotypeMismatch(const size_t leftRead, const size_t rightRead, const phma
 	return false;
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> makeGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> makeGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage, const size_t numThreads)
 {
 	KmerGraph kmerGraph;
 	std::vector<ReadPathBundle> readKmerGraphPaths;
-	std::tie(kmerGraph, readKmerGraphPaths) = makeKmerGraph(readLengths, matches, minCoverage);
+	std::tie(kmerGraph, readKmerGraphPaths) = makeKmerGraph(readLengths, matches, minCoverage, numThreads);
 	UnitigGraph unitigGraph;
 	std::vector<ReadPathBundle> readUnitigGraphPaths;
 	std::tie(unitigGraph, readUnitigGraphPaths) = makeUnitigGraph(kmerGraph, readKmerGraphPaths, minCoverage);
@@ -118,11 +118,11 @@ void forbidAlnsFromDifferentHaplotypes(const UnitigGraph& unitigGraph, const std
 }
 */
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> getInitialGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const size_t k, const double approxOneHapCoverage, const std::string& prefix)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> getInitialGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const size_t k, const double approxOneHapCoverage, const std::string& prefix, const size_t numThreads)
 {
 	UnitigGraph unitigGraph;
 	std::vector<ReadPathBundle> readUnitigGraphPaths;
-	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage, numThreads);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
@@ -138,11 +138,11 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> getInitialGraph(const std::v
 	return std::make_pair(std::move(unitigGraph), std::move(readUnitigGraphPaths));
 }
 
-void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k, const double approxOneHapCoverage)
+void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t minCoverage, const std::string& outputFileName, const size_t k, const double approxOneHapCoverage, const size_t numThreads)
 {
 	UnitigGraph unitigGraph;
 	std::vector<ReadPathBundle> readUnitigGraphPaths;
-	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage, numThreads);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
@@ -713,5 +713,5 @@ int main(int argc, char** argv)
 	// 	filteredMatches = filterMatchesByAnnotations(initialMatches, rawReadLengths, readAnnotations);
 	// 	std::cerr << filteredMatches.size() << " filtered matches out of " << initialMatches.size() << " initial matches" << std::endl;
 	// }
-	makeGraph(readKmerLengths, readNames, readSequences, initialMatches, minCoverage, "graph.gfa", graphk, approxOneHapCoverage);
+	makeGraph(readKmerLengths, readNames, readSequences, initialMatches, minCoverage, "graph.gfa", graphk, approxOneHapCoverage, numThreads);
 }
