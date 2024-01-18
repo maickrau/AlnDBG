@@ -125,7 +125,7 @@ bool cutsGraph(const UnitigGraph& unitigGraph, const SparseEdgeContainer& edges,
 		if (reachableFromBw.count(top) == 1) continue;
 		if (top == midNode + firstBitUint64_t) return false;
 		reachableFromBw.insert(top);
-		if (!anchor[top & maskUint64_t])
+		if (!anchor[top & maskUint64_t] && (top & maskUint64_t) != midNode)
 		{
 			checkStack.emplace_back(top ^ firstBitUint64_t);
 		}
