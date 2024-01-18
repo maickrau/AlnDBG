@@ -537,7 +537,6 @@ std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIn
 			assert(matches.back().rightEnd < rawReadLengths[right]);
 			matches.back().leftEnd = rawReadLengths[left]-1;
 		}
-		std::cerr << "match " << leftstart << " " << leftend << " " << rawReadLengths[left] << " " << rightstart << " " << rightend << " " << rawReadLengths[right] << " became " << matches.back().leftStart << " " << matches.back().leftEnd << " " << matches.back().rightStart << " " << matches.back().rightEnd << std::endl;
 	});
 	std::stable_sort(matches.begin(), matches.end(), [](const auto& left, const auto& right){
 		if (left.leftRead < right.leftRead) return true;
