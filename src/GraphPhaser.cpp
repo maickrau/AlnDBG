@@ -1611,7 +1611,7 @@ bool isDiploidChain(const size_t chainNumber, const AnchorChain& chain, const st
 	return (maybeHaplotypeInformative[0] && maybeHaplotypeInformative.back()) && (numHaplotypeInformative >= 2);
 }
 
-std::vector<PhaseBlock> phaseCoreChains(std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ReadDiagonalAlleles>>& allelesPerReadPerChain, const double approxOneHapCoverage)
+std::vector<PhaseBlock> phaseDiploidChains(std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ReadDiagonalAlleles>>& allelesPerReadPerChain, const double approxOneHapCoverage)
 {
 	assert(anchorChains.size() == allelesPerReadPerChain.size());
 	std::vector<PhaseBlock> result;
@@ -2689,7 +2689,7 @@ void fixFakeSinglePloidyChains(std::vector<AnchorChain>& anchorChains, const std
 	}
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLinearizable(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphDiploidMEC(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
 {
 	std::cerr << "try phase diploid chains" << std::endl;
 	std::cerr << "get anchor chains" << std::endl;
@@ -2708,7 +2708,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLinearizable(const
 	std::vector<std::vector<std::vector<std::vector<uint64_t>>>> allelesPerChain;
 	std::vector<std::vector<ReadDiagonalAlleles>> allelesPerReadPerChain;
 	std::tie(allelesPerChain, allelesPerReadPerChain) = getRawReadInfoPerChain(anchorChains, readPaths, unitigGraph, validChainEdges, chainPositionsInReads);
-	std::vector<PhaseBlock> chainHaplotypes = phaseCoreChains(anchorChains, allelesPerReadPerChain, approxOneHapCoverage);
+	std::vector<PhaseBlock> chainHaplotypes = phaseDiploidChains(anchorChains, allelesPerReadPerChain, approxOneHapCoverage);
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
 	std::tie(unzippedGraph, unzippedReadPaths) = unzipPhaseBlocks(unitigGraph, readPaths, anchorChains, allelesPerReadPerChain, chainHaplotypes, validChainEdges, chainPositionsInReads, approxOneHapCoverage);
