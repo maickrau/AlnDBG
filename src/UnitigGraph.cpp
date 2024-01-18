@@ -139,6 +139,37 @@ std::pair<std::vector<size_t>, std::vector<double>> getUnitigLengthAndCoverage(c
 			}
 		}
 	}
+	for (size_t i = 0; i < kmerGraphReadPaths.size(); i++)
+	{
+		for (size_t j = 1; j < kmerGraphReadPaths[i].paths.size(); j++)
+		{
+			if (kmerGraphReadPaths[i].paths[j-1].path.back() != kmerGraphReadPaths[i].paths[j].path[0]) continue;
+			size_t thisNode = kmerGraphReadPaths[i].paths[j].path[0] & maskUint64_t;
+			assert(thisNode < kmerNodeToUnitig.size());
+			size_t unitig = kmerNodeToUnitig[thisNode].first;
+			if (unitig == std::numeric_limits<uint64_t>::max()) continue;
+			unitig = unitig & maskUint64_t;
+			assert(thisNode < nodeLength.size());
+			assert(unitig < coverage.size());
+			size_t prevNodeEnd = nodeLength[thisNode] - kmerGraphReadPaths[i].paths[j-1].pathRightClipKmers;
+			size_t currNodeStart = kmerGraphReadPaths[i].paths[j].pathLeftClipKmers;
+			if (currNodeStart <= prevNodeEnd) continue;
+			size_t currReadStart = kmerGraphReadPaths[i].paths[j].readStartPos;
+			size_t prevReadEnd = kmerGraphReadPaths[i].paths[j-1].readStartPos;
+			for (auto node : kmerGraphReadPaths[i].paths[j-1].path)
+			{
+				prevReadEnd += nodeLength[node & maskUint64_t];
+			}
+			prevReadEnd -= kmerGraphReadPaths[i].paths[j-1].pathLeftClipKmers;
+			prevReadEnd -= kmerGraphReadPaths[i].paths[j-1].pathRightClipKmers;
+			assert(prevReadEnd <= currReadStart);
+			size_t readDistance = currReadStart - prevReadEnd;
+			size_t nodeDistance = currNodeStart - prevNodeEnd;
+			if (readDistance > nodeDistance + 50) continue;
+			if (nodeDistance > readDistance + 50) continue;
+			coverage[unitig] += nodeDistance;
+		}
+	}
 	for (size_t i = 0; i < unitigs.size(); i++)
 	{
 		assert(length[i] != 0);
