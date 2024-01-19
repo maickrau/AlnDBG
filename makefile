@@ -23,6 +23,9 @@ $(shell mkdir -p obj)
 $(BINDIR)/AlnDBG: $(OBJ) $(ODIR)/main.o hifioverlapper/lib/hifioverlapper.a MBG/lib/mbg.a
 	$(GPP) -o $@ $^ $(LINKFLAGS)
 
+$(BINDIR)/alncorrect: $(OBJ) $(ODIR)/alncorrect.o hifioverlapper/lib/hifioverlapper.a MBG/lib/mbg.a
+	$(GPP) -o $@ $^ $(LINKFLAGS)
+
 $(ODIR)/%.o: $(SRCDIR)/%.cpp $(DEPS)
 	$(GPP) -c -o $@ $< $(CPPFLAGS)
 
@@ -32,7 +35,7 @@ MBG/lib/mbg.a:
 hifioverlapper/lib/hifioverlapper.a:
 	$(MAKE) -C hifioverlapper lib
 
-all: $(BINDIR)/AlnDBG
+all: $(BINDIR)/AlnDBG $(BINDIR)/alncorrect
 
 clean:
 	rm -f $(ODIR)/*

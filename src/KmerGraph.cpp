@@ -153,7 +153,6 @@ std::vector<RankBitvector> extendBreakpoints(const std::vector<size_t>& readLeng
 			}
 		}
 	}
-	std::cerr << nextOrder << " / " << readOrder.size() << " reads have an alignment" << std::endl;
 	assert(nextOrder <= readOrder.size());
 	size_t chunkSize = nextOrder / numChunks + 1;
 	std::vector<std::vector<size_t>> fwMatchChunks;
@@ -188,15 +187,8 @@ std::vector<RankBitvector> extendBreakpoints(const std::vector<size_t>& readLeng
 			}
 		}
 	}
-	std::cerr << "match chunk sizes:" << std::endl;
-	for (size_t i = 0; i < fwMatchChunks.size(); i++)
-	{
-		std::cerr << i << " " << fwMatchChunks[i].size() << " " << bwMatchChunks[i].size() << std::endl;
-	}
-	std::cerr << "leftover " << leftoverMatchesFw.size() << " " << leftoverMatchesBw.size() << std::endl;
 	std::vector<bool> shouldDoChunk;
 	shouldDoChunk.resize(fwMatchChunks.size(), true);
-	std::cerr << "iterate breakpoints" << std::endl;
 	std::vector<std::thread> threads;
 	std::atomic<bool> allDone;
 	std::atomic<size_t> threadsComputingNow;
@@ -623,21 +615,21 @@ std::pair<KmerGraph, std::vector<ReadPathBundle>> makeKmerGraph(const std::vecto
 			if (breakpoints[i].get(j)) countBreakpoints += 1;
 		}
 	}
-	std::cerr << countBreakpoints << " breakpoints" << std::endl;
+//	std::cerr << countBreakpoints << " breakpoints" << std::endl;
 	std::vector<size_t> segmentCountBeforeRead;
 	std::vector<std::vector<uint64_t>> segments;
 	std::tie(segments, segmentCountBeforeRead) = mergeSegments(readLengths, matches, breakpoints, countBreakpoints);
-	std::cerr << segmentCountBeforeRead.back() + segments.back().size() << " segments" << std::endl;
+//	std::cerr << segmentCountBeforeRead.back() + segments.back().size() << " segments" << std::endl;
 	RankBitvector segmentToNode = getSegmentToNode(segments, segmentCountBeforeRead);
 	{
 		std::vector<size_t> tmp;
 		std::swap(tmp, segmentCountBeforeRead);
 	}
 	size_t countNodes = (segmentToNode.getRank(segmentToNode.size()-1) + (segmentToNode.get(segmentToNode.size()-1) ? 1 : 0));
-	std::cerr << countNodes << " kmer-nodes pre coverage filter" << std::endl;
+//	std::cerr << countNodes << " kmer-nodes pre coverage filter" << std::endl;
 	RankBitvector keptNodes = keepCoveredNodes(segments, segmentToNode, countNodes, minCoverage);
 	size_t countKeptNodes = (keptNodes.getRank(keptNodes.size()-1) + (keptNodes.get(keptNodes.size()-1) ? 1 : 0));
-	std::cerr << countKeptNodes << " kmer-nodes post coverage filter" << std::endl;
+//	std::cerr << countKeptNodes << " kmer-nodes post coverage filter" << std::endl;
 	result.lengths = getNodeLengths(segments, segmentToNode, keptNodes, breakpoints, countKeptNodes);
 	std::vector<ReadPathBundle> readPaths = getReadPathsAndDestroySegments(segments, breakpoints, segmentToNode, keptNodes, readLengths);
 	size_t countNodeMatches = 0;
@@ -650,8 +642,8 @@ std::pair<KmerGraph, std::vector<ReadPathBundle>> makeKmerGraph(const std::vecto
 			countNodeMatches += readPaths[i].paths[j].path.size();
 		}
 	}
-	std::cerr << countReadPaths << " read paths" << std::endl;
-	std::cerr << countNodeMatches << " read-node matches" << std::endl;
+//	std::cerr << countReadPaths << " read paths" << std::endl;
+//	std::cerr << countNodeMatches << " read-node matches" << std::endl;
 	return std::make_pair(std::move(result), std::move(readPaths));
 }
 
