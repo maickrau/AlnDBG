@@ -325,6 +325,7 @@ void removeContainedKmerMatches(MatchGroup& matches)
 
 std::vector<MatchGroup> addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& readSequences, const std::vector<MatchGroup>& matches, const size_t graphk, const size_t graphd)
 {
+	const size_t SVLengthThreshold = 1000;
 	std::atomic<size_t> kmerMatchCount;
 	kmerMatchCount = 0;
 	size_t nextIndex = 0;
@@ -399,12 +400,12 @@ std::vector<MatchGroup> addKmerMatches(const size_t numThreads, const std::vecto
 						std::sort(tmp[j].matches.begin(), tmp[j].matches.end(), [](auto left, auto right) { return left.leftStart < right.leftStart; });
 						for (auto match : tmp[j].matches)
 						{
-							if (tmp[j].leftStart + (size_t)match.leftStart > lastLeftEnd + 1000)
+							if (tmp[j].leftStart + (size_t)match.leftStart > lastLeftEnd + SVLengthThreshold)
 							{
 								valid = false;
 								break;
 							}
-							if (tmp[j].rightStart + (size_t)match.rightStart > lastRightEnd + 1000)
+							if (tmp[j].rightStart + (size_t)match.rightStart > lastRightEnd + SVLengthThreshold)
 							{
 								valid = false;
 								break;
@@ -414,8 +415,8 @@ std::vector<MatchGroup> addKmerMatches(const size_t numThreads, const std::vecto
 						}
 						if (!valid) break;
 					}
-					if (lastLeftEnd+1000 < leftend) valid = false;
-					if (lastRightEnd+1000 < rightend) valid = false;
+					if (lastLeftEnd+SVLengthThreshold < leftend) valid = false;
+					if (lastRightEnd+SVLengthThreshold < rightend) valid = false;
 					if (valid)
 					{
 						std::lock_guard<std::mutex> lock { resultMutex };
