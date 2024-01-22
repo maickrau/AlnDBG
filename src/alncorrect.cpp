@@ -537,19 +537,19 @@ void correctReads(const std::vector<size_t>& readKmerLengths, const std::vector<
 int main(int argc, char** argv)
 {
 	size_t numThreads = std::stoi(argv[1]);
-	size_t k = std::stoull(argv[2]);
+	size_t searchk = std::stoull(argv[2]);
 	size_t numWindows = std::stoull(argv[3]);
 	size_t windowSize = std::stoull(argv[4]);
 	size_t minAlignmentLength = std::stoull(argv[5]);
-	const size_t graphk = 31;
+	const size_t graphk = std::stoull(argv[6]);
 	const size_t minCoverage = 2;
 	const size_t graphd = 50;
 	std::vector<std::string> readFiles;
-	for (size_t i = 6; i < argc; i++)
+	for (size_t i = 7; i < argc; i++)
 	{
 		readFiles.emplace_back(argv[i]);
 	}
-	MatchIndex matchIndex { k, numWindows, windowSize };
+	MatchIndex matchIndex { searchk, numWindows, windowSize };
 	ReadStorage storage;
 	std::vector<TwobitString> readSequences;
 	for (auto file : readFiles)
@@ -584,6 +584,6 @@ int main(int argc, char** argv)
 	}
 	auto rawReadLengths = storage.getRawReadLengths();
 	std::vector<bool> usableChunkmers = getFilteredValidChunks(matchIndex, rawReadLengths, std::numeric_limits<size_t>::max(), 10000, 10);
-	std::vector<MatchGroup> matches = getMatches(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, usableChunkmers, std::numeric_limits<size_t>::max());
+	std::vector<MatchGroup> matches = getMatches(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, searchk, graphk, graphd, usableChunkmers, std::numeric_limits<size_t>::max());
 	correctReads(readKmerLengths, readNames, readSequences, matches, graphk, numThreads);
 }
