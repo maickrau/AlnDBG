@@ -469,6 +469,7 @@ void correctReads(const std::vector<size_t>& readKmerLengths, const std::vector<
 					std::cout << ">" << readNames[readi] << std::endl;
 					std::cout << sequence << std::endl;
 					std::cerr << "read " << readNames[readi] << " had 0 corrections (no overlaps)" << std::endl;
+					continue;
 				}
 				std::vector<size_t> subsetReadKmerLengths;
 				std::vector<TwobitString> subsetReadSequences;
