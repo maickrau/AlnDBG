@@ -297,7 +297,7 @@ void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& 
 	thread_local std::vector<std::pair<uint64_t, size_t>> leftSyncmers;
 	assert(mappingMatch.leftEnd - mappingMatch.leftStart < std::numeric_limits<uint16_t>::max());
 	assert(mappingMatch.rightEnd - mappingMatch.rightStart < std::numeric_limits<uint16_t>::max());
-	const size_t syncmerw = 7;
+	const size_t syncmerw = k > 11 ? 7 : (k/2);
 	assert(k % 2 == 1);
 	size_t leftStart = mappingMatch.leftStart;
 	size_t leftEnd = mappingMatch.leftEnd;

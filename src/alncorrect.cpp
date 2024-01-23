@@ -25,10 +25,6 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> makeGraph(const std::vector<
 	UnitigGraph unitigGraph;
 	std::vector<ReadPathBundle> readUnitigGraphPaths;
 	std::tie(unitigGraph, readUnitigGraphPaths) = makeUnitigGraph(kmerGraph, readKmerGraphPaths, minCoverage);
-	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
-	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
-	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
-	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
 	return std::make_pair(std::move(unitigGraph), std::move(readUnitigGraphPaths));
 }
 
@@ -199,6 +195,37 @@ std::pair<TwobitString, size_t> getCorrectedSequence(const std::vector<size_t>& 
 	UnitigGraph graph;
 	std::vector<ReadPathBundle> paths;
 	std::tie(graph, paths) = makeGraph(readKmerLengths, matches, 2, 1);
+	{
+		std::vector<bool> nodeHasFwCoverage;
+		std::vector<bool> nodeHasBwCoverage;
+		nodeHasFwCoverage.resize(graph.nodeCount(), false);
+		nodeHasBwCoverage.resize(graph.nodeCount(), false);
+		for (size_t i = 0; i < paths.size(); i++)
+		{
+			for (size_t j = 0; j < paths[i].paths.size(); j++)
+			{
+				for (size_t k = 0; k < paths[i].paths[j].path.size(); k++)
+				{
+					uint64_t node = paths[i].paths[j].path[k];
+					if (node & firstBitUint64_t)
+					{
+						nodeHasFwCoverage[node & maskUint64_t] = true;
+					}
+					else
+					{
+						nodeHasBwCoverage[node & maskUint64_t] = true;
+					}
+				}
+			}
+		}
+		RankBitvector kept;
+		kept.resize(graph.nodeCount());
+		for (size_t i = 0; i < kept.size(); i++)
+		{
+			kept.set(i, nodeHasBwCoverage[i] && nodeHasFwCoverage[i]);
+		}
+		std::tie(graph, paths) = filterUnitigGraph(graph, paths, kept);
+	}
 	phmap::flat_hash_set<size_t> uniqueNodes = getNonrepetitiveNodes(graph, paths);
 	phmap::flat_hash_map<uint64_t, size_t> nodeIndexInRead;
 	for (size_t j = 0; j < paths[0].paths.size(); j++)
