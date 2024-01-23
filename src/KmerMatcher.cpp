@@ -250,6 +250,45 @@ void removeKmer(phmap::flat_hash_map<uint64_t, uint64_t>& firstKmerPositionInLef
 	}
 }
 
+void removeHashCollisionMatches(const std::vector<TwobitString>& readSequences, MatchGroup& mappingMatch, const size_t k)
+{
+	for (size_t matchi = mappingMatch.matches.size()-1; matchi < mappingMatch.matches.size(); matchi--)
+	{
+		for (size_t i = mappingMatch.matches[matchi].length-1+k-1; i < mappingMatch.matches[matchi].length+k; i--)
+		{
+			uint8_t leftChar = readSequences[mappingMatch.leftRead].get(mappingMatch.leftStart+(size_t)mappingMatch.matches[matchi].leftStart+i);
+			uint8_t rightChar;
+			if (mappingMatch.rightFw)
+			{
+				rightChar = readSequences[mappingMatch.rightRead].get(mappingMatch.rightStart+(size_t)mappingMatch.matches[matchi].rightStart+i);
+			}
+			else
+			{
+				rightChar = 3-readSequences[mappingMatch.rightRead].get(readSequences[mappingMatch.rightRead].size()-1-(mappingMatch.rightStart+(size_t)mappingMatch.matches[matchi].rightStart+i));
+			}
+			if (leftChar == rightChar) continue;
+			std::cerr << "chop match leftread " << mappingMatch.leftRead << " rightread " << mappingMatch.rightRead << " " << (mappingMatch.rightFw ? "fw" : "bw") << " left " << mappingMatch.leftStart+(size_t)mappingMatch.matches[matchi].leftStart+i << " (" << (int)leftChar << ") right " << mappingMatch.rightStart+(size_t)mappingMatch.matches[matchi].rightStart+i << " (" << (int)rightChar << ")" << std::endl;
+			if (i+1 < mappingMatch.matches[matchi].length)
+			{
+				mappingMatch.matches.emplace_back();
+				mappingMatch.matches.back().leftStart = mappingMatch.matches[matchi].leftStart + i + 1;
+				mappingMatch.matches.back().rightStart = mappingMatch.matches[matchi].rightStart + i + 1;
+				mappingMatch.matches.back().length = mappingMatch.matches[matchi].length - (i + 1);
+			}
+			if (i >= k)
+			{
+				mappingMatch.matches[matchi].length = i-(k-1);
+			}
+			else
+			{
+				std::swap(mappingMatch.matches[matchi], mappingMatch.matches.back());
+				mappingMatch.matches.pop_back();
+				break;
+			}
+		}
+	}
+}
+
 void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& mappingMatch, const size_t k, const size_t d)
 {
 	thread_local size_t lastLeftRead = std::numeric_limits<size_t>::max();
@@ -465,6 +504,7 @@ std::vector<MatchGroup> addKmerMatches(const size_t numThreads, const std::vecto
 					for (size_t j = 0; j < tmp.size(); j++)
 					{
 						getKmerMatches(readSequences, tmp[j], graphk, graphd);
+						if (graphk > 31) removeHashCollisionMatches(readSequences, tmp[j], graphk);
 						removeContainedKmerMatches(tmp[j]);
 						std::sort(tmp[j].matches.begin(), tmp[j].matches.end(), [](auto left, auto right) { return left.leftStart < right.leftStart; });
 						for (auto match : tmp[j].matches)
