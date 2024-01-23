@@ -267,7 +267,7 @@ void removeHashCollisionMatches(const std::vector<TwobitString>& readSequences, 
 				rightChar = 3-readSequences[mappingMatch.rightRead].get(readSequences[mappingMatch.rightRead].size()-1-(mappingMatch.rightStart+(size_t)mappingMatch.matches[matchi].rightStart+i));
 			}
 			if (leftChar == rightChar) continue;
-			std::cerr << "chop match leftread " << mappingMatch.leftRead << " rightread " << mappingMatch.rightRead << " " << (mappingMatch.rightFw ? "fw" : "bw") << " left " << mappingMatch.leftStart+(size_t)mappingMatch.matches[matchi].leftStart+i << " (" << (int)leftChar << ") right " << mappingMatch.rightStart+(size_t)mappingMatch.matches[matchi].rightStart+i << " (" << (int)rightChar << ")" << std::endl;
+			// std::cerr << "chop match leftread " << mappingMatch.leftRead << " rightread " << mappingMatch.rightRead << " " << (mappingMatch.rightFw ? "fw" : "bw") << " left " << mappingMatch.leftStart+(size_t)mappingMatch.matches[matchi].leftStart+i << " (" << (int)leftChar << ") right " << mappingMatch.rightStart+(size_t)mappingMatch.matches[matchi].rightStart+i << " (" << (int)rightChar << ")" << std::endl;
 			if (i+1 < mappingMatch.matches[matchi].length)
 			{
 				mappingMatch.matches.emplace_back();
