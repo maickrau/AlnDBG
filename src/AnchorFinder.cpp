@@ -898,13 +898,13 @@ void refineAnchorChainPloidies(std::vector<AnchorChain>& anchorChains, const Spa
 	}
 }
 
-std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t initialAnchorMinLength, const double approxOneHapCoverage)
 {
 	std::vector<bool> anchor;
 	anchor.resize(unitigGraph.nodeCount(), false);
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
-		if (unitigGraph.lengths[i] >= 100) anchor[i] = true;
+		if (unitigGraph.lengths[i] >= initialAnchorMinLength) anchor[i] = true;
 	}
 	extendAnchors(unitigGraph, readPaths, anchor);
 	SparseEdgeContainer edges = getAnchorEdges(unitigGraph, readPaths, anchor, approxOneHapCoverage*.25);

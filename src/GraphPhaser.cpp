@@ -2754,11 +2754,11 @@ void fixFakeSinglePloidyChains(std::vector<AnchorChain>& anchorChains, const std
 	}
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphPolyploidTransitiveClosure(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphPolyploidTransitiveClosure(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage)
 {
 	std::cerr << "try phase polyploid chains by transitive closure" << std::endl;
 	std::cerr << "get anchor chains" << std::endl;
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
@@ -2779,11 +2779,11 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphPolyploidTransitiv
 	return filterUnitigGraph(unzippedGraph, unzippedReadPaths, kept);
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphDiploidMEC(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphDiploidMEC(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage)
 {
 	std::cerr << "try phase diploid chains with MEC" << std::endl;
 	std::cerr << "get anchor chains" << std::endl;
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
@@ -3689,9 +3689,9 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipHapmers(const bool chea
 	return filterUnitigGraph(resultGraph, resultPaths, kept);
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHapmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t resolveLength)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHapmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t graphk, const size_t resolveLength)
 {
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	// for (size_t i = 0; i < chainPositionsInReads.size(); i++)
@@ -4033,9 +4033,9 @@ std::pair<std::vector<std::vector<ChainPosition>>, std::vector<bool>> getReadLoc
 	return std::make_pair(getReadChainPositions(unitigGraph, readPaths, fakeChains), std::move(uniques));
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t uniqSpanLength, const size_t resolveLength, const size_t maxCopyCount)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage, const size_t uniqSpanLength, const size_t resolveLength, const size_t maxCopyCount)
 {
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	{
 		std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
@@ -4211,10 +4211,10 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 	return filterUnitigGraph(resultGraph, resultPaths, kept);
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmersLocation(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t uniqSpanLength, const size_t maxCopyCount)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmersLocation(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage, const size_t uniqSpanLength, const size_t maxCopyCount)
 {
 	std::cerr << "unzip local uniqmer chain location" << std::endl;
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<bool> localUniqs;
 	std::vector<std::vector<ChainPosition>> localUniqPositions;
@@ -4240,10 +4240,10 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmersLocat
 	return filterUnitigGraph(unzippedGraph, unzippedReadPaths, kept);
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphChainmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t resolveLength)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphChainmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage, const size_t resolveLength)
 {
 	std::cerr << "unzip chainmers" << std::endl;
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	// for (size_t i = 0; i < chainPositionsInReads.size(); i++)
@@ -4441,10 +4441,10 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyGapFills(const UnitigGr
 	return unitigify(resultGraph, resultPaths);
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> connectChainGaps(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage, const size_t minSafeCoverage, const size_t maxSpuriousCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> connectChainGaps(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage, const size_t minSafeCoverage, const size_t maxSpuriousCoverage)
 {
 	std::cerr << "try gap fill" << std::endl;
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	for (size_t i = 0; i < anchorChains.size(); i++)
 	{
@@ -5001,10 +5001,10 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> applyTangleSpanners(const bo
 	return filterUnitigGraph(resultGraph, resultPaths, kept);
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTanglesBipartite(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTanglesBipartite(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage)
 {
 	std::cerr << "try bipartite spanning" << std::endl;
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
@@ -5016,10 +5016,10 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTanglesBiparti
 	return std::make_pair(std::move(resultGraph), std::move(resultPaths));
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const bool removeContained, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage)
 {
 	std::cerr << "try gap fill" << std::endl;
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
@@ -5150,10 +5150,10 @@ bool splitChainsAtCyclicTangles(const UnitigGraph& unitigGraph, std::vector<Anch
 	return result;
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveUniqueChainContainedTangles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveUniqueChainContainedTangles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage)
 {
 	std::cerr << "try gap fill" << std::endl;
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::cerr << anchorChains.size() << " anchor chains" << std::endl;
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
@@ -5168,13 +5168,13 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveUniqueChainContainedT
 	return std::make_pair(std::move(resultGraph), std::move(resultPaths));
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> resolveSpannedTangles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage)
 {
-	auto result = resolveSpannedTangles(false, unitigGraph, readPaths, approxOneHapCoverage);
-	result = resolveSpannedTangles(true, result.first, result.second, approxOneHapCoverage);
-	result = resolveSpannedTanglesBipartite(false, result.first, result.second, approxOneHapCoverage);
-	result = resolveSpannedTanglesBipartite(true, result.first, result.second, approxOneHapCoverage);
-	result = resolveUniqueChainContainedTangles(result.first, result.second, approxOneHapCoverage);
+	auto result = resolveSpannedTangles(false, unitigGraph, readPaths, graphk, approxOneHapCoverage);
+	result = resolveSpannedTangles(true, result.first, result.second, graphk, approxOneHapCoverage);
+	result = resolveSpannedTanglesBipartite(false, result.first, result.second, graphk, approxOneHapCoverage);
+	result = resolveSpannedTanglesBipartite(true, result.first, result.second, graphk, approxOneHapCoverage);
+	result = resolveUniqueChainContainedTangles(result.first, result.second, graphk, approxOneHapCoverage);
 	return result;
 }
 
@@ -5264,9 +5264,9 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> popHaploidBubbles(const Unit
 	return filterUnitigGraph(unitigGraph, readPaths, keptNodes);
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> popHaploidChainBubbles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> popHaploidChainBubbles(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage)
 {
-	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, approxOneHapCoverage);
+	std::vector<AnchorChain> anchorChains = getAnchorChains(unitigGraph, readPaths, 100+graphk, approxOneHapCoverage);
 	std::vector<std::vector<ChainPosition>> chainPositionsInReads = getReadChainPositions(unitigGraph, readPaths, anchorChains);
 	fixFakeSinglePloidyChains(anchorChains, chainPositionsInReads, approxOneHapCoverage);
 	UnitigGraph resultGraph;
