@@ -694,7 +694,7 @@ int main(int argc, char** argv)
 		}
 		else
 		{
-			readKmerLengths[i] = 0;
+			readKmerLengths[i] = 1;
 		}
 	}
 	const std::vector<std::string>& readNames = storage.getNames();
