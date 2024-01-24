@@ -688,7 +688,14 @@ int main(int argc, char** argv)
 	readKmerLengths.resize(readBasepairLengths.size());
 	for (size_t i = 0; i < readBasepairLengths.size(); i++)
 	{
-		readKmerLengths[i] = readBasepairLengths[i] + 1 - graphk;
+		if (readBasepairLengths[i] + 1 > graphk)
+		{
+			readKmerLengths[i] = readBasepairLengths[i] + 1 - graphk;
+		}
+		else
+		{
+			readKmerLengths[i] = 0;
+		}
 	}
 	const std::vector<std::string>& readNames = storage.getNames();
 	for (size_t i = 0; i < readNames.size(); i++)
