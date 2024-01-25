@@ -1817,6 +1817,365 @@ std::vector<std::pair<size_t, size_t>> getNodeLocationsWithinChain(const UnitigG
 	return result;
 }
 
+// pathindex, nodeindex, readPos (extrapolated node end), haplotype, diagonal, node
+std::vector<std::tuple<size_t, size_t, size_t, size_t, int, uint64_t>> getReadToAnchorMatches(const UnitigGraph& resultGraph, const std::vector<ReadPathBundle>& resultPaths, const std::vector<std::pair<size_t, size_t>>& nodeLocationInChain, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>>& haplotypeDiagonalsPerRead, const std::vector<PhaseBlock>& chainHaplotypes, const std::vector<int>& maxDiagonalDifferences, const size_t i)
+{
+	std::vector<std::tuple<size_t, size_t, size_t, size_t, int, uint64_t>> readToAnchorMatches;
+	for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
+	{
+		size_t readPos = resultPaths[i].paths[j].readStartPos;
+		for (size_t k = 0; k < resultPaths[i].paths[j].path.size(); k++)
+		{
+			uint64_t node = resultPaths[i].paths[j].path[k];
+			readPos += resultGraph.lengths[node & maskUint64_t];
+			if (k == 0) readPos -= resultPaths[i].paths[j].pathLeftClipKmers;
+			assert((node & maskUint64_t) < nodeLocationInChain.size());
+			size_t chain = nodeLocationInChain[node & maskUint64_t].first;
+			size_t offset = nodeLocationInChain[node & maskUint64_t].second;
+			if (chain == std::numeric_limits<size_t>::max()) continue;
+			if ((node & maskUint64_t) != (anchorChains[chain].nodes[offset] & maskUint64_t))
+			{
+				continue;
+			}
+			bool fw = (node & firstBitUint64_t) == (anchorChains[chain].nodes[offset] & firstBitUint64_t);
+			int diagonal = (int)readPos - (int)anchorChains[chain].nodeOffsets[offset] - (int)resultGraph.lengths[anchorChains[chain].nodes[offset] & maskUint64_t];
+			if (!fw) diagonal = (int)readPos + (int)anchorChains[chain].nodeOffsets[offset];
+			size_t uniqueHap = std::numeric_limits<size_t>::max();
+			for (auto t : haplotypeDiagonalsPerRead[i])
+			{
+				if (chainHaplotypes[std::get<0>(t)].chainNumber != chain) continue;
+				if (std::get<1>(t) != fw) continue;
+				if (std::get<2>(t) > diagonal + (int)maxDiagonalDifferences[chain]) continue;
+				if (std::get<2>(t) < diagonal - (int)maxDiagonalDifferences[chain]) continue;
+				if (uniqueHap == std::numeric_limits<size_t>::max())
+				{
+					uniqueHap = std::get<3>(t);
+				}
+				else if (uniqueHap != std::get<3>(t))
+				{
+					uniqueHap = std::numeric_limits<size_t>::max()-1;
+				}
+			}
+			if (anchorChains[chain].ploidy == 1)
+			{
+				assert(uniqueHap == std::numeric_limits<size_t>::max());
+				uniqueHap = 0;
+			}
+			readToAnchorMatches.emplace_back(j, k, readPos, uniqueHap, diagonal, node);
+		}
+	}
+	return readToAnchorMatches;
+}
+
+void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& resultPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes, const std::vector<std::pair<size_t, size_t>>& nodeLocationInChain, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedAnchors, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedBetweenAnchorLocations, const phmap::flat_hash_set<size_t>& solvedInterchainTangles, const VectorWithDirection<size_t>& nodeLocationInInterchainTangles, const size_t tangleCount, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>>& haplotypeDiagonalsPerRead, const phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>>& validHaplotypeConnectionsPerChainEdge)
+{
+	std::vector<int> maxDiagonalDifferences;
+	maxDiagonalDifferences.resize(anchorChains.size());
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		maxDiagonalDifferences[i] = ((int)(anchorChains[i].nodeOffsets.back() + resultGraph.lengths[anchorChains[i].nodes.back() & maskUint64_t]) * .5);
+	}
+	phmap::flat_hash_map<std::tuple<uint64_t, uint64_t, size_t, size_t>, std::vector<size_t>> tangleGapLengths; // chain1, chain2, hap1, hap2
+	phmap::flat_hash_map<std::tuple<size_t, size_t, size_t>, std::vector<size_t>> anchorGapLengths; // chain, node, hap
+	for (size_t i = 0; i < resultPaths.size(); i++)
+	{
+		std::vector<std::tuple<size_t, size_t, size_t, size_t, int, uint64_t>> readToAnchorMatches = getReadToAnchorMatches(resultGraph, resultPaths, nodeLocationInChain, anchorChains, haplotypeDiagonalsPerRead, chainHaplotypes, maxDiagonalDifferences, i); // pathindex, nodeindex, readPos (extrapolated node end), haplotype, diagonal, node
+		for (size_t m = 1; m < readToAnchorMatches.size(); m++)
+		{
+			uint64_t prevNode = std::get<5>(readToAnchorMatches[m-1]);
+			size_t prevChain = nodeLocationInChain[prevNode & maskUint64_t].first;
+			size_t prevOffset = nodeLocationInChain[prevNode & maskUint64_t].second;
+			uint64_t currNode = std::get<5>(readToAnchorMatches[m]);
+			size_t currChain = nodeLocationInChain[currNode & maskUint64_t].first;
+			size_t currOffset = nodeLocationInChain[currNode & maskUint64_t].second;
+			if (prevChain == currChain)
+			{
+				assert((anchorChains[currChain].nodes[currOffset] & maskUint64_t) == (currNode & maskUint64_t));
+				assert((anchorChains[prevChain].nodes[prevOffset] & maskUint64_t) == (prevNode & maskUint64_t));
+				size_t prevhap = std::get<3>(readToAnchorMatches[m-1]);
+				size_t currhap = std::get<3>(readToAnchorMatches[m]);
+				bool fw = currNode == anchorChains[currChain].nodes[currOffset];
+				if (fw && currOffset != prevOffset+1) continue;
+				if (!fw && prevOffset != currOffset+1) continue;
+				if (prevhap != currhap) continue;
+				size_t prevEndPos = std::get<2>(readToAnchorMatches[m-1]);
+				size_t currStartPos = std::get<2>(readToAnchorMatches[m]) - resultGraph.lengths[currNode];
+				if (currStartPos < prevEndPos) continue;
+				size_t distance = currStartPos - prevEndPos;
+				anchorGapLengths[std::make_tuple(currChain, std::min(currOffset, prevOffset), currhap)].emplace_back(distance);
+			}
+			else
+			{
+				bool prevFw = prevNode == anchorChains[prevChain].nodes[prevOffset];
+				bool currFw = currNode == anchorChains[currChain].nodes[currOffset];
+				if (prevFw && prevOffset != anchorChains[prevChain].nodes.size()-1) continue;
+				if (!prevFw && prevOffset != 0) continue;
+				if (currFw && currOffset != anchorChains[currChain].nodes.size()-1) continue;
+				if (!currFw && currOffset != 0) continue;
+				uint64_t orientedPrevChain = prevChain + (prevFw ? firstBitUint64_t : 0);
+				uint64_t orientedCurrChain = currChain + (currFw ? firstBitUint64_t : 0);
+				if (validHaplotypeConnectionsPerChainEdge.count(orientedPrevChain) == 0) continue;
+				if (validHaplotypeConnectionsPerChainEdge.at(orientedPrevChain).count(orientedCurrChain) == 0) continue;
+				size_t prevhap = std::get<3>(readToAnchorMatches[m-1]);
+				size_t currhap = std::get<3>(readToAnchorMatches[m]);
+				if (validHaplotypeConnectionsPerChainEdge.at(orientedPrevChain).at(orientedCurrChain).count(std::make_pair(prevhap, currhap)) == 0) continue;
+				if (orientedCurrChain ^ firstBitUint64_t < orientedPrevChain)
+				{
+					std::swap(orientedPrevChain, orientedCurrChain);
+					std::swap(prevhap, currhap);
+					orientedPrevChain ^= firstBitUint64_t;
+					orientedCurrChain ^= firstBitUint64_t;
+				}
+				size_t prevEndPos = std::get<2>(readToAnchorMatches[m-1]);
+				size_t currStartPos = std::get<2>(readToAnchorMatches[m]) - resultGraph.lengths[currNode];
+				if (currStartPos < prevEndPos) continue;
+				size_t distance = currStartPos - prevEndPos;
+				tangleGapLengths[std::make_tuple(orientedPrevChain, orientedPrevChain, prevhap, currhap)].emplace_back(distance);
+			}
+		}
+	}
+	phmap::flat_hash_map<std::tuple<size_t, size_t, size_t, size_t>, size_t> nodeReplacement; // node, chain, offset, hap
+	std::vector<std::pair<uint64_t, uint64_t>> newFakeEdges;
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		for (size_t j = 0; j < anchorChains[i].nodes.size(); j++)
+		{
+			if (solvedAnchors.count(std::make_pair(i, j)) == 0) continue;
+			if (anchorChains[i].ploidy == 1) continue;
+			assert(anchorChains[i].ploidy == 2);
+			nodeReplacement[std::make_tuple(anchorChains[i].nodes[j] & maskUint64_t, i, j, 0)] = resultGraph.nodeCount();
+			resultGraph.lengths.emplace_back(resultGraph.lengths[anchorChains[i].nodes[j] & maskUint64_t]);
+			resultGraph.coverages.emplace_back(0);
+			nodeReplacement[std::make_tuple(anchorChains[i].nodes[j] & maskUint64_t, i, j, 1)] = resultGraph.nodeCount();
+			resultGraph.lengths.emplace_back(resultGraph.lengths[anchorChains[i].nodes[j] & maskUint64_t]);
+			resultGraph.coverages.emplace_back(0);
+		}
+		for (size_t j = 1; j < anchorChains[i].nodes.size(); j++)
+		{
+			if (solvedBetweenAnchorLocations.count(std::make_pair(i, j-1)) == 0) continue;
+			if (anchorChains[i].ploidy == 1) continue;
+			assert(anchorChains[i].ploidy == 2);
+			size_t hap0length = 0;
+			size_t hap1length = 0;
+			if (anchorChains[i].nodeOffsets[j] >= (anchorChains[i].nodeOffsets[j-1] + resultGraph.lengths[anchorChains[i].nodes[j-1] & maskUint64_t]))
+			{
+				hap0length = anchorChains[i].nodeOffsets[j] >= (anchorChains[i].nodeOffsets[j-1] + resultGraph.lengths[anchorChains[i].nodes[j-1] & maskUint64_t]);
+				hap1length = anchorChains[i].nodeOffsets[j] >= (anchorChains[i].nodeOffsets[j-1] + resultGraph.lengths[anchorChains[i].nodes[j-1] & maskUint64_t]);
+			}
+			if (anchorGapLengths.count(std::make_tuple(i, j-1, 0)) == 1)
+			{
+				std::vector<size_t>& vals = anchorGapLengths.at(std::make_tuple(i, j-1, 0));
+				std::sort(vals.begin(), vals.end());
+				hap0length = vals[vals.size()/2];
+			}
+			if (anchorGapLengths.count(std::make_tuple(i, j-1, 1)) == 1)
+			{
+				std::vector<size_t>& vals = anchorGapLengths.at(std::make_tuple(i, j-1, 1));
+				std::sort(vals.begin(), vals.end());
+				hap1length = vals[vals.size()/2];
+			}
+			size_t thisNode = resultGraph.lengths.size();
+			resultGraph.lengths.emplace_back(hap0length);
+			resultGraph.coverages.emplace_back(1);
+			resultGraph.lengths.emplace_back(hap1length);
+			resultGraph.coverages.emplace_back(1);
+			size_t hap0Prev = anchorChains[i].nodes[j-1] & maskUint64_t;
+			size_t hap1Prev = anchorChains[i].nodes[j-1] & maskUint64_t;
+			size_t hap0Next = anchorChains[i].nodes[j] & maskUint64_t;
+			size_t hap1Next = anchorChains[i].nodes[j] & maskUint64_t;
+			assert(nodeReplacement.count(std::make_tuple(anchorChains[i].nodes[j-1] & maskUint64_t, i, j-1, 0)) == 1 || nodeReplacement.count(std::make_tuple(anchorChains[i].nodes[j] & maskUint64_t, i, j, 0)) == 1);
+			if (nodeReplacement.count(std::make_tuple(anchorChains[i].nodes[j-1] & maskUint64_t, i, j-1, 0)) == 1)
+			{
+				hap0Prev = nodeReplacement.at(std::make_tuple(anchorChains[i].nodes[j-1] & maskUint64_t, i, j-1, 0));
+				assert(nodeReplacement.count(std::make_tuple(anchorChains[i].nodes[j-1] & maskUint64_t, i, j-1, 1)) == 1);
+				hap1Prev = nodeReplacement.at(std::make_tuple(anchorChains[i].nodes[j-1] & maskUint64_t, i, j-1, 1));
+			}
+			if (nodeReplacement.count(std::make_tuple(anchorChains[i].nodes[j] & maskUint64_t, i, j, 0)) == 1)
+			{
+				hap0Next = nodeReplacement.at(std::make_tuple(anchorChains[i].nodes[j] & maskUint64_t, i, j, 0));
+				assert(nodeReplacement.count(std::make_tuple(anchorChains[i].nodes[j] & maskUint64_t, i, j, 1)) == 1);
+				hap1Next = nodeReplacement.at(std::make_tuple(anchorChains[i].nodes[j] & maskUint64_t, i, j, 1));
+			}
+			newFakeEdges.emplace_back((anchorChains[i].nodes[j-1] & firstBitUint64_t) + hap0Prev, thisNode+0);
+			newFakeEdges.emplace_back(thisNode+0, (anchorChains[i].nodes[j] & firstBitUint64_t) + hap0Next);
+			newFakeEdges.emplace_back((anchorChains[i].nodes[j-1] & firstBitUint64_t) + hap1Prev, thisNode+1);
+			newFakeEdges.emplace_back(thisNode+1, (anchorChains[i].nodes[j] & firstBitUint64_t) + hap1Next);
+			std::cerr << "insert chain hap gap of lengths " << hap0length << " " << hap1length << " between " << (anchorChains[i].nodes[j-1] & maskUint64_t) << " and " << (anchorChains[i].nodes[j] & maskUint64_t) << std::endl;
+		}
+	}
+	for (const auto& pair : validHaplotypeConnectionsPerChainEdge)
+	{
+		uint64_t from = pair.first;
+		uint64_t tip;
+		if (from & firstBitUint64_t)
+		{
+			tip = anchorChains[from & maskUint64_t].nodes.back();
+		}
+		else
+		{
+			tip = anchorChains[from & maskUint64_t].nodes[0] ^ firstBitUint64_t;
+		}
+		size_t tangle = nodeLocationInInterchainTangles[std::make_pair(tip & maskUint64_t, tip & firstBitUint64_t)];
+		if (solvedInterchainTangles.count(tangle) == 0) continue;
+		for (const auto& pair2 : pair.second)
+		{
+			uint64_t to = pair2.first;
+			uint64_t totip;
+			if (to & firstBitUint64_t)
+			{
+				totip = anchorChains[to & maskUint64_t].nodes[0];
+			}
+			else
+			{
+				totip = anchorChains[to & maskUint64_t].nodes.back() ^ firstBitUint64_t;
+			}
+			if ((totip ^ firstBitUint64_t) < tip) continue;
+			for (auto happair : pair2.second)
+			{
+				size_t distance = 1;
+				if (tangleGapLengths.count(std::make_tuple(from, to, happair.first, happair.second)) == 1)
+				{
+					assert(tangleGapLengths.count(std::make_tuple(to ^ firstBitUint64_t, from ^ firstBitUint64_t, happair.second, happair.first)) == 0);
+					std::vector<size_t>& distances = tangleGapLengths.at(std::make_tuple(from, to, happair.first, happair.second));
+					std::sort(distances.begin(), distances.end());
+					distance = distances[distances.size()/2];
+				}
+				else if (tangleGapLengths.count(std::make_tuple(to ^ firstBitUint64_t, from ^ firstBitUint64_t, happair.second, happair.first)) == 1)
+				{
+					std::vector<size_t>& distances = tangleGapLengths.at(std::make_tuple(from, to, happair.first, happair.second));
+					std::sort(distances.begin(), distances.end());
+					distance = distances[distances.size()/2];
+				}
+				if (distance == 0) distance = 1;
+				uint64_t fromnode = tip;
+				size_t fromchain = nodeLocationInChain[fromnode & maskUint64_t].first;
+				size_t fromoffset = nodeLocationInChain[fromnode & maskUint64_t].second;
+				if (nodeReplacement.count(std::make_tuple(fromnode & maskUint64_t, fromchain, fromoffset, happair.first)) == 1)
+				{
+					fromnode = (fromnode & firstBitUint64_t) + nodeReplacement.at(std::make_tuple(fromnode & maskUint64_t, fromchain, fromoffset, happair.first));
+				}
+				uint64_t tonode = totip;
+				size_t tochain = nodeLocationInChain[tonode & maskUint64_t].first;
+				size_t tooffset = nodeLocationInChain[tonode & maskUint64_t].second;
+				if (nodeReplacement.count(std::make_tuple(tonode & maskUint64_t, tochain, tooffset, happair.first)) == 1)
+				{
+					tonode = (tonode & firstBitUint64_t) + nodeReplacement.at(std::make_tuple(tonode & maskUint64_t, tochain, tooffset, happair.second));
+				}
+				size_t newnode = resultGraph.lengths.size();
+				resultGraph.lengths.emplace_back(distance);
+				resultGraph.coverages.emplace_back(0);
+				newFakeEdges.emplace_back(fromnode, newnode);
+				newFakeEdges.emplace_back(newnode, tonode);
+				std::cerr << "insert tangle gap of length " << distance << " between " << (tip & maskUint64_t) << " and " << (totip & maskUint64_t) << std::endl;
+			}
+		}
+	}
+	std::vector<phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> interchainTangleConnectionHap;
+	interchainTangleConnectionHap.resize(tangleCount);
+	for (size_t i = 0; i < resultPaths.size(); i++)
+	{
+		// std::cerr << "new read index " << i << std::endl;
+		// std::cerr << "diagonals:";
+		// for (auto t : haplotypeDiagonalsPerRead[i]) std::cerr << " " << std::get<0>(t) << "(" << chainHaplotypes[std::get<0>(t)].chainNumber << ")" << (std::get<1>(t) ? "+" : "-") << " " << std::get<2>(t) << " " << std::get<3>(t);
+		// std::cerr << std::endl;
+		std::vector<std::tuple<size_t, size_t, size_t, size_t, int, uint64_t>> readToAnchorMatches = getReadToAnchorMatches(resultGraph, resultPaths, nodeLocationInChain, anchorChains, haplotypeDiagonalsPerRead, chainHaplotypes, maxDiagonalDifferences, i); // pathindex, nodeindex, readPos (extrapolated node end), haplotype, diagonal, node
+		std::vector<std::pair<size_t, size_t>> breakBeforeHere;
+		for (size_t m = 0; m < readToAnchorMatches.size(); m++)
+		{
+			uint64_t currNode = std::get<5>(readToAnchorMatches[m]);
+			size_t currChain = nodeLocationInChain[currNode & maskUint64_t].first;
+			size_t currOffset = nodeLocationInChain[currNode & maskUint64_t].second;
+			assert((anchorChains[currChain].nodes[currOffset] & maskUint64_t) == (currNode & maskUint64_t));
+			size_t hap = std::get<3>(readToAnchorMatches[m]);
+			size_t j = std::get<0>(readToAnchorMatches[m]);
+			size_t k = std::get<1>(readToAnchorMatches[m]);
+			if (anchorChains[currChain].ploidy == 2 && hap != std::numeric_limits<size_t>::max() && solvedAnchors.count(std::make_pair(currChain, currOffset)) == 1)
+			{
+				uint64_t node = resultPaths[i].paths[j].path[k];
+				assert((node & maskUint64_t) < nodeLocationInChain.size());
+				assert(nodeReplacement.count(std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)) == 1);
+				std::cerr << "read " << i << " " << j << " " << k << " replace " << (node & maskUint64_t) << " with " << nodeReplacement.at(std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)) << std::endl;
+				resultPaths[i].paths[j].path[k] = nodeReplacement.at(std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)) + (node & firstBitUint64_t);
+			}
+		}
+		for (size_t m = 1; m < readToAnchorMatches.size(); m++)
+		{
+			uint64_t prevNode = std::get<5>(readToAnchorMatches[m]);
+			size_t prevChain = nodeLocationInChain[prevNode & maskUint64_t].first;
+			size_t prevOffset = nodeLocationInChain[prevNode & maskUint64_t].second;
+			uint64_t currNode = std::get<5>(readToAnchorMatches[m]);
+			size_t currChain = nodeLocationInChain[currNode & maskUint64_t].first;
+			size_t currOffset = nodeLocationInChain[currNode & maskUint64_t].second;
+			size_t prevj = std::get<0>(readToAnchorMatches[m-1]);
+			size_t prevk = std::get<1>(readToAnchorMatches[m-1]);
+			size_t currj = std::get<0>(readToAnchorMatches[m]);
+			size_t currk = std::get<1>(readToAnchorMatches[m]);
+			if (prevChain == currChain) continue;
+			if (prevj != currj) continue;
+			if (prevk+1 != currk) continue;
+			size_t prevhap = std::get<3>(readToAnchorMatches[m-1]);
+			size_t currhap = std::get<3>(readToAnchorMatches[m]);
+			bool prevFw = prevNode == anchorChains[prevChain].nodes[prevOffset];
+			bool currFw = currNode == anchorChains[currChain].nodes[currOffset];
+			uint64_t orientedPrevChain = prevChain + (prevFw ? firstBitUint64_t : 0);
+			uint64_t orientedCurrChain = currChain + (currFw ? firstBitUint64_t : 0);
+			if (solvedInterchainTangles.count(nodeLocationInInterchainTangles[std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t)]) == 1)
+			{
+				bool removeThis = true;
+				if (validHaplotypeConnectionsPerChainEdge.count(orientedPrevChain) == 1)
+				{
+					if (validHaplotypeConnectionsPerChainEdge.at(orientedPrevChain).count(orientedCurrChain) == 1)
+					{
+						if (validHaplotypeConnectionsPerChainEdge.at(orientedPrevChain).at(orientedCurrChain).count(std::make_pair(prevhap, currhap)) == 1)
+						{
+							removeThis = false;
+						}
+					}
+				}
+				if (removeThis)
+				{
+					breakBeforeHere.emplace_back(currj, currk);
+				}
+			}
+		}
+		if (breakBeforeHere.size() > 0)
+		{
+			for (size_t j = breakBeforeHere.size()-1; j < breakBeforeHere.size(); j--)
+			{
+				// std::cerr << "break read " << i << " index " << breakBeforeHere[j].first << " " << breakBeforeHere[j].second << " (" << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second-1] & maskUint64_t) << " " << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second] & maskUint64_t) << ")" << std::endl;
+				assert(breakBeforeHere[j].first < resultPaths[i].paths.size());
+				assert(breakBeforeHere[j].second < resultPaths[i].paths[breakBeforeHere[j].first].path.size());
+				assert(breakBeforeHere[j].second > 0);
+				resultPaths[i].paths.emplace_back();
+				resultPaths[i].paths.back().pathLeftClipKmers = 0;
+				resultPaths[i].paths.back().pathRightClipKmers = resultPaths[i].paths[breakBeforeHere[j].first].pathRightClipKmers;
+				size_t startPos = resultPaths[i].paths[breakBeforeHere[j].first].readStartPos;
+				for (size_t k = 0; k < breakBeforeHere[j].second; k++)
+				{
+					startPos += resultGraph.lengths[resultPaths[i].paths[breakBeforeHere[j].first].path[k] & maskUint64_t];
+					if (k == 0) startPos -= resultPaths[i].paths[breakBeforeHere[j].first].pathLeftClipKmers;
+				}
+				resultPaths[i].paths.back().readStartPos = startPos;
+				resultPaths[i].paths.back().path.insert(resultPaths[i].paths.back().path.end(), resultPaths[i].paths[breakBeforeHere[j].first].path.begin() + breakBeforeHere[j].second, resultPaths[i].paths[breakBeforeHere[j].first].path.end());
+				resultPaths[i].paths[breakBeforeHere[j].first].path.erase(resultPaths[i].paths[breakBeforeHere[j].first].path.begin() + breakBeforeHere[j].second, resultPaths[i].paths[breakBeforeHere[j].first].path.end());
+				resultPaths[i].paths[breakBeforeHere[j].first].pathRightClipKmers = 0;
+			}
+			std::sort(resultPaths[i].paths.begin(), resultPaths[i].paths.end(), [](const auto& left, const auto& right) { return left.readStartPos < right.readStartPos; });
+		}
+	}
+	assert(resultGraph.edgeCoverages.size() <= resultGraph.lengths.size());
+	if (resultGraph.edgeCoverages.size() < resultGraph.lengths.size())
+	{
+		resultGraph.edgeCoverages.resize(resultGraph.lengths.size());
+	}
+	for (auto t : newFakeEdges)
+	{
+		std::pair<size_t, bool> from { t.first & maskUint64_t, t.first & firstBitUint64_t };
+		std::pair<size_t, bool> to { t.second & maskUint64_t, t.second & firstBitUint64_t };
+		resultGraph.edgeCoverages.set(from, to, 1);
+	}
+}
+
 void unzipPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundle>& resultPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes, const std::vector<std::pair<size_t, size_t>>& nodeLocationInChain, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedAnchors, const phmap::flat_hash_set<std::pair<size_t, size_t>>& solvedBetweenAnchorLocations, const phmap::flat_hash_set<size_t>& solvedInterchainTangles, const VectorWithDirection<size_t>& nodeLocationInInterchainTangles, const size_t tangleCount, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>>& haplotypeDiagonalsPerRead, const phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>>& validHaplotypeConnectionsPerChainEdge)
 {
 	std::vector<int> maxDiagonalDifferences;
@@ -2583,16 +2942,94 @@ std::pair<phmap::flat_hash_set<std::pair<size_t, size_t>>, phmap::flat_hash_set<
 		//if (!canUnzipStart[chain] && minSolvedIndex == 0) minSolvedIndex = chainHaplotypes[i].bubbleIndices[1];
 		//if (!canUnzipEnd[chain] && maxSolvedIndex == anchorChains[chain].nodes.size()) maxSolvedIndex = chainHaplotypes[i].bubbleIndices[chainHaplotypes[i].bubbleIndices.size()-2];
 		// std::cerr << "block " << i << " chain " << chain << " indices " << minSolvedIndex << " " << maxSolvedIndex << std::endl;
-		for (size_t j = minSolvedIndex; j <= maxSolvedIndex; j++)
+		for (size_t j = minSolvedIndex; j < maxSolvedIndex; j++)
 		{
 			assert(solvedBetweenAnchorLocations.count(std::make_pair(chain, j)) == 0);
 			// std::cerr << "solve " << chain << " " << j << " (" << (j > 0 ? (anchorChains[chain].nodes[j-1] & maskUint64_t) : -1) << " to " << (j < anchorChains[chain].nodes.size() ? (anchorChains[chain].nodes[j] & maskUint64_t) : std::numeric_limits<size_t>::max()) << ")" << std::endl;
 			solvedBetweenAnchorLocations.emplace(chain, j);
-			if (j != maxSolvedIndex) solvedAnchors.emplace(chain, j);
+			solvedAnchors.emplace(chain, j);
+		}
+		if (maxSolvedIndex == anchorChains[chain].nodes.size())
+		{
+			assert(solvedBetweenAnchorLocations.count(std::make_pair(chain, maxSolvedIndex)) == 0);
+			solvedBetweenAnchorLocations.emplace(chain, maxSolvedIndex);
 		}
 		if (minSolvedIndex > 0) solvedBetweenAnchorLocations.emplace(chain, minSolvedIndex-1);
 	}
 	return std::make_pair(std::move(solvedAnchors), std::move(solvedBetweenAnchorLocations));
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipDiploidPhaseBlocks(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ReadDiagonalAlleles>>& allelesPerReadPerChain, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
+{
+	UnitigGraph resultGraph = unitigGraph;
+	std::vector<ReadPathBundle> resultPaths = readPaths;
+	std::vector<std::pair<size_t, size_t>> nodeLocationInChain = getNodeLocationsWithinChain(unitigGraph, anchorChains);
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		for (size_t j = 0; j < anchorChains[i].nodes.size(); j++)
+		{
+			assert(nodeLocationInChain[anchorChains[i].nodes[j] & maskUint64_t] == std::make_pair(i, j));
+		}
+	}
+	VectorWithDirection<size_t> nodeLocationInInterchainTangles = getNodeLocationsWithinInterchainTangles(unitigGraph, anchorChains);
+	size_t tangleCount = 0;
+	for (size_t i = 0; i < nodeLocationInInterchainTangles.size(); i++)
+	{
+		if (nodeLocationInInterchainTangles[std::make_pair(i, true)] != std::numeric_limits<size_t>::max())
+		{
+			tangleCount = std::max(tangleCount, nodeLocationInInterchainTangles[std::make_pair(i, true)]);
+		}
+		if (nodeLocationInInterchainTangles[std::make_pair(i, false)] != std::numeric_limits<size_t>::max())
+		{
+			tangleCount = std::max(tangleCount, nodeLocationInInterchainTangles[std::make_pair(i, false)]);
+		}
+	}
+	tangleCount += 1;
+	std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>> haplotypeDiagonalsPerRead = getPhaseBlockReadHaplotypeDiagonals(chainHaplotypes, anchorChains, allelesPerReadPerChain, resultPaths.size());
+	std::vector<bool> canUnzipStart;
+	std::vector<bool> canUnzipEnd;
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>> validHaplotypeConnectionsPerChainEdge;
+	std::tie(validHaplotypeConnectionsPerChainEdge, canUnzipStart, canUnzipEnd) = getValidHaplotypeConnectionsPerChainEdge(unitigGraph, readPaths, anchorChains, haplotypeDiagonalsPerRead, chainHaplotypes, validChainEdges, chainPositionsInReads, approxOneHapCoverage);
+	// for (size_t i = 0; i < anchorChains.size(); i++)
+	// {
+	// 	std::cerr << "anchor chain " << i << " (" << (anchorChains[i].nodes[0] & maskUint64_t) << " to " << (anchorChains[i].nodes.back() & maskUint64_t) << ") unzippable at start: " << (canUnzipStart[i] ? "yes" : "no") << " at end: " << (canUnzipEnd[i] ? "yes" : "no") << std::endl;
+	// }
+	phmap::flat_hash_set<size_t> solvedInterchainTangles = getSolvedInterchainTangles(anchorChains, canUnzipStart, canUnzipEnd, nodeLocationInInterchainTangles);
+	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedAnchors;
+	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedBetweenAnchorLocations;
+	std::tie(solvedAnchors, solvedBetweenAnchorLocations) = getSolvedLocationsInChain(anchorChains, chainHaplotypes);
+	unzipDiploidPhaseBlocks(resultGraph, resultPaths, anchorChains, chainHaplotypes, nodeLocationInChain, solvedAnchors, solvedBetweenAnchorLocations, solvedInterchainTangles, nodeLocationInInterchainTangles, tangleCount, validChainEdges, haplotypeDiagonalsPerRead, validHaplotypeConnectionsPerChainEdge);
+	RankBitvector kept;
+	kept.resize(resultGraph.nodeCount());
+	for (size_t i = 0; i < kept.size(); i++)
+	{
+		kept.set(i, true);
+		if (i >= nodeLocationInChain.size()) continue;
+		if (nodeLocationInChain[i].first != std::numeric_limits<size_t>::max())
+		{
+			assert(nodeLocationInChain[i].first < anchorChains.size());
+			if (anchorChains[nodeLocationInChain[i].first].ploidy == 2)
+			{
+				assert(nodeLocationInChain[i].second < anchorChains[nodeLocationInChain[i].first].nodes.size());
+				if ((anchorChains[nodeLocationInChain[i].first].nodes[nodeLocationInChain[i].second] & maskUint64_t) == i)
+				{
+					if (solvedAnchors.count(nodeLocationInChain[i]) == 0) continue;
+				}
+				else
+				{
+					if (solvedBetweenAnchorLocations.count(nodeLocationInChain[i]) == 0) continue;
+				}
+				std::cerr << "don't keep " << i << ", inside phased chain" << std::endl;
+				kept.set(i, false);
+			}
+		}
+		if (nodeLocationInInterchainTangles[std::make_pair(i, true)] != std::numeric_limits<size_t>::max() && nodeLocationInInterchainTangles[std::make_pair(i, true)] == nodeLocationInInterchainTangles[std::make_pair(i, false)] && solvedInterchainTangles.count(nodeLocationInInterchainTangles[std::make_pair(i, true)]) == 1)
+		{
+			std::cerr << "don't keep " << i << ", inside phased tangle " << nodeLocationInInterchainTangles[std::make_pair(i, true)] << std::endl;
+			kept.set(i, false);
+		}
+	}
+	return unitigifyWithFilter(resultGraph, resultPaths, kept);
 }
 
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ReadDiagonalAlleles>>& allelesPerReadPerChain, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
@@ -2830,7 +3267,8 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphDiploidMEC(const U
 	std::vector<PhaseBlock> chainHaplotypes = phaseDiploidChains(anchorChains, allelesPerReadPerChain, unitigGraph, approxOneHapCoverage);
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
-	std::tie(unzippedGraph, unzippedReadPaths) = unzipPhaseBlocks(unitigGraph, readPaths, anchorChains, allelesPerReadPerChain, chainHaplotypes, validChainEdges, chainPositionsInReads, approxOneHapCoverage);
+	std::tie(unzippedGraph, unzippedReadPaths) = unzipDiploidPhaseBlocks(unitigGraph, readPaths, anchorChains, allelesPerReadPerChain, chainHaplotypes, validChainEdges, chainPositionsInReads, approxOneHapCoverage);
+	return std::make_pair(unzippedGraph, unzippedReadPaths);
 	RankBitvector kept;
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)

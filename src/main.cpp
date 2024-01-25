@@ -156,10 +156,11 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	// for (size_t i = 0; i < 5; i++)
 	// {
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
+		//std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 
-	nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
-	writeGraph("hmm1-graph.gfa", unitigGraph, nodeSequences, k);
+	//nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
+	//writeGraph("hmm1-graph.gfa", unitigGraph, nodeSequences, k);
+	writeGraph("hmm1-graph.gfa", unitigGraph, k);
 	writePaths("hmm1-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphPolyploidTransitiveClosure(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphPolyploidTransitiveClosure(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
@@ -656,7 +657,7 @@ int main(int argc, char** argv)
 	const size_t graphk = std::stoull(argv[6]);
 	const size_t minCoverage = 2;
 	const size_t graphd = 50;
-	const double approxOneHapCoverage = 15;
+	const double approxOneHapCoverage = 20;
 	std::vector<std::string> readFiles;
 	for (size_t i = 7; i < argc; i++)
 	{

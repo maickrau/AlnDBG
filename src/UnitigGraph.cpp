@@ -296,6 +296,62 @@ void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, cons
 	std::cerr << countEdges << " graph edges" << std::endl;
 }
 
+VectorWithDirection<uint64_t> getUniqueEdges(const MostlySparse2DHashmap<uint8_t, size_t>& edgeCoverage, const RankBitvector& keptNodes, const size_t numKmerNodes, const size_t minCoverage)
+{
+	VectorWithDirection<uint64_t> result;
+	result.resize(numKmerNodes, std::numeric_limits<uint64_t>::max());
+	for (size_t i = 0; i < numKmerNodes; i++)
+	{
+		if (!keptNodes.get(i)) continue;
+		assert(i < numKmerNodes);
+		std::pair<size_t, bool> fw { i, true };
+		for (auto pair : edgeCoverage.getValues(fw))
+		{
+			if (pair.second < minCoverage) continue;
+			if (!keptNodes.get(pair.first.first)) continue;
+			if (result[std::make_pair(i, true)] == std::numeric_limits<uint64_t>::max())
+			{
+				result[std::make_pair(i, true)] = pair.first.first + (pair.first.second ? firstBitUint64_t : 0);
+			}
+			else
+			{
+				result[std::make_pair(i, true)] = std::numeric_limits<uint64_t>::max()-1;
+			}
+			if (result[reverse(pair.first)] == std::numeric_limits<uint64_t>::max())
+			{
+				result[reverse(pair.first)] = i;
+			}
+			else
+			{
+				result[reverse(pair.first)] = std::numeric_limits<uint64_t>::max()-1;
+			}
+		}
+		std::pair<size_t, bool> bw { i, false };
+		for (auto pair : edgeCoverage.getValues(bw))
+		{
+			if (pair.second < minCoverage) continue;
+			if (!keptNodes.get(pair.first.first)) continue;
+			if (result[std::make_pair(i, false)] == std::numeric_limits<uint64_t>::max())
+			{
+				result[std::make_pair(i, false)] = pair.first.first + (pair.first.second ? firstBitUint64_t : 0);
+			}
+			else
+			{
+				result[std::make_pair(i, false)] = std::numeric_limits<uint64_t>::max()-1;
+			}
+			if (result[reverse(pair.first)] == std::numeric_limits<uint64_t>::max())
+			{
+				result[reverse(pair.first)] = i + firstBitUint64_t;
+			}
+			else
+			{
+				result[reverse(pair.first)] = std::numeric_limits<uint64_t>::max()-1;
+			}
+		}
+	}
+	return result;
+}
+
 VectorWithDirection<uint64_t> getUniqueEdges(const MostlySparse2DHashmap<uint8_t, size_t>& edgeCoverage, const size_t numKmerNodes, const size_t minCoverage)
 {
 	VectorWithDirection<uint64_t> result;
@@ -650,6 +706,18 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unitigify(const UnitigGraph&
 	UnitigGraph result;
 	std::vector<ReadPathBundle> resultPaths;
 	std::vector<std::vector<uint64_t>> unitigs = getUnitigs(unitigGraph.nodeCount(), getUniqueEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount(), 1));
+	std::vector<std::pair<uint64_t, size_t>> kmerNodeToUnitig = getKmerPosToUnitigPos(unitigs, unitigGraph.nodeCount());
+	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, readPaths, kmerNodeToUnitig, unitigGraph.lengths);
+	result.edgeCoverages = getUnitigEdgeCoverages(unitigs, 1, readPaths, kmerNodeToUnitig);
+	auto resultReadPaths = getReadPaths(unitigGraph.lengths, readPaths, kmerNodeToUnitig, unitigs, result);
+	return std::make_pair(std::move(result), std::move(resultReadPaths));
+}
+
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unitigifyWithFilter(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const RankBitvector& keptNodes)
+{
+	UnitigGraph result;
+	std::vector<ReadPathBundle> resultPaths;
+	std::vector<std::vector<uint64_t>> unitigs = getUnitigs(unitigGraph.nodeCount(), keptNodes, getUniqueEdges(unitigGraph.edgeCoverages, keptNodes, unitigGraph.nodeCount(), 1));
 	std::vector<std::pair<uint64_t, size_t>> kmerNodeToUnitig = getKmerPosToUnitigPos(unitigs, unitigGraph.nodeCount());
 	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, readPaths, kmerNodeToUnitig, unitigGraph.lengths);
 	result.edgeCoverages = getUnitigEdgeCoverages(unitigs, 1, readPaths, kmerNodeToUnitig);
