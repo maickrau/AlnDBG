@@ -2057,7 +2057,7 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 				uint64_t tonode = totip;
 				size_t tochain = nodeLocationInChain[tonode & maskUint64_t].first;
 				size_t tooffset = nodeLocationInChain[tonode & maskUint64_t].second;
-				if (nodeReplacement.count(std::make_tuple(tonode & maskUint64_t, tochain, tooffset, happair.first)) == 1)
+				if (nodeReplacement.count(std::make_tuple(tonode & maskUint64_t, tochain, tooffset, happair.second)) == 1)
 				{
 					tonode = (tonode & firstBitUint64_t) + nodeReplacement.at(std::make_tuple(tonode & maskUint64_t, tochain, tooffset, happair.second));
 				}
@@ -2066,7 +2066,7 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 				resultGraph.coverages.emplace_back(0);
 				newFakeEdges.emplace_back(fromnode, newnode);
 				newFakeEdges.emplace_back(newnode, tonode);
-				std::cerr << "insert tangle gap of length " << distance << " between " << (tip & maskUint64_t) << " and " << (totip & maskUint64_t) << std::endl;
+				std::cerr << "insert tangle gap of length " << distance << " between " << (tip & maskUint64_t) << " (" << (fromnode & maskUint64_t) << ") and " << (totip & maskUint64_t) << " (" << (tonode & maskUint64_t) << ")" << std::endl;
 			}
 		}
 	}
@@ -2142,7 +2142,7 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 		{
 			for (size_t j = breakBeforeHere.size()-1; j < breakBeforeHere.size(); j--)
 			{
-				// std::cerr << "break read " << i << " index " << breakBeforeHere[j].first << " " << breakBeforeHere[j].second << " (" << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second-1] & maskUint64_t) << " " << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second] & maskUint64_t) << ")" << std::endl;
+				std::cerr << "break read " << i << " index " << breakBeforeHere[j].first << " " << breakBeforeHere[j].second << " (" << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second-1] & maskUint64_t) << " " << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second] & maskUint64_t) << ")" << std::endl;
 				assert(breakBeforeHere[j].first < resultPaths[i].paths.size());
 				assert(breakBeforeHere[j].second < resultPaths[i].paths[breakBeforeHere[j].first].path.size());
 				assert(breakBeforeHere[j].second > 0);
