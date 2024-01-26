@@ -502,6 +502,7 @@ size_t getPloidy(const std::vector<uint64_t>& nodes, const UnitigGraph& unitigGr
 	}
 	assert(coverageDivisor > 0);
 	size_t estimatedPloidy = (coverageSum / coverageDivisor) / approxOneHapCoverage + 0.5;
+	if (coverageDivisor > 1000 && estimatedPloidy == 0 && (coverageSum / coverageDivisor) >= approxOneHapCoverage*0.25) estimatedPloidy = 1;
 	if (coverageDivisor > 10000 && estimatedPloidy == 0 && (coverageSum / coverageDivisor) >= 3) estimatedPloidy = 1;
 	return estimatedPloidy;
 }

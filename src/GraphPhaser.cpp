@@ -2950,7 +2950,7 @@ phmap::flat_hash_set<size_t> getSolvedInterchainTangles(const std::vector<Anchor
 	return solvedInterchainTangles;
 }
 
-std::pair<phmap::flat_hash_set<std::pair<size_t, size_t>>, phmap::flat_hash_set<std::pair<size_t, size_t>>> getSolvedLocationsInChain(const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes)
+std::pair<phmap::flat_hash_set<std::pair<size_t, size_t>>, phmap::flat_hash_set<std::pair<size_t, size_t>>> getSolvedLocationsInChain(const std::vector<AnchorChain>& anchorChains, const std::vector<PhaseBlock>& chainHaplotypes, const std::vector<bool>& canUnzipStart, const std::vector<bool>& canUnzipEnd)
 {
 	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedAnchors;
 	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedBetweenAnchorLocations;
@@ -2960,8 +2960,8 @@ std::pair<phmap::flat_hash_set<std::pair<size_t, size_t>>, phmap::flat_hash_set<
 		size_t minSolvedIndex = 0;
 		size_t maxSolvedIndex = anchorChains[chain].nodes.size();
 		// std::cerr << "haploid chain " << chain << " indices " << minSolvedIndex << " " << maxSolvedIndex << " (" << anchorChains[chain].nodes.size() << ")" << std::endl;
-		//if (!canUnzipStart[chain] && minSolvedIndex == 0) minSolvedIndex = 1;
-		//if (!canUnzipEnd[chain] && maxSolvedIndex == anchorChains[chain].nodes.size()) maxSolvedIndex = anchorChains[chain].nodes.size();
+//		if (!canUnzipStart[chain] && minSolvedIndex == 0) minSolvedIndex = 1;
+//		if (!canUnzipEnd[chain] && maxSolvedIndex == anchorChains[chain].nodes.size()) maxSolvedIndex = anchorChains[chain].nodes.size();
 		// std::cerr << "haploid chain " << chain << " indices " << minSolvedIndex << " " << maxSolvedIndex << std::endl;
 		if (maxSolvedIndex < minSolvedIndex) continue;
 		for (size_t j = minSolvedIndex; j <= maxSolvedIndex; j++)
@@ -2981,8 +2981,8 @@ std::pair<phmap::flat_hash_set<std::pair<size_t, size_t>>, phmap::flat_hash_set<
 		assert(chainHaplotypes[i].bubbleIndices.size() >= 2);
 		assert(anchorChains[chainHaplotypes[i].chainNumber].ploidy >= 2);
 		// std::cerr << "block " << i << " chain " << chain << " indices " << minSolvedIndex << " " << maxSolvedIndex << " (" << anchorChains[chain].nodes.size() << ")" << std::endl;
-		//if (!canUnzipStart[chain] && minSolvedIndex == 0) minSolvedIndex = chainHaplotypes[i].bubbleIndices[1];
-		//if (!canUnzipEnd[chain] && maxSolvedIndex == anchorChains[chain].nodes.size()) maxSolvedIndex = chainHaplotypes[i].bubbleIndices[chainHaplotypes[i].bubbleIndices.size()-2];
+//		if (!canUnzipStart[chain] && minSolvedIndex == 0) minSolvedIndex = chainHaplotypes[i].bubbleIndices[1];
+//		if (!canUnzipEnd[chain] && maxSolvedIndex == anchorChains[chain].nodes.size()) maxSolvedIndex = chainHaplotypes[i].bubbleIndices[chainHaplotypes[i].bubbleIndices.size()-2];
 		// std::cerr << "block " << i << " chain " << chain << " indices " << minSolvedIndex << " " << maxSolvedIndex << std::endl;
 		for (size_t j = minSolvedIndex; j < maxSolvedIndex; j++)
 		{
@@ -3062,6 +3062,15 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipDiploidPhaseBlocks(cons
 			assert(nodeLocationInChain[anchorChains[i].nodes[j] & maskUint64_t] == std::make_pair(i, j));
 		}
 	}
+	std::vector<bool> anchor;
+	anchor.resize(unitigGraph.nodeCount(), false);
+	for (size_t i = 0; i < anchorChains.size(); i++)
+	{
+		for (size_t j = 0; j < anchorChains[i].nodes.size(); j++)
+		{
+			anchor[anchorChains[i].nodes[j] & maskUint64_t] = true;
+		}
+	}
 	VectorWithDirection<size_t> nodeLocationInInterchainTangles = getNodeLocationsWithinInterchainTangles(unitigGraph, anchorChains);
 	size_t tangleCount = 0;
 	for (size_t i = 0; i < nodeLocationInInterchainTangles.size(); i++)
@@ -3097,7 +3106,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipDiploidPhaseBlocks(cons
 	phmap::flat_hash_set<size_t> solvedInterchainTangles = getSolvedInterchainTangles(anchorChains, canUnzipStart, canUnzipEnd, nodeLocationInInterchainTangles);
 	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedAnchors;
 	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedBetweenAnchorLocations;
-	std::tie(solvedAnchors, solvedBetweenAnchorLocations) = getSolvedLocationsInChain(anchorChains, chainHaplotypes);
+	std::tie(solvedAnchors, solvedBetweenAnchorLocations) = getSolvedLocationsInChain(anchorChains, chainHaplotypes, canUnzipStart, canUnzipEnd);
 	unzipDiploidPhaseBlocks(resultGraph, resultPaths, anchorChains, chainHaplotypes, nodeLocationInChain, solvedAnchors, solvedBetweenAnchorLocations, solvedInterchainTangles, nodeLocationInInterchainTangles, tangleCount, validChainEdges, haplotypeDiagonalsPerRead, validHaplotypeConnectionsPerChainEdge, phasedSites);
 	RankBitvector kept;
 	kept.resize(resultGraph.nodeCount());
@@ -3126,8 +3135,11 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipDiploidPhaseBlocks(cons
 		}
 		if (nodeLocationInInterchainTangles[std::make_pair(i, true)] != std::numeric_limits<size_t>::max() && nodeLocationInInterchainTangles[std::make_pair(i, true)] == nodeLocationInInterchainTangles[std::make_pair(i, false)] && solvedInterchainTangles.count(nodeLocationInInterchainTangles[std::make_pair(i, true)]) == 1)
 		{
-			std::cerr << "don't keep " << i << ", inside phased tangle " << nodeLocationInInterchainTangles[std::make_pair(i, true)] << std::endl;
-			kept.set(i, false);
+			if (!anchor[i])
+			{
+				std::cerr << "don't keep " << i << ", inside phased tangle " << nodeLocationInInterchainTangles[std::make_pair(i, true)] << std::endl;
+				kept.set(i, false);
+			}
 		}
 	}
 	return unitigifyWithFilter(resultGraph, resultPaths, kept);
@@ -3171,7 +3183,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipPhaseBlocks(const Uniti
 	phmap::flat_hash_set<size_t> solvedInterchainTangles = getSolvedInterchainTangles(anchorChains, canUnzipStart, canUnzipEnd, nodeLocationInInterchainTangles);
 	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedAnchors;
 	phmap::flat_hash_set<std::pair<size_t, size_t>> solvedBetweenAnchorLocations;
-	std::tie(solvedAnchors, solvedBetweenAnchorLocations) = getSolvedLocationsInChain(anchorChains, chainHaplotypes);
+	std::tie(solvedAnchors, solvedBetweenAnchorLocations) = getSolvedLocationsInChain(anchorChains, chainHaplotypes, canUnzipStart, canUnzipEnd);
 	unzipPhaseBlocks(resultGraph, resultPaths, anchorChains, chainHaplotypes, nodeLocationInChain, solvedAnchors, solvedBetweenAnchorLocations, solvedInterchainTangles, nodeLocationInInterchainTangles, tangleCount, validChainEdges, haplotypeDiagonalsPerRead, validHaplotypeConnectionsPerChainEdge);
 	RankBitvector kept;
 	kept.resize(resultGraph.nodeCount());
