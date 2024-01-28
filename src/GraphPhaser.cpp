@@ -4459,9 +4459,10 @@ phmap::flat_hash_map<uint64_t, std::vector<std::tuple<uint64_t, size_t, size_t>>
 					lastAnchorJ = j;
 					continue;
 				}
+				assert(lastAnchorJ <= j);
 				auto key = canon(std::make_pair(lastLocalUniq & maskUint64_t, lastLocalUniq & firstBitUint64_t), std::make_pair(node & maskUint64_t, node & firstBitUint64_t));
 				int distance = (int)readPos - (int)unitigGraph.lengths[node & maskUint64_t] - lastLocalUniqEndPos;
-				if (distance < 0)
+				if (j != lastAnchorJ && distance < 0)
 				{
 					lastLocalUniq = node;
 					lastLocalUniqEndPos = readPos;
@@ -4470,15 +4471,15 @@ phmap::flat_hash_map<uint64_t, std::vector<std::tuple<uint64_t, size_t, size_t>>
 				}
 				if (key.first == std::make_pair<size_t, bool>(lastLocalUniq & maskUint64_t, lastLocalUniq & firstBitUint64_t) && key.second == std::make_pair<size_t, bool>(node & maskUint64_t, node & firstBitUint64_t))
 				{
-					// if (j != lastAnchorJ) distances[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
-					// if (j == lastAnchorJ) distancesWithoutGaps[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
-					distancesWithoutGaps[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
+					if (j != lastAnchorJ) distances[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
+					if (j == lastAnchorJ) distancesWithoutGaps[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
+					// distancesWithoutGaps[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
 				}
 				else
 				{
-					// if (j != lastAnchorJ) distances[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^firstBitUint64_t)].emplace_back(distance);
-					// if (j == lastAnchorJ) distancesWithoutGaps[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^firstBitUint64_t)].emplace_back(distance);
-					distancesWithoutGaps[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^firstBitUint64_t)].emplace_back(distance);
+					if (j != lastAnchorJ) distances[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^ firstBitUint64_t)].emplace_back(distance);
+					if (j == lastAnchorJ) distancesWithoutGaps[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^ firstBitUint64_t)].emplace_back(distance);
+					// distancesWithoutGaps[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^ firstBitUint64_t)].emplace_back(distance);
 				}
 				lastLocalUniq = node;
 				lastLocalUniqEndPos = readPos;
@@ -4491,6 +4492,17 @@ phmap::flat_hash_map<uint64_t, std::vector<std::tuple<uint64_t, size_t, size_t>>
 	{
 		std::vector<int> dists = pair.second;
 		if (distances.count(pair.first) == 1) dists.insert(dists.end(), distances.at(pair.first).begin(), distances.at(pair.first).end());
+		if (dists.size() < 3) continue;
+		std::sort(dists.begin(), dists.end());
+		result[pair.first.first].emplace_back(pair.first.second, dists[dists.size() / 2], dists.size());
+		result[pair.first.second ^ firstBitUint64_t].emplace_back(pair.first.first ^ firstBitUint64_t, dists[dists.size()/2], dists.size());
+	}
+	for (auto pair : distances)
+	{
+		if (distancesWithoutGaps.count(pair.first) == 1) continue;
+		std::vector<int> dists = pair.second;
+		if (result.count(pair.first.first) == 1) continue;
+		if (result.count(pair.first.second ^ firstBitUint64_t) == 1) continue;
 		if (dists.size() < 3) continue;
 		std::sort(dists.begin(), dists.end());
 		result[pair.first.first].emplace_back(pair.first.second, dists[dists.size() / 2], dists.size());
