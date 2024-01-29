@@ -15,7 +15,7 @@ public:
 };
 
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphDiploidMEC(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const size_t numThreads, const double approxOneHapCoverage);
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphPolyploidTransitiveClosure(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage);
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphPolyploidTransitiveClosure(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const size_t numThreads, const double approxOneHapCoverage);
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphChainmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage, const size_t resolveLength);
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphHapmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage, const size_t resolveLength);
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphLocalUniqmers(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage, const size_t uniqSpanLength, const size_t resolveLength, const size_t maxCopyCount);
