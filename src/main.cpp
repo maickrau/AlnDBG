@@ -129,7 +129,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> getInitialGraph(const std::v
 //	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraph(unitigGraph, readUnitigGraphPaths, getGraphPhaseBlockNodes(unitigGraph, readUnitigGraphPaths, 17));
 //	forbidAlnsFromDifferentHaplotypes(unitigGraph, readUnitigGraphPaths, matches, readNames);
 //	std::tie(unitigGraph, readUnitigGraphPaths) = makeGraph(readLengths, matches, minCoverage);
-	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
+	std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 	std::tie(unitigGraph, readUnitigGraphPaths) = popHaploidChainBubbles(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 	auto nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	writeGraph(prefix + "graph.gfa", unitigGraph, nodeSequences, k);
@@ -155,8 +155,8 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	writePaths("paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 	// for (size_t i = 0; i < 5; i++)
 	// {
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
+		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
+		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 
 	//nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	//writeGraph("hmm1-graph.gfa", unitigGraph, nodeSequences, k);
@@ -188,7 +188,7 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 2000, 100000);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphChainmers(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 2000);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 2000, 2000, 100000);
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
+		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphPolyploidTransitiveClosure(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 		std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 		std::tie(unitigGraph, readUnitigGraphPaths) = popHaploidChainBubbles(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
@@ -202,7 +202,7 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 10000, 100000);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphChainmers(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 10000);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 10000, 10000, 100000);
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
+		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphPolyploidTransitiveClosure(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 		std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 		std::tie(unitigGraph, readUnitigGraphPaths) = popHaploidChainBubbles(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
@@ -216,7 +216,7 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 20000, 100000);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphChainmers(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 20000);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmers(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 20000, 20000, 100000);
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
+		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphPolyploidTransitiveClosure(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 		std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 		std::tie(unitigGraph, readUnitigGraphPaths) = popHaploidChainBubbles(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);

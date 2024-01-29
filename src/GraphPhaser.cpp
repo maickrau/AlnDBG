@@ -1641,24 +1641,25 @@ double getNormalizedChainCoverage(const AnchorChain& anchorChain, const double a
 	return sum / divisor;
 }
 
-std::vector<PhaseBlock> phaseDiploidChains(std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ReadDiagonalAlleles>>& allelesPerReadPerChain, const UnitigGraph& unitigGraph, const double approxOneHapCoverage)
+std::vector<PhaseBlock> phaseDiploidChains(std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<ReadDiagonalAlleles>>& allelesPerReadPerChain, const UnitigGraph& unitigGraph, const size_t numThreads, const double approxOneHapCoverage)
 {
 	assert(anchorChains.size() == allelesPerReadPerChain.size());
 	std::vector<PhaseBlock> result;
-	for (size_t i = 0; i < anchorChains.size(); i++)
+	std::mutex resultMutex;
+	iterateMultithreaded(0, anchorChains.size(), numThreads, [&resultMutex, &result, &anchorChains, &unitigGraph, &allelesPerReadPerChain, approxOneHapCoverage](size_t i)
 	{
-		std::cerr << "check chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << " ploidy " << anchorChains[i].ploidy << std::endl;
+//		std::cerr << "check chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << " ploidy " << anchorChains[i].ploidy << std::endl;
 		if (anchorChains[i].ploidy == 1)
 		{
-			std::cerr << "check if chain " << i << " is low coverage miscalled diploid" << std::endl;
+//			std::cerr << "check if chain " << i << " is low coverage miscalled diploid" << std::endl;
 			if (isDiploidChain(i, anchorChains[i], allelesPerReadPerChain[i], approxOneHapCoverage))
 			{
-				std::cerr << "chain " << i << " is actually diploid" << std::endl;
+//				std::cerr << "chain " << i << " is actually diploid" << std::endl;
 				anchorChains[i].ploidy = 2;
 			}
 			else
 			{
-				continue;
+				return;
 			}
 		}
 		bool checkingDiploidFromThree = false;
@@ -1667,17 +1668,17 @@ std::vector<PhaseBlock> phaseDiploidChains(std::vector<AnchorChain>& anchorChain
 			double fractionalCopyCount = getNormalizedChainCoverage(anchorChains[i], approxOneHapCoverage, unitigGraph);
 			if (fractionalCopyCount < 3 && isDiploidChain(i, anchorChains[i], allelesPerReadPerChain[i], approxOneHapCoverage))
 			{
-				std::cerr << "check if chain " << i << " is high coverage miscalled diploid" << std::endl;
+//				std::cerr << "check if chain " << i << " is high coverage miscalled diploid" << std::endl;
 				anchorChains[i].ploidy = 2;
 				checkingDiploidFromThree = true;
 			}
 		}
 		if (anchorChains[i].ploidy == 2)
 		{
-			std::cerr << "try phase diploid chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << std::endl;
+//			std::cerr << "try phase diploid chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << std::endl;
 			auto phaseBlocks = getChainPhaseBlocksMEC(i, allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()+1, approxOneHapCoverage);
-			if (phaseBlocks.size() == 0) continue;
-			std::cerr << "phased with " << phaseBlocks.size() << " blocks. start: " << (phaseBlocks[0].chainStartPhased ? "yes" : "no") << ", end: " << (phaseBlocks.back().chainEndPhased ? "yes" : "no") << std::endl;
+			if (phaseBlocks.size() == 0) return;
+//			std::cerr << "phased with " << phaseBlocks.size() << " blocks. start: " << (phaseBlocks[0].chainStartPhased ? "yes" : "no") << ", end: " << (phaseBlocks.back().chainEndPhased ? "yes" : "no") << std::endl;
 			bool include = true;
 			for (size_t j = 0; j < phaseBlocks.size(); j++)
 			{
@@ -1690,19 +1691,23 @@ std::vector<PhaseBlock> phaseDiploidChains(std::vector<AnchorChain>& anchorChain
 					}
 					if (foundAlleles.size() != anchorChains[i].ploidy)
 					{
-						std::cerr << "red flag: allele shared between haps, ploidy " << anchorChains[i].ploidy << ", num distinct alleles: " << foundAlleles.size() << ", skipping this phasing" << std::endl;
+//						std::cerr << "red flag: allele shared between haps, ploidy " << anchorChains[i].ploidy << ", num distinct alleles: " << foundAlleles.size() << ", skipping this phasing" << std::endl;
 						include = false;
 					}
 				}
 			}
 			if (!include && checkingDiploidFromThree) anchorChains[i].ploidy = 3;
-			if (include) result.insert(result.end(), phaseBlocks.begin(), phaseBlocks.end());
+			if (include)
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				result.insert(result.end(), phaseBlocks.begin(), phaseBlocks.end());
+			}
 		}
 		else
 		{
-			std::cerr << "skipped chain with ploidy " << anchorChains[i].ploidy << std::endl;
+//			std::cerr << "skipped chain with ploidy " << anchorChains[i].ploidy << std::endl;
 		}
-	}
+	});
 	return result;
 }
 
@@ -2010,7 +2015,7 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 			newFakeEdges.emplace_back(thisNode+0, (anchorChains[i].nodes[j] & firstBitUint64_t) + hap0Next);
 			newFakeEdges.emplace_back((anchorChains[i].nodes[j-1] & firstBitUint64_t) + hap1Prev, thisNode+1);
 			newFakeEdges.emplace_back(thisNode+1, (anchorChains[i].nodes[j] & firstBitUint64_t) + hap1Next);
-			std::cerr << "insert chain hap gap of lengths " << hap0length << " " << hap1length << " between " << (anchorChains[i].nodes[j-1] & maskUint64_t) << " and " << (anchorChains[i].nodes[j] & maskUint64_t) << std::endl;
+//			std::cerr << "insert chain hap gap of lengths " << hap0length << " " << hap1length << " between " << (anchorChains[i].nodes[j-1] & maskUint64_t) << " and " << (anchorChains[i].nodes[j] & maskUint64_t) << std::endl;
 		}
 	}
 	for (const auto& pair : validHaplotypeConnectionsPerChainEdge)
@@ -2076,7 +2081,7 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 				resultGraph.coverages.emplace_back(0);
 				newFakeEdges.emplace_back(fromnode, newnode);
 				newFakeEdges.emplace_back(newnode, tonode);
-				std::cerr << "insert tangle gap of length " << distance << " between " << (tip & maskUint64_t) << " (" << (fromnode & maskUint64_t) << ") and " << (totip & maskUint64_t) << " (" << (tonode & maskUint64_t) << ")" << std::endl;
+//				std::cerr << "insert tangle gap of length " << distance << " between " << (tip & maskUint64_t) << " (" << (fromnode & maskUint64_t) << ") and " << (totip & maskUint64_t) << " (" << (tonode & maskUint64_t) << ")" << std::endl;
 			}
 		}
 	}
@@ -2104,7 +2109,7 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 				uint64_t node = resultPaths[i].paths[j].path[k];
 				assert((node & maskUint64_t) < nodeLocationInChain.size());
 				assert(nodeReplacement.count(std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)) == 1);
-				std::cerr << "read " << i << " " << j << " " << k << " replace " << (node & maskUint64_t) << " with " << nodeReplacement.at(std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)) << std::endl;
+//				std::cerr << "read " << i << " " << j << " " << k << " replace " << (node & maskUint64_t) << " with " << nodeReplacement.at(std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)) << std::endl;
 				resultPaths[i].paths[j].path[k] = nodeReplacement.at(std::make_tuple(node & maskUint64_t, currChain, currOffset, hap)) + (node & firstBitUint64_t);
 			}
 		}
@@ -2195,7 +2200,7 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 		{
 			for (size_t j = breakBeforeHere.size()-1; j < breakBeforeHere.size(); j--)
 			{
-				std::cerr << "break read " << i << " index " << breakBeforeHere[j].first << " " << breakBeforeHere[j].second << " (" << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second-1] & maskUint64_t) << " " << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second] & maskUint64_t) << ")" << std::endl;
+//				std::cerr << "break read " << i << " index " << breakBeforeHere[j].first << " " << breakBeforeHere[j].second << " (" << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second-1] & maskUint64_t) << " " << (resultPaths[i].paths[breakBeforeHere[j].first].path[breakBeforeHere[j].second] & maskUint64_t) << ")" << std::endl;
 				assert(breakBeforeHere[j].first < resultPaths[i].paths.size());
 				assert(breakBeforeHere[j].second < resultPaths[i].paths[breakBeforeHere[j].first].path.size());
 				assert(breakBeforeHere[j].second > 0);
@@ -3495,7 +3500,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphPolyploidTransitiv
 	return filterUnitigGraph(unzippedGraph, unzippedReadPaths, kept);
 }
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphDiploidMEC(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t graphk, const double approxOneHapCoverage)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphDiploidMEC(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t numThreads, const size_t graphk, const double approxOneHapCoverage)
 {
 	std::cerr << "try phase diploid chains with MEC" << std::endl;
 	std::cerr << "get anchor chains" << std::endl;
@@ -3523,7 +3528,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphDiploidMEC(const U
 	std::vector<std::vector<std::vector<std::vector<uint64_t>>>> allelesPerChain;
 	std::vector<std::vector<ReadDiagonalAlleles>> allelesPerReadPerChain;
 	std::tie(allelesPerChain, allelesPerReadPerChain) = getRawReadInfoPerChain(anchorChains, readPaths, unitigGraph, validChainEdges, chainPositionsInReads);
-	std::vector<PhaseBlock> chainHaplotypes = phaseDiploidChains(anchorChains, allelesPerReadPerChain, unitigGraph, approxOneHapCoverage);
+	std::vector<PhaseBlock> chainHaplotypes = phaseDiploidChains(anchorChains, allelesPerReadPerChain, unitigGraph, numThreads, approxOneHapCoverage);
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
 	std::tie(unzippedGraph, unzippedReadPaths) = unzipDiploidPhaseBlocks(unitigGraph, readPaths, anchorChains, allelesPerReadPerChain, chainHaplotypes, validChainEdges, chainPositionsInReads, approxOneHapCoverage);
