@@ -4481,15 +4481,15 @@ phmap::flat_hash_map<uint64_t, std::vector<std::tuple<uint64_t, size_t, size_t>>
 				}
 				if (key.first == std::make_pair<size_t, bool>(lastLocalUniq & maskUint64_t, lastLocalUniq & firstBitUint64_t) && key.second == std::make_pair<size_t, bool>(node & maskUint64_t, node & firstBitUint64_t))
 				{
-					if (j != lastAnchorJ) distances[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
-					if (j == lastAnchorJ) distancesWithoutGaps[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
-					// distancesWithoutGaps[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
+//					if (j != lastAnchorJ) distances[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
+//					if (j == lastAnchorJ) distancesWithoutGaps[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
+					distancesWithoutGaps[std::make_pair(lastLocalUniq, node)].emplace_back(distance);
 				}
 				else
 				{
-					if (j != lastAnchorJ) distances[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^ firstBitUint64_t)].emplace_back(distance);
-					if (j == lastAnchorJ) distancesWithoutGaps[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^ firstBitUint64_t)].emplace_back(distance);
-					// distancesWithoutGaps[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^ firstBitUint64_t)].emplace_back(distance);
+//					if (j != lastAnchorJ) distances[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^ firstBitUint64_t)].emplace_back(distance);
+//					if (j == lastAnchorJ) distancesWithoutGaps[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^ firstBitUint64_t)].emplace_back(distance);
+					distancesWithoutGaps[std::make_pair(node ^ firstBitUint64_t, lastLocalUniq ^ firstBitUint64_t)].emplace_back(distance);
 				}
 				lastLocalUniq = node;
 				lastLocalUniqEndPos = readPos;
@@ -5008,9 +5008,70 @@ std::vector<std::vector<std::pair<uint64_t, int>>> getReadExtrapolatedLocalUniqL
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& localUniqChains, const std::vector<bool>& localUniq, const double approxOneHapCoverage)
 {
 	std::cerr << "split nodes by chain location" << std::endl;
-	auto localUniqNodeLocations = getReadExtrapolatedLocalUniqLocations(unitigGraph, readPaths, localUniqChains);
-	size_t maxClusterDistance = 1000;
-	assert(localUniqNodeLocations.size() == readPaths.size());
+//	auto localUniqNodeLocations = getReadExtrapolatedLocalUniqLocations(unitigGraph, readPaths, localUniqChains);
+	auto readChains = getReadChainPositions(unitigGraph, readPaths, localUniqChains);
+	std::vector<std::vector<size_t>> chainLengths;
+	chainLengths.resize(localUniqChains.size());
+	for (size_t i = 0; i < readChains.size(); i++)
+	{
+		for (auto chain : readChains[i])
+		{
+			assert(chain.chainEndPosInRead > chain.chainStartPosInRead);
+			chainLengths[chain.chain & maskUint64_t].emplace_back(chain.chainEndPosInRead - chain.chainStartPosInRead);
+		}
+	}
+	std::vector<std::vector<size_t>> chainLengthSplitters;
+	chainLengthSplitters.resize(localUniqChains.size());
+	for (size_t i = 0; i < chainLengths.size(); i++)
+	{
+		std::sort(chainLengths[i].begin(), chainLengths[i].end());
+		chainLengthSplitters[i].emplace_back(0);
+		for (size_t j = 1; j < chainLengths[i].size(); j++)
+		{
+			if (chainLengths[i][j] - chainLengths[i][j-1] < 100) continue;
+			chainLengthSplitters[i].emplace_back((chainLengths[i][j] + chainLengths[i][j-1]) / 2);
+		}
+	}
+	std::vector<std::vector<size_t>> chainSplitterToIndex;
+	chainSplitterToIndex.resize(localUniqChains.size());
+	size_t totalSplittedChainsCount = 0;
+	for (size_t i = 0; i < chainLengthSplitters.size(); i++)
+	{
+		for (size_t j = 0; j < chainLengthSplitters[i].size(); j++)
+		{
+			chainSplitterToIndex[i].emplace_back(totalSplittedChainsCount);
+			totalSplittedChainsCount += 1;
+		}
+	}
+	std::vector<std::vector<std::pair<uint64_t, int>>> readLocalUniqChainEndPositions;
+	readLocalUniqChainEndPositions.resize(readChains.size());
+	assert(readChains.size() == readPaths.size());
+	for (size_t i = 0; i < readChains.size(); i++)
+	{
+		for (auto chain : readChains[i])
+		{
+			size_t splittedIndex = 0;
+			size_t length = chain.chainEndPosInRead - chain.chainStartPosInRead;
+			for (size_t j = 0; j < chainLengthSplitters[chain.chain & maskUint64_t].size(); j++)
+			{
+				if (chainLengthSplitters[chain.chain][j] > length) break;
+				splittedIndex = j;
+			}
+			splittedIndex = chainSplitterToIndex[chain.chain][splittedIndex];
+			if (chain.chain & firstBitUint64_t)
+			{
+				readLocalUniqChainEndPositions[i].emplace_back(splittedIndex + firstBitUint64_t, chain.chainStartPosInRead);
+				readLocalUniqChainEndPositions[i].emplace_back(splittedIndex + firstBitUint64_t + totalSplittedChainsCount, chain.chainEndPosInRead);
+			}
+			else
+			{
+				readLocalUniqChainEndPositions[i].emplace_back(splittedIndex + totalSplittedChainsCount, chain.chainStartPosInRead);
+				readLocalUniqChainEndPositions[i].emplace_back(splittedIndex, chain.chainEndPosInRead);
+			}
+		}
+	}
+	size_t maxClusterDistance = 100;
+	assert(readLocalUniqChainEndPositions.size() == readPaths.size());
 	UnitigGraph resultGraph = unitigGraph;
 	std::vector<ReadPathBundle> resultPaths = readPaths;
 	std::vector<std::vector<std::tuple<size_t, size_t, size_t, int>>> nodeReadPositions;
@@ -5055,7 +5116,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 			uint64_t closestFw = std::numeric_limits<size_t>::max();
 			size_t closestBwDistance = std::numeric_limits<size_t>::max();
 			size_t closestFwDistance = std::numeric_limits<size_t>::max();
-			for (auto pos : localUniqNodeLocations[i])
+			for (auto pos : readLocalUniqChainEndPositions[i])
 			{
 				if (pos.second < readPos)
 				{
@@ -5187,9 +5248,9 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 			auto cluster = find(parent, bwAllele);
 			std::cerr << "read " << std::get<0>(t) << " node " << iii << " pos " << std::get<7>(t) << " has cluster " << cluster << " (bw was " << ((std::get<3>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<3>(t) & maskUint64_t) << " dist " << std::get<5>(t) << ", fw was " << ((std::get<4>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<4>(t) & maskUint64_t) << " dist " << std::get<6>(t) << ")" << std::endl;
 		}
-		phmap::flat_hash_map<size_t, size_t> clusterCoverage;
 		std::sort(hashes.begin(), hashes.end());
 		assert(hashes.size() >= 1);
+/*		phmap::flat_hash_map<size_t, size_t> clusterCoverage;
 		for (size_t j = 1; j < hashes.size(); j++)
 		{
 			assert(std::get<0>(hashes[j]) >= std::get<0>(hashes[j-1]));
@@ -5209,17 +5270,17 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 //				break;
 			}
 		}
-		std::cerr << std::endl;
-		if (!allClustersFineish)
-		{
-			std::cerr << "skip node " << iii << " clusters not fine (coverage " << unitigGraph.coverages[iii] << ", clusters " << clusterCoverage.size() << ")" << std::endl;
-			continue;
-		}
-		if (clusterCoverage.size() == 1)
+		std::cerr << std::endl;*/
+//		if (!allClustersFineish)
+//		{
+//			std::cerr << "skip node " << iii << " clusters not fine (coverage " << unitigGraph.coverages[iii] << ", clusters " << clusterCoverage.size() << ")" << std::endl;
+//			continue;
+//		}
+/*		if (clusterCoverage.size() == 1)
 		{
 			std::cerr << "skip node " << iii << " only one cluster" << std::endl;
 			continue;
-		}
+		}*/
 		phmap::flat_hash_map<size_t, size_t> clusterToNewNode;
 		for (auto pair : parent)
 		{
@@ -5228,8 +5289,8 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 			resultGraph.lengths.emplace_back(resultGraph.lengths[iii]);
 			resultGraph.coverages.emplace_back(0);
 		}
-		assert(clusterToNewNode.size() == clusterCoverage.size());
 		std::cerr << "node " << iii << " has " << clusterToNewNode.size() << " clusters" << std::endl;
+//		assert(clusterToNewNode.size() == clusterCoverage.size());
 		for (auto t : nodeInfos)
 		{
 			size_t bwAllele = std::numeric_limits<size_t>::max()-1;
