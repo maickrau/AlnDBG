@@ -4779,6 +4779,8 @@ std::vector<std::vector<std::pair<uint64_t, int>>> getReadExtrapolatedLocalUniqL
 		for (size_t j = 0; j < localUniqChains[i].nodes.size(); j++)
 		{
 			uint64_t node = localUniqChains[i].nodes[j];
+			assert(nodeUniqChainLocation.count(node) == 0);
+			assert(nodeUniqChainLocation.count(node ^ firstBitUint64_t) == 0);
 			nodeUniqChainLocation[node] = std::make_pair(i + firstBitUint64_t, j);
 			nodeUniqChainLocation[node ^ firstBitUint64_t] = std::make_pair(i, localUniqChains[i].nodes.size()-1-j);
 		}
@@ -4811,6 +4813,7 @@ std::vector<std::vector<std::pair<uint64_t, int>>> getReadExtrapolatedLocalUniqL
 				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
 				if (nodeUniqChainLocation.count(node) == 0) continue;
 				nodeApproxPositions[node].emplace_back((int)readPos - (int)unitigGraph.lengths[node & maskUint64_t]/2);
+				std::cerr << "read " << i << " has approx position node " << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t) << " pos " << nodeApproxPositions.at(node).back() << std::endl;
 			}
 		}
 		std::vector<std::pair<uint64_t, int>> unfilteredNodePositions;
@@ -4827,16 +4830,29 @@ std::vector<std::vector<std::pair<uint64_t, int>>> getReadExtrapolatedLocalUniqL
 			}
 			unfilteredNodePositions.emplace_back(pair.first, pair.second[clusterStart+(pair.second.size()-clusterStart)/2]);
 		}
+		for (auto pos : unfilteredNodePositions)
+		{
+			std::cerr << "read " << i << " unfiltered node position " << ((pos.first & firstBitUint64_t) ? ">" : "<") << (pos.first & maskUint64_t) << " pos " << pos.second << " (chain " << ((nodeUniqChainLocation.at(pos.first).first & firstBitUint64_t) ? ">" : "<") << (nodeUniqChainLocation.at(pos.first).first & maskUint64_t) << ")" << std::endl;
+		}
 		std::vector<std::pair<uint64_t, int>> nodePositions;
+		for (auto chain : readChains[i])
+		{
+			std::cerr << "read " << i << " chain " << ((chain.chain & firstBitUint64_t) ? ">" : "<") << (chain.chain & maskUint64_t) << " " << chain.chainStartPosInRead << " " << chain.chainEndPosInRead << std::endl;
+		}
 		for (auto pos : unfilteredNodePositions)
 		{
 			bool hasMatch = false;
 			for (auto chain : readChains[i])
 			{
-				if (chain.chainStartPosInRead > pos.second + unitigGraph.lengths[pos.first & maskUint64_t]) continue;
-				if (chain.chainEndPosInRead < pos.second) continue;
+				if (chain.chain != nodeUniqChainLocation.at(pos.first).first) continue;
+				if (chain.chainStartPosInRead > pos.second) continue;
+				if (chain.chainEndPosInRead < pos.second + unitigGraph.lengths[pos.first & maskUint64_t]) continue;
 				hasMatch = true;
 				break;
+			}
+			if (!hasMatch)
+			{
+				std::cerr << "read " << i << " match " << ((pos.first & firstBitUint64_t) ? ">" : "<") << (pos.first & maskUint64_t) << " pos " << pos.second << " filtered out" << std::endl;
 			}
 			if (hasMatch) nodePositions.emplace_back(pos);
 		}
@@ -4993,7 +5009,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 {
 	std::cerr << "split nodes by chain location" << std::endl;
 	auto localUniqNodeLocations = getReadExtrapolatedLocalUniqLocations(unitigGraph, readPaths, localUniqChains);
-	size_t maxClusterDistance = 100;
+	size_t maxClusterDistance = 1000;
 	assert(localUniqNodeLocations.size() == readPaths.size());
 	UnitigGraph resultGraph = unitigGraph;
 	std::vector<ReadPathBundle> resultPaths = readPaths;
@@ -5115,7 +5131,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 			}
 		}
 		phmap::flat_hash_map<size_t, size_t> parent;
-		std::vector<size_t> hashes;
+		std::vector<std::tuple<size_t, int, size_t>> hashes;
 		for (auto t : nodeInfos)
 		{
 			size_t bwAllele = std::numeric_limits<size_t>::max()-1;
@@ -5149,7 +5165,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 			if (parent.count(bwAllele) == 0) parent[bwAllele] = bwAllele;
 			if (parent.count(fwAllele) == 0) parent[fwAllele] = fwAllele;
 			merge(parent, bwAllele, fwAllele);
-			hashes.push_back(bwAllele);
+			hashes.emplace_back(std::get<0>(t), std::get<7>(t), bwAllele);
 		}
 		for (auto t : nodeInfos)
 		{
@@ -5172,10 +5188,16 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 			std::cerr << "read " << std::get<0>(t) << " node " << iii << " pos " << std::get<7>(t) << " has cluster " << cluster << " (bw was " << ((std::get<3>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<3>(t) & maskUint64_t) << " dist " << std::get<5>(t) << ", fw was " << ((std::get<4>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<4>(t) & maskUint64_t) << " dist " << std::get<6>(t) << ")" << std::endl;
 		}
 		phmap::flat_hash_map<size_t, size_t> clusterCoverage;
-		for (size_t hash : hashes)
+		std::sort(hashes.begin(), hashes.end());
+		assert(hashes.size() >= 1);
+		for (size_t j = 1; j < hashes.size(); j++)
 		{
-			clusterCoverage[find(parent, hash)] += 1;
+			assert(std::get<0>(hashes[j]) >= std::get<0>(hashes[j-1]));
+			assert(std::get<1>(hashes[j]) >= std::get<1>(hashes[j-1]) || std::get<0>(hashes[j]) > std::get<0>(hashes[j-1]));
+			if (std::get<0>(hashes[j]) == std::get<0>(hashes[j-1]) && std::get<1>(hashes[j]) - std::get<1>(hashes[j-1]) < maxClusterDistance) continue;
+			clusterCoverage[find(parent, std::get<2>(hashes[j-1]))] += 1;
 		}
+		clusterCoverage[find(parent, std::get<2>(hashes.back()))] += 1;
 		std::cerr << "node " << iii << " cluster coverages:";
 		bool allClustersFineish = true;
 		for (auto pair : clusterCoverage)

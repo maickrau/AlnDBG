@@ -173,11 +173,11 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 5000, 100000);
 	std::cerr << "here end" << std::endl;
 		// std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
-std::exit(0);
 	// nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	// writeGraph("hmm3-graph.gfa", unitigGraph, nodeSequences, k);
 	writeGraph("hmm3-graph.gfa", unitigGraph, k);
 	writePaths("hmm3-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+std::exit(0);
 
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 	writeGraph("hmm4-graph.gfa", unitigGraph, k);
