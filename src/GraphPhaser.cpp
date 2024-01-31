@@ -5096,7 +5096,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 		if (localUniq[iii]) continue;
 		if (unitigGraph.coverages[iii] < approxOneHapCoverage * 2)
 		{
-			std::cerr << "skip node " << iii << " coverage " << unitigGraph.coverages[iii] << " vs " << approxOneHapCoverage * 2 << std::endl;
+			// std::cerr << "skip node " << iii << " coverage " << unitigGraph.coverages[iii] << " vs " << approxOneHapCoverage * 2 << std::endl;
 			continue;
 		}
 		phmap::flat_hash_map<uint64_t, std::vector<size_t>> nodePositionsInChains;
@@ -5246,7 +5246,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 				bwAllele += firstBitUint64_t >> 1;
 			}
 			auto cluster = find(parent, bwAllele);
-			std::cerr << "read " << std::get<0>(t) << " node " << iii << " pos " << std::get<7>(t) << " has cluster " << cluster << " (bw was " << ((std::get<3>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<3>(t) & maskUint64_t) << " dist " << std::get<5>(t) << ", fw was " << ((std::get<4>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<4>(t) & maskUint64_t) << " dist " << std::get<6>(t) << ")" << std::endl;
+			// std::cerr << "read " << std::get<0>(t) << " node " << iii << " pos " << std::get<7>(t) << " has cluster " << cluster << " (bw was " << ((std::get<3>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<3>(t) & maskUint64_t) << " dist " << std::get<5>(t) << ", fw was " << ((std::get<4>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<4>(t) & maskUint64_t) << " dist " << std::get<6>(t) << ")" << std::endl;
 		}
 		std::sort(hashes.begin(), hashes.end());
 		assert(hashes.size() >= 1);

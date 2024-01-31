@@ -177,17 +177,19 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	// writeGraph("hmm3-graph.gfa", unitigGraph, nodeSequences, k);
 	writeGraph("hmm3-graph.gfa", unitigGraph, k);
 	writePaths("hmm3-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
-std::exit(0);
 
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 	writeGraph("hmm4-graph.gfa", unitigGraph, k);
 	writePaths("hmm4-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 10000, 100000);
+		std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+		std::tie(unitigGraph, readUnitigGraphPaths) = resolveSimpleStructures(unitigGraph, readUnitigGraphPaths, approxOneHapCoverage);
+		// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 10000, 100000);
 	writeGraph("hmm5-graph.gfa", unitigGraph, k);
 	writePaths("hmm5-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
+		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 20000, 100000);
 	writeGraph("hmm6-graph.gfa", unitigGraph, k);
 	writePaths("hmm6-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+std::exit(0);
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 20000, 100000);
 	writeGraph("hmm7-graph.gfa", unitigGraph, k);
 	writePaths("hmm7-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
