@@ -17,11 +17,11 @@
 #include "AnchorFinder.h"
 #include "ChunkmerFilter.h"
 
-std::pair<UnitigGraph, std::vector<ReadPathBundle>> makeGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage, const size_t numThreads)
+std::pair<UnitigGraph, std::vector<ReadPathBundle>> makeGraph(const std::vector<TwobitString>& readSequences, const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage, const size_t numThreads, const size_t graphk)
 {
 	KmerGraph kmerGraph;
 	std::vector<ReadPathBundle> readKmerGraphPaths;
-	std::tie(kmerGraph, readKmerGraphPaths) = makeKmerGraph(readLengths, matches, minCoverage, numThreads);
+	std::tie(kmerGraph, readKmerGraphPaths) = makeKmerGraph(readSequences, readLengths, matches, minCoverage, numThreads, graphk);
 	UnitigGraph unitigGraph;
 	std::vector<ReadPathBundle> readUnitigGraphPaths;
 	std::tie(unitigGraph, readUnitigGraphPaths) = makeUnitigGraph(kmerGraph, readKmerGraphPaths, minCoverage);
@@ -194,7 +194,7 @@ std::pair<TwobitString, size_t> getCorrectedSequence(const std::vector<size_t>& 
 {
 	UnitigGraph graph;
 	std::vector<ReadPathBundle> paths;
-	std::tie(graph, paths) = makeGraph(readKmerLengths, matches, 2, 1);
+	std::tie(graph, paths) = makeGraph(readSequences, readKmerLengths, matches, 2, 1, graphk);
 	{
 		std::vector<bool> nodeHasFwCoverage;
 		std::vector<bool> nodeHasBwCoverage;
