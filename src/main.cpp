@@ -76,13 +76,13 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> makeGraph(const std::vector<
 	std::vector<ReadPathBundle> readUnitigGraphPaths;
 	std::tie(unitigGraph, readUnitigGraphPaths) = makeUnitigGraph(kmerGraph, readKmerGraphPaths, minCoverage);
 	std::cerr << unitigGraph.nodeCount() << " nodes before cleaning" << std::endl;
-	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
+	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 7);
 	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
-	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
+	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 7);
 	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
-	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
+	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 7);
 	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
-	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 10);
+	std::tie(unitigGraph, readUnitigGraphPaths) = cleanUnitigGraph(unitigGraph, readUnitigGraphPaths, 7);
 	std::cerr << unitigGraph.nodeCount() << " nodes after cleaning" << std::endl;
 	return std::make_pair(std::move(unitigGraph), std::move(readUnitigGraphPaths));
 }
@@ -155,13 +155,14 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	writePaths("paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 	// for (size_t i = 0; i < 5; i++)
 	// {
-		// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
+		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 		// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 
 	//nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	//writeGraph("hmm1-graph.gfa", unitigGraph, nodeSequences, k);
 	writeGraph("hmm1-graph.gfa", unitigGraph, k);
 	writePaths("hmm1-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 100, 100000);
 		// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphPolyploidTransitiveClosure(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 		// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphPolyploidTransitiveClosure(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 
@@ -169,15 +170,12 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	// writeGraph("hmm2-graph.gfa", unitigGraph, nodeSequences, k);
 	writeGraph("hmm2-graph.gfa", unitigGraph, k);
 	writePaths("hmm2-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
-	std::cerr << "here start" << std::endl;
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 5000, 100000);
-	std::cerr << "here end" << std::endl;
+	std::exit(0);
 		// std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 	// nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	// writeGraph("hmm3-graph.gfa", unitigGraph, nodeSequences, k);
 	writeGraph("hmm3-graph.gfa", unitigGraph, k);
 	writePaths("hmm3-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
-	std::exit(0);
 
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 	writeGraph("hmm4-graph.gfa", unitigGraph, k);

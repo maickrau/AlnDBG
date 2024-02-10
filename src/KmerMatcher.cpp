@@ -433,7 +433,7 @@ void removeContainedKmerMatches(MatchGroup& matches)
 
 std::vector<MatchGroup> addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& readSequences, const std::vector<MatchGroup>& matches, const size_t graphk, const size_t graphd)
 {
-	const size_t SVLengthThreshold = 1000 + graphk;
+	const size_t SVLengthThreshold = 10000 + graphk;
 	std::atomic<size_t> kmerMatchCount;
 	kmerMatchCount = 0;
 	size_t nextIndex = 0;
