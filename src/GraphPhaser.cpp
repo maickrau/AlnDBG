@@ -1626,7 +1626,7 @@ bool isDiploidChain(const size_t chainNumber, const AnchorChain& chain, const st
 	{
 		if (maybeHaplotypeInformative[i]) numHaplotypeInformative += 1;
 	}
-	return (maybeHaplotypeInformative[0] && maybeHaplotypeInformative.back()) && (numHaplotypeInformative >= 2);
+	return (maybeHaplotypeInformative[0] || maybeHaplotypeInformative.back()) && (numHaplotypeInformative >= 2);
 }
 
 double getNormalizedChainCoverage(const AnchorChain& anchorChain, const double approxOneHapCoverage, const UnitigGraph& unitigGraph)
@@ -1648,13 +1648,13 @@ std::vector<PhaseBlock> phaseDiploidChains(std::vector<AnchorChain>& anchorChain
 	std::mutex resultMutex;
 	iterateMultithreaded(0, anchorChains.size(), numThreads, [&resultMutex, &result, &anchorChains, &unitigGraph, &allelesPerReadPerChain, approxOneHapCoverage](size_t i)
 	{
-//		std::cerr << "check chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << " ploidy " << anchorChains[i].ploidy << std::endl;
+		// std::cerr << "check chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << " ploidy " << anchorChains[i].ploidy << std::endl;
 		if (anchorChains[i].ploidy == 1)
 		{
-//			std::cerr << "check if chain " << i << " is low coverage miscalled diploid" << std::endl;
+			// std::cerr << "check if chain " << i << " is low coverage miscalled diploid" << std::endl;
 			if (isDiploidChain(i, anchorChains[i], allelesPerReadPerChain[i], approxOneHapCoverage))
 			{
-//				std::cerr << "chain " << i << " is actually diploid" << std::endl;
+				// std::cerr << "chain " << i << " is actually diploid" << std::endl;
 				anchorChains[i].ploidy = 2;
 			}
 			else
@@ -1668,17 +1668,17 @@ std::vector<PhaseBlock> phaseDiploidChains(std::vector<AnchorChain>& anchorChain
 			double fractionalCopyCount = getNormalizedChainCoverage(anchorChains[i], approxOneHapCoverage, unitigGraph);
 			if (fractionalCopyCount < 3 && isDiploidChain(i, anchorChains[i], allelesPerReadPerChain[i], approxOneHapCoverage))
 			{
-//				std::cerr << "check if chain " << i << " is high coverage miscalled diploid" << std::endl;
+				// std::cerr << "check if chain " << i << " is high coverage miscalled diploid" << std::endl;
 				anchorChains[i].ploidy = 2;
 				checkingDiploidFromThree = true;
 			}
 		}
 		if (anchorChains[i].ploidy == 2)
 		{
-//			std::cerr << "try phase diploid chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << std::endl;
+			// std::cerr << "try phase diploid chain " << i << " start " << ((anchorChains[i].nodes[0] & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes[0] & maskUint64_t) << " end " << ((anchorChains[i].nodes.back() & firstBitUint64_t) ? ">" : "<") << (anchorChains[i].nodes.back() & maskUint64_t) << std::endl;
 			auto phaseBlocks = getChainPhaseBlocksMEC(i, allelesPerReadPerChain[i], anchorChains[i].nodes, anchorChains[i].ploidy, anchorChains[i].nodes.size()+1, approxOneHapCoverage);
 			if (phaseBlocks.size() == 0) return;
-//			std::cerr << "phased with " << phaseBlocks.size() << " blocks. start: " << (phaseBlocks[0].chainStartPhased ? "yes" : "no") << ", end: " << (phaseBlocks.back().chainEndPhased ? "yes" : "no") << std::endl;
+			// std::cerr << "phased with " << phaseBlocks.size() << " blocks. start: " << (phaseBlocks[0].chainStartPhased ? "yes" : "no") << ", end: " << (phaseBlocks.back().chainEndPhased ? "yes" : "no") << std::endl;
 			bool include = true;
 			for (size_t j = 0; j < phaseBlocks.size(); j++)
 			{
@@ -1691,7 +1691,7 @@ std::vector<PhaseBlock> phaseDiploidChains(std::vector<AnchorChain>& anchorChain
 					}
 					if (foundAlleles.size() != anchorChains[i].ploidy)
 					{
-//						std::cerr << "red flag: allele shared between haps, ploidy " << anchorChains[i].ploidy << ", num distinct alleles: " << foundAlleles.size() << ", skipping this phasing" << std::endl;
+						// std::cerr << "red flag: allele shared between haps, ploidy " << anchorChains[i].ploidy << ", num distinct alleles: " << foundAlleles.size() << ", skipping this phasing" << std::endl;
 						include = false;
 					}
 				}
@@ -1705,7 +1705,7 @@ std::vector<PhaseBlock> phaseDiploidChains(std::vector<AnchorChain>& anchorChain
 		}
 		else
 		{
-//			std::cerr << "skipped chain with ploidy " << anchorChains[i].ploidy << std::endl;
+			// std::cerr << "skipped chain with ploidy " << anchorChains[i].ploidy << std::endl;
 		}
 	});
 	return result;
@@ -1895,6 +1895,7 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 	{
 		maxDiagonalDifferences[i] = ((int)(anchorChains[i].nodeOffsets.back() + resultGraph.lengths[anchorChains[i].nodes.back() & maskUint64_t]) * .5);
 	}
+	phmap::flat_hash_map<size_t, size_t> nodeOrigin;
 	phmap::flat_hash_map<std::tuple<uint64_t, uint64_t, size_t, size_t>, std::vector<size_t>> tangleGapLengths; // chain1, chain2, hap1, hap2
 	phmap::flat_hash_map<std::tuple<size_t, size_t, size_t>, std::vector<size_t>> anchorGapLengths; // chain, node, hap
 	for (size_t i = 0; i < resultPaths.size(); i++)
@@ -1964,11 +1965,17 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 			if (anchorChains[i].ploidy == 1) continue;
 			assert(anchorChains[i].ploidy == 2);
 			nodeReplacement[std::make_tuple(anchorChains[i].nodes[j] & maskUint64_t, i, j, 0)] = resultGraph.nodeCount();
+			nodeOrigin[resultGraph.lengths.size()] = anchorChains[i].nodes[j] & maskUint64_t;
 			resultGraph.lengths.emplace_back(resultGraph.lengths[anchorChains[i].nodes[j] & maskUint64_t]);
 			resultGraph.coverages.emplace_back(0);
+			resultGraph.edgeCoverages.emplace_back();
+			resultGraph.edgeKmerOverlaps.emplace_back();
+			nodeOrigin[resultGraph.lengths.size()] = anchorChains[i].nodes[j] & maskUint64_t;
 			nodeReplacement[std::make_tuple(anchorChains[i].nodes[j] & maskUint64_t, i, j, 1)] = resultGraph.nodeCount();
 			resultGraph.lengths.emplace_back(resultGraph.lengths[anchorChains[i].nodes[j] & maskUint64_t]);
 			resultGraph.coverages.emplace_back(0);
+			resultGraph.edgeCoverages.emplace_back();
+			resultGraph.edgeKmerOverlaps.emplace_back();
 		}
 		for (size_t j = 1; j < anchorChains[i].nodes.size(); j++)
 		{
@@ -1996,10 +2003,16 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 				hap1length = vals[vals.size()/2];
 			}
 			size_t thisNode = resultGraph.lengths.size();
+			nodeOrigin[resultGraph.lengths.size()] = std::numeric_limits<size_t>::max();
 			resultGraph.lengths.emplace_back(hap0length);
 			resultGraph.coverages.emplace_back(1);
+			resultGraph.edgeCoverages.emplace_back();
+			resultGraph.edgeKmerOverlaps.emplace_back();
+			nodeOrigin[resultGraph.lengths.size()] = std::numeric_limits<size_t>::max();
 			resultGraph.lengths.emplace_back(hap1length);
 			resultGraph.coverages.emplace_back(1);
+			resultGraph.edgeCoverages.emplace_back();
+			resultGraph.edgeKmerOverlaps.emplace_back();
 			size_t hap0Prev = anchorChains[i].nodes[j-1] & maskUint64_t;
 			size_t hap1Prev = anchorChains[i].nodes[j-1] & maskUint64_t;
 			size_t hap0Next = anchorChains[i].nodes[j] & maskUint64_t;
@@ -2083,8 +2096,11 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 					tonode = (tonode & firstBitUint64_t) + nodeReplacement.at(std::make_tuple(tonode & maskUint64_t, tochain, tooffset, happair.second));
 				}
 				size_t newnode = resultGraph.lengths.size();
+				nodeOrigin[resultGraph.lengths.size()] = std::numeric_limits<size_t>::max();
 				resultGraph.lengths.emplace_back(distance);
 				resultGraph.coverages.emplace_back(0);
+				resultGraph.edgeCoverages.emplace_back();
+				resultGraph.edgeKmerOverlaps.emplace_back();
 				newFakeEdges.emplace_back(fromnode, newnode);
 				newFakeEdges.emplace_back(newnode, tonode);
 //				std::cerr << "insert tangle gap of length " << distance << " between " << (tip & maskUint64_t) << " (" << (fromnode & maskUint64_t) << ") and " << (totip & maskUint64_t) << " (" << (tonode & maskUint64_t) << ")" << std::endl;
@@ -2093,6 +2109,8 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 	}
 	std::vector<phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> interchainTangleConnectionHap;
 	interchainTangleConnectionHap.resize(tangleCount);
+	std::vector<std::vector<size_t>> alleleReplacementNodes;
+	alleleReplacementNodes.resize(resultGraph.nodeCount());
 	for (size_t i = 0; i < resultPaths.size(); i++)
 	{
 		// std::cerr << "new read index " << i << std::endl;
@@ -2158,8 +2176,11 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 					if (nodeReplacement.count(key) == 0)
 					{
 						nodeReplacement[key] = resultGraph.lengths.size();
+						nodeOrigin[resultGraph.lengths.size()] = node & maskUint64_t;
 						resultGraph.lengths.emplace_back(resultGraph.lengths[node & maskUint64_t]);
 						resultGraph.coverages.emplace_back(1);
+						resultGraph.edgeCoverages.emplace_back();
+						resultGraph.edgeKmerOverlaps.emplace_back();
 					}
 					resultPaths[i].paths[j].path[k] = (node & firstBitUint64_t) + nodeReplacement.at(key);
 				}
@@ -2230,16 +2251,58 @@ void unzipDiploidPhaseBlocks(UnitigGraph& resultGraph, std::vector<ReadPathBundl
 			std::sort(resultPaths[i].paths.begin(), resultPaths[i].paths.end(), [](const auto& left, const auto& right) { return left.readStartPos < right.readStartPos; });
 		}
 	}
-	assert(resultGraph.edgeCoverages.size() <= resultGraph.lengths.size());
-	if (resultGraph.edgeCoverages.size() < resultGraph.lengths.size())
+	assert(resultGraph.edgeCoverages.size() == resultGraph.lengths.size());
+	assert(resultGraph.edgeKmerOverlaps.size() == resultGraph.lengths.size());
+	for (size_t i = 0; i < resultPaths.size(); i++)
 	{
-		resultGraph.edgeCoverages.resize(resultGraph.lengths.size());
+		for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
+		{
+			for (size_t k = 1; k < resultPaths[i].paths[j].path.size(); k++)
+			{
+				uint64_t prevNode = resultPaths[i].paths[j].path[k-1];
+				uint64_t thisNode = resultPaths[i].paths[j].path[k];
+				assert((prevNode & maskUint64_t) < resultGraph.edgeKmerOverlaps.size());
+				assert((thisNode & maskUint64_t) < resultGraph.edgeKmerOverlaps.size());
+				std::pair<size_t, bool> from { prevNode & maskUint64_t, prevNode & firstBitUint64_t };
+				std::pair<size_t, bool> to { thisNode & maskUint64_t, thisNode & firstBitUint64_t };
+				if (resultGraph.edgeKmerOverlaps.hasValue(from, to))
+				{
+					assert(resultGraph.edgeKmerOverlaps.hasValue(reverse(to), reverse(from)));
+					continue;
+				}
+				assert(!resultGraph.edgeKmerOverlaps.hasValue(reverse(to), reverse(from)));
+				std::pair<size_t, bool> fromOrigin = from;
+				std::pair<size_t, bool> toOrigin = to;
+				if ((nodeOrigin.count(prevNode & maskUint64_t) == 1 && nodeOrigin.at(prevNode & maskUint64_t) == std::numeric_limits<size_t>::max()) || (nodeOrigin.count(thisNode & maskUint64_t) == 1 && nodeOrigin.at(thisNode & maskUint64_t) == std::numeric_limits<size_t>::max()))
+				{
+					resultGraph.edgeKmerOverlaps.set(from, to, 0);
+					resultGraph.edgeKmerOverlaps.set(reverse(to), reverse(from), 0);
+					continue;
+				}
+				assert(nodeOrigin.count(prevNode & maskUint64_t) == 1 || nodeOrigin.count(thisNode & maskUint64_t) == 1);
+				if (nodeOrigin.count(prevNode & maskUint64_t) == 1)
+				{
+					fromOrigin.first = nodeOrigin.at(prevNode & maskUint64_t);
+				}
+				if (nodeOrigin.count(thisNode & maskUint64_t) == 1)
+				{
+					toOrigin.first = nodeOrigin.at(thisNode & maskUint64_t);
+				}
+				assert(resultGraph.edgeKmerOverlaps.hasValue(fromOrigin, toOrigin));
+				resultGraph.edgeKmerOverlaps.set(from, to, resultGraph.edgeKmerOverlaps.get(fromOrigin, toOrigin));
+				resultGraph.edgeKmerOverlaps.set(reverse(to), reverse(from), resultGraph.edgeKmerOverlaps.get(fromOrigin, toOrigin));
+				assert(resultGraph.edgeKmerOverlaps.hasValue(from, to));
+			}
+		}
 	}
 	for (auto t : newFakeEdges)
 	{
 		std::pair<size_t, bool> from { t.first & maskUint64_t, t.first & firstBitUint64_t };
 		std::pair<size_t, bool> to { t.second & maskUint64_t, t.second & firstBitUint64_t };
-		resultGraph.edgeCoverages.set(from, to, 1);
+		auto key = canon(from, to);
+		resultGraph.edgeCoverages.set(key.first, key.second, 1);
+		resultGraph.edgeKmerOverlaps.set(from, to, 0);
+		resultGraph.edgeKmerOverlaps.set(reverse(to), reverse(from), 0);
 	}
 }
 
@@ -2566,6 +2629,7 @@ std::vector<double> getChainCoverages(const UnitigGraph& unitigGraph, const std:
 
 std::tuple<phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<std::pair<size_t, size_t>>>>, std::vector<bool>, std::vector<bool>> getValidHaplotypeConnectionsPerChainEdge(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains, const std::vector<std::vector<std::tuple<size_t, bool, int, size_t>>>& haplotypeDiagonalsPerRead, const std::vector<PhaseBlock>& chainHaplotypes, const SparseEdgeContainer& validChainEdges, const std::vector<std::vector<ChainPosition>>& chainPositionsInReads, const double approxOneHapCoverage)
 {
+	assert(validChainEdges.size() == anchorChains.size());
 	std::vector<int> maxDiagonalDifferences;
 	maxDiagonalDifferences.resize(anchorChains.size());
 	for (size_t i = 0; i < anchorChains.size(); i++)
@@ -3262,7 +3326,42 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipDiploidPhaseBlocks(cons
 			if (bubble != 0) phasedSites.emplace(chain, bubble-1);
 		}
 	}
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			assert(readPaths[i].paths[j].readStartPos < readPaths[i].readLength);
+			size_t readPos = readPaths[i].paths[j].readStartPos;
+			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
+			{
+				readPos += unitigGraph.lengths[readPaths[i].paths[j].path[k] & maskUint64_t];
+				if (k > 0) readPos -= unitigGraph.edgeKmerOverlaps.get(std::make_pair(readPaths[i].paths[j].path[k-1] & maskUint64_t, readPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(readPaths[i].paths[j].path[k] & maskUint64_t, readPaths[i].paths[j].path[k] & firstBitUint64_t));
+			}
+			readPos -= readPaths[i].paths[j].pathLeftClipKmers;
+			readPos -= readPaths[i].paths[j].pathRightClipKmers;
+			assert(readPos > readPaths[i].paths[j].readStartPos);
+			assert(readPos <= readPaths[i].readLength);
+		}
+	}
 	unzipDiploidPhaseBlocks(resultGraph, resultPaths, anchorChains, chainHaplotypes, nodeLocationInChain, solvedAnchors, solvedBetweenAnchorLocations, solvedInterchainTangles, nodeLocationInInterchainTangles, tangleCount, validChainEdges, haplotypeDiagonalsPerRead, validHaplotypeConnectionsPerChainEdge, phasedSites);
+	for (size_t i = 0; i < resultPaths.size(); i++)
+	{
+		for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
+		{
+			assert(resultPaths[i].paths[j].readStartPos < resultPaths[i].readLength);
+			size_t readPos = resultPaths[i].paths[j].readStartPos;
+			for (size_t k = 0; k < resultPaths[i].paths[j].path.size(); k++)
+			{
+				assert((resultPaths[i].paths[j].path[k] & maskUint64_t) < resultGraph.nodeCount());
+				readPos += resultGraph.lengths[resultPaths[i].paths[j].path[k] & maskUint64_t];
+				if (k > 0) readPos -= resultGraph.edgeKmerOverlaps.get(std::make_pair(resultPaths[i].paths[j].path[k-1] & maskUint64_t, resultPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(resultPaths[i].paths[j].path[k] & maskUint64_t, resultPaths[i].paths[j].path[k] & firstBitUint64_t));
+			}
+			readPos -= resultPaths[i].paths[j].pathLeftClipKmers;
+			readPos -= resultPaths[i].paths[j].pathRightClipKmers;
+			assert(readPos > resultPaths[i].paths[j].readStartPos);
+			assert(readPos <= resultPaths[i].readLength);
+		}
+	}
 	RankBitvector kept;
 	kept.resize(resultGraph.nodeCount());
 	for (size_t i = 0; i < kept.size(); i++)
@@ -3375,14 +3474,13 @@ SparseEdgeContainer getValidChainEdges(const UnitigGraph& unitigGraph, const std
 	std::vector<double> chainCoverages = getChainCoverages(unitigGraph, anchorChains);
 	chainCoverages.resize(anchorChains.size(), 0);
 	phmap::flat_hash_map<std::pair<std::pair<size_t, bool>, std::pair<size_t, bool>>, size_t> edgeCoverage;
-	size_t maxChain = 0;
 	for (size_t i = 0; i < chainPositionsInReads.size(); i++)
 	{
 		if (chainPositionsInReads[i].size() == 0) continue;
-		maxChain = std::max(maxChain, chainPositionsInReads[i][0].chain & maskUint64_t);
+		assert((chainPositionsInReads[i][0].chain & maskUint64_t) < anchorChains.size());
 		for (size_t j = 1; j < chainPositionsInReads[i].size(); j++)
 		{
-			maxChain = std::max(maxChain, chainPositionsInReads[i][j].chain & maskUint64_t);
+			assert((chainPositionsInReads[i][j].chain & maskUint64_t) < anchorChains.size());
 			const std::pair<size_t, bool> prevChain = std::make_pair(chainPositionsInReads[i][j-1].chain & maskUint64_t, chainPositionsInReads[i][j-1].chain & firstBitUint64_t);
 			const std::pair<size_t, bool> currChain = std::make_pair(chainPositionsInReads[i][j].chain & maskUint64_t, chainPositionsInReads[i][j].chain & firstBitUint64_t);
 			auto key = canon(prevChain, currChain);
@@ -3390,7 +3488,7 @@ SparseEdgeContainer getValidChainEdges(const UnitigGraph& unitigGraph, const std
 		}
 	}
 	SparseEdgeContainer result;
-	result.resize(maxChain+1);
+	result.resize(anchorChains.size());
 	for (auto pair : edgeCoverage)
 	{
 //		std::cerr << "check valid edge chain " << pair.first.first.first << (pair.first.first.second ? "+" : "-") << " to chain " << pair.first.second.first << (pair.first.second.second ? "+" : "-") << std::endl;
@@ -3540,7 +3638,32 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> unzipGraphDiploidMEC(const U
 	std::vector<PhaseBlock> chainHaplotypes = phaseDiploidChains(anchorChains, allelesPerReadPerChain, unitigGraph, numThreads, approxOneHapCoverage);
 	UnitigGraph unzippedGraph;
 	std::vector<ReadPathBundle> unzippedReadPaths;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].paths.size(); j++)
+		{
+			assert(readPaths[i].paths[j].readStartPos < readPaths[i].readLength);
+		}
+	}
 	std::tie(unzippedGraph, unzippedReadPaths) = unzipDiploidPhaseBlocks(unitigGraph, readPaths, anchorChains, allelesPerReadPerChain, chainHaplotypes, validChainEdges, chainPositionsInReads, approxOneHapCoverage);
+	for (size_t i = 0; i < unzippedReadPaths.size(); i++)
+	{
+		for (size_t j = 0; j < unzippedReadPaths[i].paths.size(); j++)
+		{
+			assert(unzippedReadPaths[i].paths[j].readStartPos < unzippedReadPaths[i].readLength);
+			size_t readPos = unzippedReadPaths[i].paths[j].readStartPos;
+			for (size_t k = 0; k < unzippedReadPaths[i].paths[j].path.size(); k++)
+			{
+				assert((unzippedReadPaths[i].paths[j].path[k] & maskUint64_t) < unzippedGraph.nodeCount());
+				readPos += unzippedGraph.lengths[unzippedReadPaths[i].paths[j].path[k] & maskUint64_t];
+				if (k > 0) readPos -= unzippedGraph.edgeKmerOverlaps.get(std::make_pair(unzippedReadPaths[i].paths[j].path[k-1] & maskUint64_t, unzippedReadPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(unzippedReadPaths[i].paths[j].path[k] & maskUint64_t, unzippedReadPaths[i].paths[j].path[k] & firstBitUint64_t));
+			}
+			readPos -= unzippedReadPaths[i].paths[j].pathLeftClipKmers;
+			readPos -= unzippedReadPaths[i].paths[j].pathRightClipKmers;
+			assert(readPos > unzippedReadPaths[i].paths[j].readStartPos);
+			assert(readPos <= unzippedReadPaths[i].readLength);
+		}
+	}
 	RankBitvector kept;
 	kept.resize(unzippedGraph.nodeCount());
 	for (size_t i = 0; i < unzippedGraph.nodeCount(); i++)
@@ -4462,6 +4585,7 @@ std::vector<std::vector<std::tuple<uint64_t, int, int>>> getInterpolatedNodesInR
 			size_t readPos = readPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 			{
+				if (k > 0) readPos -= unitigGraph.edgeKmerOverlaps.get(std::make_pair(readPaths[i].paths[j].path[k-1] & maskUint64_t, readPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(readPaths[i].paths[j].path[k] & maskUint64_t, readPaths[i].paths[j].path[k] & firstBitUint64_t));
 				uint64_t node = readPaths[i].paths[j].path[k];
 				readPos += unitigGraph.lengths[node & maskUint64_t];
 				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
@@ -4479,12 +4603,16 @@ std::vector<std::vector<std::tuple<uint64_t, int, int>>> getInterpolatedNodesInR
 		for (auto& pair : interpolatedPositions)
 		{
 			assert(pair.second.size() >= 1);
-			std::sort(pair.second.begin(), pair.second.end());
+			std::sort(pair.second.begin(), pair.second.end(), [](auto left, auto right) { return std::get<1>(left) < std::get<1>(right); });
+			// for (auto t : pair.second)
+			// {
+			// 	std::cerr << "before clustering read " << i << " has " << ((pair.first & firstBitUint64_t) ? ">" : "<") << (pair.first & maskUint64_t) << " pos " << std::get<1>(t) << " " << std::get<2>(t) << " (" << std::get<0>(t) << ")" << std::endl;
+			// }
 			size_t clusterStart = 0;
 			for (size_t j = 1; j < pair.second.size(); j++)
 			{
-				assert(std::get<0>(pair.second[j]) > std::get<0>(pair.second[j-1]));
-				if (std::get<0>(pair.second[j]) - std::get<0>(pair.second[j-1]) < maxClusterDistance) continue;
+				assert(std::get<1>(pair.second[j]) >= std::get<1>(pair.second[j-1]));
+				if (std::get<1>(pair.second[j]) - std::get<1>(pair.second[j-1]) < maxClusterDistance + unitigGraph.lengths[pair.first & maskUint64_t] * 0.25) continue;
 				int minPos = std::get<1>(pair.second[clusterStart]);
 				int maxPos = std::get<2>(pair.second[clusterStart]);
 				size_t minCheckPos = std::get<0>(pair.second[clusterStart]);
@@ -4525,6 +4653,11 @@ std::vector<std::vector<std::tuple<uint64_t, int, int>>> getInterpolatedNodesInR
 			uniqueNodesInReads[i].emplace_back(pair.first, minPos, maxPos);
 		}
 		std::vector<bool> remove;
+		std::sort(uniqueNodesInReads[i].begin(), uniqueNodesInReads[i].end(), [](auto left, auto right) { return (std::get<1>(left) + std::get<2>(left)) / 2 < (std::get<1>(right) + std::get<2>(right)) / 2; });
+		// for (auto t : uniqueNodesInReads[i])
+		// {
+		// 	std::cerr << "before removal read " << i << " has " << ((std::get<0>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(t) & maskUint64_t) << " pos " << std::get<1>(t) << " " << std::get<2>(t) << std::endl;
+		// }
 		remove.resize(uniqueNodesInReads[i].size(), false);
 		for (size_t j = 0; j < uniqueNodesInReads[i].size(); j++)
 		{
@@ -4533,9 +4666,14 @@ std::vector<std::vector<std::tuple<uint64_t, int, int>>> getInterpolatedNodesInR
 				if (j == k) continue;
 				if (std::get<1>(uniqueNodesInReads[i][j]) >= std::get<2>(uniqueNodesInReads[i][k])) continue;
 				if (std::get<2>(uniqueNodesInReads[i][j]) <= std::get<1>(uniqueNodesInReads[i][k])) continue;
+				if ((std::get<1>(uniqueNodesInReads[i][j]) + std::get<2>(uniqueNodesInReads[i][j])) > (std::get<1>(uniqueNodesInReads[i][k]) + std::get<2>(uniqueNodesInReads[i][k]))) continue;
 				size_t overlap = std::min(std::get<2>(uniqueNodesInReads[i][j]), std::get<2>(uniqueNodesInReads[i][k])) - std::max(std::get<1>(uniqueNodesInReads[i][j]), std::get<1>(uniqueNodesInReads[i][k]));
 				assert(overlap >= 1);
-				size_t requiredOverlap = std::min(unitigGraph.lengths[std::get<0>(uniqueNodesInReads[i][j]) & maskUint64_t], unitigGraph.lengths[std::get<0>(uniqueNodesInReads[i][j]) & maskUint64_t]) * 0.25;
+				size_t requiredOverlap = std::min(unitigGraph.lengths[std::get<0>(uniqueNodesInReads[i][j]) & maskUint64_t], unitigGraph.lengths[std::get<0>(uniqueNodesInReads[i][k]) & maskUint64_t]) * 0.25;
+				if (unitigGraph.edgeKmerOverlaps.hasValue(std::make_pair(std::get<0>(uniqueNodesInReads[i][j]) & maskUint64_t, std::get<0>(uniqueNodesInReads[i][j]) & firstBitUint64_t), std::make_pair(std::get<0>(uniqueNodesInReads[i][k]) & maskUint64_t, std::get<0>(uniqueNodesInReads[i][k]) & firstBitUint64_t)))
+				{
+					requiredOverlap += (int)unitigGraph.edgeKmerOverlaps.get(std::make_pair(std::get<0>(uniqueNodesInReads[i][j]) & maskUint64_t, std::get<0>(uniqueNodesInReads[i][j]) & firstBitUint64_t), std::make_pair(std::get<0>(uniqueNodesInReads[i][k]) & maskUint64_t, std::get<0>(uniqueNodesInReads[i][k]) & firstBitUint64_t));
+				}
 				if (overlap < requiredOverlap) continue;
 				if (kmersCoveredByCluster.at(uniqueNodesInReads[i][j]) > kmersCoveredByCluster.at(uniqueNodesInReads[i][k])) remove[k] = true;
 				if (kmersCoveredByCluster.at(uniqueNodesInReads[i][j]) < kmersCoveredByCluster.at(uniqueNodesInReads[i][k])) remove[j] = true;
@@ -4548,6 +4686,10 @@ std::vector<std::vector<std::tuple<uint64_t, int, int>>> getInterpolatedNodesInR
 			uniqueNodesInReads[i].pop_back();
 		}
 		std::sort(uniqueNodesInReads[i].begin(), uniqueNodesInReads[i].end(), [](auto left, auto right) { return (std::get<1>(left) + std::get<2>(left)) / 2 < (std::get<1>(right) + std::get<2>(right)) / 2; });
+		for (auto t : uniqueNodesInReads[i])
+		{
+			std::cerr << "after removal read " << i << " has " << ((std::get<0>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(t) & maskUint64_t) << " pos " << std::get<1>(t) << " " << std::get<2>(t) << std::endl;
+		}
 	}
 	return uniqueNodesInReads;
 }
@@ -4567,7 +4709,12 @@ phmap::flat_hash_map<uint64_t, std::vector<std::tuple<uint64_t, size_t, size_t>>
 			assert(uniques[lastNode & maskUint64_t]);
 			assert(uniques[thisNode & maskUint64_t]);
 			int distance = std::get<1>(uniqueNodesInReads[i][j]) - std::get<2>(uniqueNodesInReads[i][j-1]);
-			if (distance < -50) continue;
+			int allowedDistance = -50;
+			if (unitigGraph.edgeKmerOverlaps.hasValue(std::make_pair(std::get<0>(uniqueNodesInReads[i][j-1]) & maskUint64_t, std::get<0>(uniqueNodesInReads[i][j-1]) & firstBitUint64_t), std::make_pair(std::get<0>(uniqueNodesInReads[i][j]) & maskUint64_t, std::get<0>(uniqueNodesInReads[i][j]) & firstBitUint64_t)))
+			{
+				allowedDistance -= (int)unitigGraph.edgeKmerOverlaps.get(std::make_pair(std::get<0>(uniqueNodesInReads[i][j-1]) & maskUint64_t, std::get<0>(uniqueNodesInReads[i][j-1]) & firstBitUint64_t), std::make_pair(std::get<0>(uniqueNodesInReads[i][j]) & maskUint64_t, std::get<0>(uniqueNodesInReads[i][j]) & firstBitUint64_t));
+			}
+			if (distance < allowedDistance) continue;
 			auto key = canon(std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t), std::make_pair(thisNode & maskUint64_t, thisNode & firstBitUint64_t));
 			if (key.first == std::make_pair<size_t, bool>(lastNode & maskUint64_t, lastNode & firstBitUint64_t) && key.second == std::make_pair<size_t, bool>(thisNode & maskUint64_t, thisNode & firstBitUint64_t))
 			{
@@ -4757,18 +4904,19 @@ bool isGoodSplit(const phmap::flat_hash_set<uint64_t>& nodesBefore, const phmap:
 	{
 		if (foundAfter.count(node) == 0) return false;
 	}
-	phmap::flat_hash_set<uint64_t> clusters;
-	for (auto node : nodesBefore)
-	{
-		assert((node & beforeBit) == 0);
-		clusters.insert(find(parent, node + beforeBit));
-	}
-	for (auto node : nodesAfter)
-	{
-		clusters.insert(find(parent, node));
-	}
-	if (clusters.size() >= 2) return true;
-	return false;
+	return true;
+	// phmap::flat_hash_set<uint64_t> clusters;
+	// for (auto node : nodesBefore)
+	// {
+	// 	assert((node & beforeBit) == 0);
+	// 	clusters.insert(find(parent, node + beforeBit));
+	// }
+	// for (auto node : nodesAfter)
+	// {
+	// 	clusters.insert(find(parent, node));
+	// }
+	// if (clusters.size() >= 2) return true;
+	// return false;
 }
 
 bool chainCanBeSpanned(const AnchorChain& chain, const phmap::flat_hash_map<uint64_t, std::vector<std::tuple<uint64_t, size_t, size_t>>>& edges, const std::vector<std::vector<std::pair<size_t, size_t>>>& nodePositionsInReads, const std::vector<std::vector<std::tuple<uint64_t, int, int>>>& uniqueNodesInReads)
@@ -4793,17 +4941,17 @@ bool chainCanBeSpanned(const AnchorChain& chain, const phmap::flat_hash_map<uint
 	// for (auto node : nodesAfter) std::cerr << " " << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t);
 	// std::cerr << std::endl;
 	// std::cerr << "1" << std::endl;
-	if (nodesAfter.size() != nodesBefore.size()) return false;
-	// std::cerr << "2" << std::endl;
-	for (auto node : nodesBefore)
-	{
-		if (edges.at(node).size() != 1) return false;
-	}
-	// std::cerr << "3" << std::endl;
-	for (auto node : nodesAfter)
-	{
-		if (edges.at(node ^ firstBitUint64_t).size() != 1) return false;
-	}
+	// if (nodesAfter.size() != nodesBefore.size()) return false;
+	// // std::cerr << "2" << std::endl;
+	// for (auto node : nodesBefore)
+	// {
+	// 	if (edges.at(node).size() != 1) return false;
+	// }
+	// // std::cerr << "3" << std::endl;
+	// for (auto node : nodesAfter)
+	// {
+	// 	if (edges.at(node ^ firstBitUint64_t).size() != 1) return false;
+	// }
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> pairCoverage;
 	for (const auto node : nodesBefore)
 	{
@@ -5066,7 +5214,7 @@ std::pair<std::vector<bool>, std::vector<bool>> getHaplotypeInformativeForkPairs
 			assert(forkAlleleCount.at(fwsite.bubble) >= 2);
 			size_t alleleCount = forkAlleleCount.at(fwsite.bubble)-2;
 			if (alleleCount >= fwSitesPerAlleleCount.size()) alleleCount = fwSitesPerAlleleCount.size()-1;
-			assert(fwSitesPerAlleleCount[alleleCount].size() == 0 || fwsite.readPos > fwSitesPerAlleleCount[alleleCount].back().readPos);
+			assert(fwSitesPerAlleleCount[alleleCount].size() == 0 || fwsite.readPos >= fwSitesPerAlleleCount[alleleCount].back().readPos);
 			fwSitesPerAlleleCount[alleleCount].emplace_back(fwsite);
 			if ((fwsite.bubble & firstBitUint64_t) && !resultFw[fwsite.bubble & maskUint64_t]) fwSitesNeedsCheckingPerAlleleCount[alleleCount].emplace_back(fwsite);
 			if (((fwsite.bubble ^ firstBitUint64_t) & firstBitUint64_t) && !resultBw[fwsite.bubble & maskUint64_t]) fwSitesNeedsCheckingPerAlleleCount[alleleCount].emplace_back(fwsite);
@@ -5365,6 +5513,7 @@ std::pair<std::vector<std::vector<HaplotypeInformativeSite>>, std::vector<std::v
 			size_t readPos = readPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 			{
+				if (k > 0) readPos -= unitigGraph.edgeKmerOverlaps.get(std::make_pair(readPaths[i].paths[j].path[k-1] & maskUint64_t, readPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(readPaths[i].paths[j].path[k] & maskUint64_t, readPaths[i].paths[j].path[k] & firstBitUint64_t));
 				uint64_t node = readPaths[i].paths[j].path[k];
 				readPos += unitigGraph.lengths[node & maskUint64_t];
 				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
@@ -5376,6 +5525,7 @@ std::pair<std::vector<std::vector<HaplotypeInformativeSite>>, std::vector<std::v
 					readForkEdgesFw[i].back().readPos = readPos - 1 - unitigGraph.lengths[node & maskUint64_t];
 					readForkEdgesFw[i].back().bubble = prevNode;
 					readForkEdgesFw[i].back().allele = node;
+					// assert(readForkEdgesFw[i].size() < 2 || readForkEdgesFw[i].back().readPos >= readForkEdgesFw[i][readForkEdgesFw[i].size()-2].readPos);
 				}
 				if (((node & firstBitUint64_t) && hasGoodForkBw[node & maskUint64_t]) || (((node ^ firstBitUint64_t) & firstBitUint64_t) && hasGoodForkFw[node & maskUint64_t]))
 				{
@@ -5383,9 +5533,12 @@ std::pair<std::vector<std::vector<HaplotypeInformativeSite>>, std::vector<std::v
 					readForkEdgesBw[i].back().readPos = readPos - unitigGraph.lengths[node & maskUint64_t];
 					readForkEdgesBw[i].back().bubble = node ^ firstBitUint64_t;
 					readForkEdgesBw[i].back().allele = prevNode ^ firstBitUint64_t;
+					// assert(readForkEdgesBw[i].size() < 2 || readForkEdgesBw[i].back().readPos >= readForkEdgesBw[i][readForkEdgesBw[i].size()-2].readPos);
 				}
 			}
 		}
+		std::sort(readForkEdgesFw[i].begin(), readForkEdgesFw[i].end(), [](auto left, auto right) { return left.readPos < right.readPos; });
+		std::sort(readForkEdgesBw[i].begin(), readForkEdgesBw[i].end(), [](auto left, auto right) { return left.readPos < right.readPos; });
 	}
 	return std::make_pair(std::move(readForkEdgesBw), std::move(readForkEdgesFw));
 }
@@ -5466,7 +5619,7 @@ std::vector<bool> getHaplotypeInformativeNodes(const UnitigGraph& unitigGraph, c
 			{
 				informativeNode[edge.first] = true;
 			}
-			informativeNode[i] = true;
+			// informativeNode[i] = true;
 		}
 		if (hasHaplotypeInformativeForkBw[i])
 		{
@@ -5474,7 +5627,7 @@ std::vector<bool> getHaplotypeInformativeNodes(const UnitigGraph& unitigGraph, c
 			{
 				informativeNode[edge.first] = true;
 			}
-			informativeNode[i] = true;
+			// informativeNode[i] = true;
 		}
 	}
 	for (size_t i = 0; i < informativeNode.size(); i++)
@@ -5490,19 +5643,22 @@ std::pair<std::vector<AnchorChain>, std::vector<bool>> getReadLocalUniqChains(co
 	const size_t branchMinLength = 500;
 	std::vector<bool> uniques;
 	uniques.resize(unitigGraph.nodeCount(), false);
-	std::vector<bool> haplotypeInformative = getHaplotypeInformativeNodes(unitigGraph, readPaths, approxOneHapCoverage);
-	std::vector<bool> fakeHaplotypeInformative = haplotypeInformative;
-	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
-	{
-		if (unitigGraph.lengths[i] >= 50) fakeHaplotypeInformative[i] = true;
-		if (fakeHaplotypeInformative[i]) std::cerr << "fake haplotype informative " << i << std::endl;
-	}
-	makeFakeLocalUniqGraph(unitigGraph, readPaths, fakeHaplotypeInformative, getLocallyUniqueNodeEdges(unitigGraph, readPaths, fakeHaplotypeInformative), "haplotype-informative-graph.gfa");
+	// std::vector<bool> haplotypeInformative = getHaplotypeInformativeNodes(unitigGraph, readPaths, approxOneHapCoverage);
+	// std::vector<bool> fakeHaplotypeInformative = haplotypeInformative;
+	// for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	// {
+	// 	if (unitigGraph.lengths[i] >= 50) fakeHaplotypeInformative[i] = true;
+	// 	if (fakeHaplotypeInformative[i]) std::cerr << "fake haplotype informative " << i << std::endl;
+	// }
+	// makeFakeLocalUniqGraph(unitigGraph, readPaths, fakeHaplotypeInformative, getLocallyUniqueNodeEdges(unitigGraph, readPaths, fakeHaplotypeInformative), "haplotype-informative-graph.gfa");
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
 		if (unitigGraph.coverages[i] < approxOneHapCoverage * 0.25) continue;
 		if (unitigGraph.coverages[i] > approxOneHapCoverage * ((double)maxCopyCount + 0.5)) continue;
-		if (!haplotypeInformative[i] && unitigGraph.lengths[i] < 50) continue;
+		if (unitigGraph.coverages[i] > approxOneHapCoverage * 1.5 && unitigGraph.lengths[i] < 500) continue;
+		if (unitigGraph.lengths[i] < 100) continue;
+		// if (!haplotypeInformative[i] && unitigGraph.lengths[i] < 500) continue;
+		// if (unitigGraph.lengths[i] < 200) continue;
 		uniques[i] = true;
 	}
 	for (size_t i = 0; i < readPaths.size(); i++)
@@ -5513,6 +5669,7 @@ std::pair<std::vector<AnchorChain>, std::vector<bool>> getReadLocalUniqChains(co
 			size_t readPos = readPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 			{
+				if (k > 0) readPos -= unitigGraph.edgeKmerOverlaps.get(std::make_pair(readPaths[i].paths[j].path[k-1] & maskUint64_t, readPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(readPaths[i].paths[j].path[k] & maskUint64_t, readPaths[i].paths[j].path[k] & firstBitUint64_t));
 				size_t node = readPaths[i].paths[j].path[k] & maskUint64_t;
 				readPos += unitigGraph.lengths[node & maskUint64_t];
 				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
@@ -5535,6 +5692,7 @@ std::pair<std::vector<AnchorChain>, std::vector<bool>> getReadLocalUniqChains(co
 			size_t readPos = readPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 			{
+				if (k > 0) readPos -= unitigGraph.edgeKmerOverlaps.get(std::make_pair(readPaths[i].paths[j].path[k-1] & maskUint64_t, readPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(readPaths[i].paths[j].path[k] & maskUint64_t, readPaths[i].paths[j].path[k] & firstBitUint64_t));
 				uint64_t node = readPaths[i].paths[j].path[k];
 				readPos += unitigGraph.lengths[node & maskUint64_t];
 				if (k == 0) readPos -= readPaths[i].paths[j].pathLeftClipKmers;
@@ -5555,25 +5713,25 @@ std::pair<std::vector<AnchorChain>, std::vector<bool>> getReadLocalUniqChains(co
 			}
 		}
 	}
-	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
-	{
-		if (unitigGraph.lengths[i] < uniqSpanLength) continue;
-		uniques[i] = true;
-	}
-	for (size_t i = 0; i < anchorChains.size(); i++)
-	{
-		if (anchorChains[i].ploidy != 1) continue;
-		size_t chainLength = 0;
-		for (auto node : anchorChains[i].nodes)
-		{
-			chainLength += unitigGraph.lengths[node & maskUint64_t];
-		}
-		if (chainLength < uniqSpanLength) continue;
-		for (auto node : anchorChains[i].nodes)
-		{
-			uniques[node & maskUint64_t] = true;
-		}
-	}
+	// for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
+	// {
+	// 	if (unitigGraph.lengths[i] < uniqSpanLength) continue;
+	// 	uniques[i] = true;
+	// }
+	// for (size_t i = 0; i < anchorChains.size(); i++)
+	// {
+	// 	if (anchorChains[i].ploidy != 1) continue;
+	// 	size_t chainLength = 0;
+	// 	for (auto node : anchorChains[i].nodes)
+	// 	{
+	// 		chainLength += unitigGraph.lengths[node & maskUint64_t];
+	// 	}
+	// 	if (chainLength < uniqSpanLength) continue;
+	// 	for (auto node : anchorChains[i].nodes)
+	// 	{
+	// 		uniques[node & maskUint64_t] = true;
+	// 	}
+	// }
 	makeFakeLocalUniqGraph(unitigGraph, readPaths, uniques, getLocallyUniqueNodeEdges(unitigGraph, readPaths, uniques), "localuniq-beforefilter.gfa");
 	filterOutRepetitiveLocallyUniqueNodes(unitigGraph, readPaths, uniques, 1000, uniqSpanLength);
 	auto edges = getLocallyUniqueNodeEdges(unitigGraph, readPaths, uniques);
@@ -5890,7 +6048,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 		chainLengthSplitters[i].emplace_back(0);
 		for (size_t j = 1; j < chainLengths[i].size(); j++)
 		{
-			if (chainLengths[i][j] - chainLengths[i][j-1] < 100) continue;
+			if (chainLengths[i][j] - chainLengths[i][j-1] < 500) continue;
 			chainLengthSplitters[i].emplace_back((chainLengths[i][j] + chainLengths[i][j-1]) / 2);
 		}
 	}
@@ -5932,7 +6090,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 			}
 		}
 	}
-	size_t maxClusterDistance = 100;
+	size_t maxClusterDistance = 500;
 	assert(readLocalUniqChainEndPositions.size() == readPaths.size());
 	UnitigGraph resultGraph = unitigGraph;
 	std::vector<ReadPathBundle> resultPaths = readPaths;
@@ -5945,6 +6103,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 			int readPos = readPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 			{
+				if (k > 0) readPos -= unitigGraph.edgeKmerOverlaps.get(std::make_pair(readPaths[i].paths[j].path[k-1] & maskUint64_t, readPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(readPaths[i].paths[j].path[k] & maskUint64_t, readPaths[i].paths[j].path[k] & firstBitUint64_t));
 				uint64_t node = readPaths[i].paths[j].path[k];
 				readPos += unitigGraph.lengths[node & maskUint64_t];
 				if (k == 0) readPos -= (int)readPaths[i].paths[j].pathLeftClipKmers;
@@ -5953,6 +6112,7 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 			}
 		}
 	}
+	phmap::flat_hash_map<size_t, size_t> nodeOrigin;
 	for (size_t iii = 0; iii < nodeReadPositions.size(); iii++)
 	{
 		if (localUniq[iii]) continue;
@@ -6148,8 +6308,11 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 		{
 			if (pair.second != pair.first) continue;
 			clusterToNewNode[pair.first] = resultGraph.lengths.size();
+			nodeOrigin[resultGraph.lengths.size()] = iii;
 			resultGraph.lengths.emplace_back(resultGraph.lengths[iii]);
 			resultGraph.coverages.emplace_back(0);
+			resultGraph.edgeKmerOverlaps.emplace_back();
+			resultGraph.edgeCoverages.emplace_back();
 		}
 		std::cerr << "node " << iii << " has " << clusterToNewNode.size() << " clusters" << std::endl;
 //		assert(clusterToNewNode.size() == clusterCoverage.size());
@@ -6191,6 +6354,50 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> splitNodesByChainLocation(co
 			// std::cerr << "replace read " << std::get<0>(t) << " node " << iii << " pos " << std::get<7>(t) << " with " << replacement << " (bw was " << ((std::get<3>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<3>(t) & maskUint64_t) << " dist " << std::get<5>(t) << ", fw was " << ((std::get<4>(t) & firstBitUint64_t) ? ">" : "<") << (std::get<4>(t) & maskUint64_t) << " dist " << std::get<6>(t) << ")" << std::endl;
 			assert((replacement & firstBitUint64_t) == 0);
 			resultPaths[std::get<0>(t)].paths[std::get<1>(t)].path[std::get<2>(t)] = replacement + (resultPaths[std::get<0>(t)].paths[std::get<1>(t)].path[std::get<2>(t)] & firstBitUint64_t);
+		}
+	}
+	assert(resultGraph.edgeCoverages.size() == resultGraph.lengths.size());
+	assert(resultGraph.edgeKmerOverlaps.size() == resultGraph.lengths.size());
+	for (size_t i = 0; i < resultPaths.size(); i++)
+	{
+		for (size_t j = 0; j < resultPaths[i].paths.size(); j++)
+		{
+			for (size_t k = 1; k < resultPaths[i].paths[j].path.size(); k++)
+			{
+				uint64_t prevNode = resultPaths[i].paths[j].path[k-1];
+				uint64_t thisNode = resultPaths[i].paths[j].path[k];
+				assert((prevNode & maskUint64_t) < resultGraph.edgeKmerOverlaps.size());
+				assert((thisNode & maskUint64_t) < resultGraph.edgeKmerOverlaps.size());
+				std::pair<size_t, bool> from { prevNode & maskUint64_t, prevNode & firstBitUint64_t };
+				std::pair<size_t, bool> to { thisNode & maskUint64_t, thisNode & firstBitUint64_t };
+				if (resultGraph.edgeKmerOverlaps.hasValue(from, to))
+				{
+					assert(resultGraph.edgeKmerOverlaps.hasValue(reverse(to), reverse(from)));
+					continue;
+				}
+				assert(!resultGraph.edgeKmerOverlaps.hasValue(reverse(to), reverse(from)));
+				std::pair<size_t, bool> fromOrigin = from;
+				std::pair<size_t, bool> toOrigin = to;
+				if ((nodeOrigin.count(prevNode & maskUint64_t) == 1 && nodeOrigin.at(prevNode & maskUint64_t) == std::numeric_limits<size_t>::max()) || (nodeOrigin.count(thisNode & maskUint64_t) == 1 && nodeOrigin.at(thisNode & maskUint64_t) == std::numeric_limits<size_t>::max()))
+				{
+					resultGraph.edgeKmerOverlaps.set(from, to, 0);
+					resultGraph.edgeKmerOverlaps.set(reverse(to), reverse(from), 0);
+					continue;
+				}
+				assert(nodeOrigin.count(prevNode & maskUint64_t) == 1 || nodeOrigin.count(thisNode & maskUint64_t) == 1);
+				if (nodeOrigin.count(prevNode & maskUint64_t) == 1)
+				{
+					fromOrigin.first = nodeOrigin.at(prevNode & maskUint64_t);
+				}
+				if (nodeOrigin.count(thisNode & maskUint64_t) == 1)
+				{
+					toOrigin.first = nodeOrigin.at(thisNode & maskUint64_t);
+				}
+				assert(resultGraph.edgeKmerOverlaps.hasValue(fromOrigin, toOrigin));
+				resultGraph.edgeKmerOverlaps.set(from, to, resultGraph.edgeKmerOverlaps.get(fromOrigin, toOrigin));
+				resultGraph.edgeKmerOverlaps.set(reverse(to), reverse(from), resultGraph.edgeKmerOverlaps.get(fromOrigin, toOrigin));
+				assert(resultGraph.edgeKmerOverlaps.hasValue(from, to));
+			}
 		}
 	}
 	RankBitvector kept;

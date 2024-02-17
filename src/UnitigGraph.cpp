@@ -99,7 +99,7 @@ std::vector<std::vector<uint64_t>> getUnitigs(const size_t countNodes, const Ran
 	return unitigs;
 }
 
-std::pair<std::vector<size_t>, std::vector<double>> getUnitigLengthAndCoverage(const std::vector<std::vector<uint64_t>>& unitigs, const std::vector<ReadPathBundle>& kmerGraphReadPaths, const std::vector<std::pair<uint64_t, size_t>>& kmerNodeToUnitig, const std::vector<size_t>& nodeLength)
+std::pair<std::vector<size_t>, std::vector<double>> getUnitigLengthAndCoverage(const std::vector<std::vector<uint64_t>>& unitigs, const std::vector<ReadPathBundle>& kmerGraphReadPaths, const std::vector<std::pair<uint64_t, size_t>>& kmerNodeToUnitig, const std::vector<size_t>& nodeLength, const MostlySparse2DHashmap<uint16_t, size_t>& edgeOverlaps)
 {
 	std::vector<double> coverage;
 	std::vector<size_t> length;
@@ -107,9 +107,15 @@ std::pair<std::vector<size_t>, std::vector<double>> getUnitigLengthAndCoverage(c
 	length.resize(unitigs.size(), 0);
 	for (size_t i = 0; i < unitigs.size(); i++)
 	{
-		for (uint64_t node : unitigs[i])
+		for (size_t j = 0; j < unitigs[i].size(); j++)
 		{
+			uint64_t node = unitigs[i][j];
 			length[i] += nodeLength[node & maskUint64_t];
+			if (edgeOverlaps.size() > 0 && j > 0)
+			{
+				uint64_t lastNode = unitigs[i][j-1];
+				length[i] -= edgeOverlaps.get(std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t), std::make_pair(node & maskUint64_t, node & firstBitUint64_t));
+			}
 		}
 	}
 	for (size_t i = 0; i < kmerGraphReadPaths.size(); i++)
@@ -128,48 +134,58 @@ std::pair<std::vector<size_t>, std::vector<double>> getUnitigLengthAndCoverage(c
 				coverage[unitig] += nodeLength[node];
 				if (k == 0 && kmerGraphReadPaths[i].paths[j].pathLeftClipKmers > 0)
 				{
-					assert(nodeLength[node] > kmerGraphReadPaths[i].paths[j].pathLeftClipKmers);
+					// assert(nodeLength[node] > kmerGraphReadPaths[i].paths[j].pathLeftClipKmers);
 					coverage[unitig] -= kmerGraphReadPaths[i].paths[j].pathLeftClipKmers;
 				}
 				if (k == kmerGraphReadPaths[i].paths[j].path.size()-1 && kmerGraphReadPaths[i].paths[j].pathRightClipKmers > 0)
 				{
-					assert(nodeLength[node] > kmerGraphReadPaths[i].paths[j].pathRightClipKmers);
+					// assert(nodeLength[node] > kmerGraphReadPaths[i].paths[j].pathRightClipKmers);
 					coverage[unitig] -= kmerGraphReadPaths[i].paths[j].pathRightClipKmers;
 				}
 			}
 		}
 	}
-	for (size_t i = 0; i < kmerGraphReadPaths.size(); i++)
-	{
-		for (size_t j = 1; j < kmerGraphReadPaths[i].paths.size(); j++)
-		{
-			if (kmerGraphReadPaths[i].paths[j-1].path.back() != kmerGraphReadPaths[i].paths[j].path[0]) continue;
-			size_t thisNode = kmerGraphReadPaths[i].paths[j].path[0] & maskUint64_t;
-			assert(thisNode < kmerNodeToUnitig.size());
-			size_t unitig = kmerNodeToUnitig[thisNode].first;
-			if (unitig == std::numeric_limits<uint64_t>::max()) continue;
-			unitig = unitig & maskUint64_t;
-			assert(thisNode < nodeLength.size());
-			assert(unitig < coverage.size());
-			size_t prevNodeEnd = nodeLength[thisNode] - kmerGraphReadPaths[i].paths[j-1].pathRightClipKmers;
-			size_t currNodeStart = kmerGraphReadPaths[i].paths[j].pathLeftClipKmers;
-			if (currNodeStart <= prevNodeEnd) continue;
-			size_t currReadStart = kmerGraphReadPaths[i].paths[j].readStartPos;
-			size_t prevReadEnd = kmerGraphReadPaths[i].paths[j-1].readStartPos;
-			for (auto node : kmerGraphReadPaths[i].paths[j-1].path)
-			{
-				prevReadEnd += nodeLength[node & maskUint64_t];
-			}
-			prevReadEnd -= kmerGraphReadPaths[i].paths[j-1].pathLeftClipKmers;
-			prevReadEnd -= kmerGraphReadPaths[i].paths[j-1].pathRightClipKmers;
-			assert(prevReadEnd <= currReadStart);
-			size_t readDistance = currReadStart - prevReadEnd;
-			size_t nodeDistance = currNodeStart - prevNodeEnd;
-			if (readDistance > nodeDistance + 50) continue;
-			if (nodeDistance > readDistance + 50) continue;
-			coverage[unitig] += nodeDistance;
-		}
-	}
+	// for (size_t i = 0; i < kmerGraphReadPaths.size(); i++)
+	// {
+	// 	for (size_t j = 1; j < kmerGraphReadPaths[i].paths.size(); j++)
+	// 	{
+	// 		if (kmerGraphReadPaths[i].paths[j-1].path.back() != kmerGraphReadPaths[i].paths[j].path[0]) continue;
+	// 		size_t thisNode = kmerGraphReadPaths[i].paths[j].path[0] & maskUint64_t;
+	// 		assert(thisNode < kmerNodeToUnitig.size());
+	// 		size_t unitig = kmerNodeToUnitig[thisNode].first;
+	// 		if (unitig == std::numeric_limits<uint64_t>::max()) continue;
+	// 		unitig = unitig & maskUint64_t;
+	// 		assert(thisNode < nodeLength.size());
+	// 		assert(unitig < coverage.size());
+	// 		size_t prevNodeEnd = nodeLength[thisNode] - kmerGraphReadPaths[i].paths[j-1].pathRightClipKmers;
+	// 		size_t currNodeStart = kmerGraphReadPaths[i].paths[j].pathLeftClipKmers;
+	// 		if (currNodeStart <= prevNodeEnd) continue;
+	// 		size_t currReadStart = kmerGraphReadPaths[i].paths[j].readStartPos;
+	// 		size_t prevReadEnd = kmerGraphReadPaths[i].paths[j-1].readStartPos;
+	// 		uint64_t lastNode = std::numeric_limits<size_t>::max();
+	// 		for (auto node : kmerGraphReadPaths[i].paths[j-1].path)
+	// 		{
+	// 			prevReadEnd += nodeLength[node & maskUint64_t];
+	// 			if (edgeOverlaps.size() > 0 && edgeOverlaps.hasValue(std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t), std::make_pair(node & maskUint64_t, node & firstBitUint64_t)))
+	// 			{
+	// 				prevReadEnd -= edgeOverlaps.get(std::make_pair(lastNode & maskUint64_t, lastNode & firstBitUint64_t), std::make_pair(node & maskUint64_t, node & firstBitUint64_t));
+	// 			}
+	// 			lastNode = node;
+	// 		}
+	// 		prevReadEnd -= kmerGraphReadPaths[i].paths[j-1].pathLeftClipKmers;
+	// 		prevReadEnd -= kmerGraphReadPaths[i].paths[j-1].pathRightClipKmers;
+	// 		if (!(prevReadEnd <= currReadStart))
+	// 		{
+	// 			std::cerr << prevReadEnd << " " << currReadStart << std::endl;
+	// 		}
+	// 		assert(prevReadEnd <= currReadStart);
+	// 		size_t readDistance = currReadStart - prevReadEnd;
+	// 		size_t nodeDistance = currNodeStart - prevNodeEnd;
+	// 		if (readDistance > nodeDistance + 50) continue;
+	// 		if (nodeDistance > readDistance + 50) continue;
+	// 		coverage[unitig] += nodeDistance;
+	// 	}
+	// }
 	for (size_t i = 0; i < unitigs.size(); i++)
 	{
 		assert(length[i] != 0);
@@ -177,6 +193,67 @@ std::pair<std::vector<size_t>, std::vector<double>> getUnitigLengthAndCoverage(c
 		coverage[i] /= (double)length[i];
 	}
 	return std::make_pair(std::move(length), std::move(coverage));
+}
+
+MostlySparse2DHashmap<uint16_t, size_t> getUnitigEdgeOverlaps(const std::vector<std::vector<uint64_t>>& unitigs, const MostlySparse2DHashmap<uint8_t, size_t>& edgeCoverages, const MostlySparse2DHashmap<uint16_t, size_t>& oldOverlaps)
+{
+	MostlySparse2DHashmap<uint16_t, size_t> result;
+	result.resize(unitigs.size());
+	assert(edgeCoverages.size() == unitigs.size());
+	for (size_t i = 0; i < edgeCoverages.size(); i++)
+	{
+		std::pair<size_t, bool> fw { i, true };
+		for (auto pair : edgeCoverages.getValues(fw))
+		{
+			std::pair<size_t, bool> fromOldNode { unitigs[fw.first].back() & maskUint64_t, unitigs[fw.first].back() & firstBitUint64_t };
+			std::pair<size_t, bool> toUnitig = pair.first;
+			std::pair<size_t, bool> toOldNode;
+			if (toUnitig.second)
+			{
+				toOldNode = std::make_pair(unitigs[toUnitig.first][0] & maskUint64_t, unitigs[toUnitig.first][0] & firstBitUint64_t);
+			}
+			else
+			{
+				toOldNode = std::make_pair(unitigs[toUnitig.first].back() & maskUint64_t, (unitigs[toUnitig.first].back() ^ firstBitUint64_t) & firstBitUint64_t);
+			}
+			size_t overlap = 0;
+			if (oldOverlaps.size() > 0)
+			{
+				assert(oldOverlaps.hasValue(fromOldNode, toOldNode));
+				overlap = oldOverlaps.get(fromOldNode, toOldNode);
+			}
+			assert(!result.hasValue(fw, toUnitig));
+			assert(!result.hasValue(reverse(toUnitig), reverse(fw)));
+			result.set(fw, toUnitig, overlap);
+			result.set(reverse(toUnitig), reverse(fw), overlap);
+		}
+		std::pair<size_t, bool> bw { i, false };
+		for (auto pair : edgeCoverages.getValues(bw))
+		{
+			std::pair<size_t, bool> fromOldNode { unitigs[bw.first][0] & maskUint64_t, (unitigs[bw.first][0] ^ firstBitUint64_t) & firstBitUint64_t };
+			std::pair<size_t, bool> toUnitig = pair.first;
+			std::pair<size_t, bool> toOldNode;
+			if (toUnitig.second)
+			{
+				toOldNode = std::make_pair(unitigs[toUnitig.first][0] & maskUint64_t, unitigs[toUnitig.first][0] & firstBitUint64_t);
+			}
+			else
+			{
+				toOldNode = std::make_pair(unitigs[toUnitig.first].back() & maskUint64_t, (unitigs[toUnitig.first].back() ^ firstBitUint64_t) & firstBitUint64_t);
+			}
+			size_t overlap = 0;
+			if (oldOverlaps.size() > 0)
+			{
+				assert(oldOverlaps.hasValue(fromOldNode, toOldNode));
+				overlap = oldOverlaps.get(fromOldNode, toOldNode);
+			}
+			assert(!result.hasValue(bw, toUnitig));
+			assert(!result.hasValue(reverse(toUnitig), reverse(bw)));
+			result.set(bw, toUnitig, overlap);
+			result.set(reverse(toUnitig), reverse(bw), overlap);
+		}
+	}
+	return result;
 }
 
 MostlySparse2DHashmap<uint8_t, size_t> getUnitigEdgeCoverages(const std::vector<std::vector<uint64_t>>& unitigs, const size_t minCoverage, const std::vector<ReadPathBundle>& kmerGraphReadPaths, const std::vector<std::pair<uint64_t, size_t>>& kmerNodeToUnitig)
@@ -252,13 +329,29 @@ void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, cons
 		auto fw = std::make_pair(i, true);
 		for (auto pair : unitigGraph.edgeCoverages.getValues(fw))
 		{
-			graph << "L\tnode_" << i << "\t+\tnode_" << pair.first.first << "\t" << (pair.first.second ? "+" : "-") << "\t" << (k-1) << "M\tec:i:" << pair.second << std::endl;
+			size_t overlap = k-1;
+			if (unitigGraph.edgeKmerOverlaps.size() > 0)
+			{
+				if (unitigGraph.edgeKmerOverlaps.hasValue(fw, pair.first))
+				{
+					overlap += unitigGraph.edgeKmerOverlaps.get(fw, pair.first);
+				}
+			}
+			graph << "L\tnode_" << i << "\t+\tnode_" << pair.first.first << "\t" << (pair.first.second ? "+" : "-") << "\t" << overlap << "M\tec:i:" << pair.second << std::endl;
 			countEdges += 1;
 		}
 		auto bw = std::make_pair(i, false);
 		for (auto pair : unitigGraph.edgeCoverages.getValues(bw))
 		{
-			graph << "L\tnode_" << i << "\t-\tnode_" << pair.first.first << "\t" << (pair.first.second ? "+" : "-") << "\t" << (k-1) << "M\tec:i:" << pair.second << std::endl;
+			size_t overlap = k-1;
+			if (unitigGraph.edgeKmerOverlaps.size() > 0)
+			{
+				if (unitigGraph.edgeKmerOverlaps.hasValue(bw, pair.first))
+				{
+					overlap += unitigGraph.edgeKmerOverlaps.get(bw, pair.first);
+				}
+			}
+			graph << "L\tnode_" << i << "\t-\tnode_" << pair.first.first << "\t" << (pair.first.second ? "+" : "-") << "\t" << overlap << "M\tec:i:" << pair.second << std::endl;
 			countEdges += 1;
 		}
 	}
@@ -478,22 +571,31 @@ std::vector<std::pair<uint64_t, size_t>> getKmerPosToUnitigPos(const std::vector
 	return result;
 }
 
-std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNodeLengths, const std::vector<ReadPathBundle>& kmerGraphReadPaths, const std::vector<std::pair<uint64_t, size_t>>& kmerNodeToUnitig, const std::vector<std::vector<uint64_t>>& unitigs, const UnitigGraph& unitigGraph)
+std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNodeLengths, const std::vector<ReadPathBundle>& kmerGraphReadPaths, const std::vector<std::pair<uint64_t, size_t>>& kmerNodeToUnitig, const std::vector<std::vector<uint64_t>>& unitigs, const UnitigGraph& unitigGraph, const MostlySparse2DHashmap<uint16_t, size_t>& edgeOverlaps)
 {
 	std::vector<ReadPathBundle> result;
 	result.resize(kmerGraphReadPaths.size());
 	std::vector<std::vector<size_t>> unitigNodeStartPosKmers;
+	std::vector<std::vector<size_t>> unitigNodeEndPosKmers;
 	unitigNodeStartPosKmers.resize(unitigs.size());
+	unitigNodeEndPosKmers.resize(unitigs.size());
 	for (size_t i = 0; i < unitigs.size(); i++)
 	{
 		unitigNodeStartPosKmers[i].resize(unitigs[i].size()+1);
+		unitigNodeEndPosKmers[i].resize(unitigs[i].size()+1);
 		size_t startPos = 0;
 		for (size_t j = 0; j < unitigs[i].size(); j++)
 		{
+			if (edgeOverlaps.size() > 0 && j > 0)
+			{
+				startPos -= edgeOverlaps.get(std::make_pair(unitigs[i][j-1] & maskUint64_t, unitigs[i][j-1] & firstBitUint64_t), std::make_pair(unitigs[i][j] & maskUint64_t, unitigs[i][j] & firstBitUint64_t));
+			}
 			unitigNodeStartPosKmers[i][j] = startPos;
+			unitigNodeEndPosKmers[i][j] = startPos + kmerGraphNodeLengths[unitigs[i][j] & maskUint64_t];
 			startPos += kmerGraphNodeLengths[unitigs[i][j] & maskUint64_t];
 		}
 		unitigNodeStartPosKmers[i].back() = startPos;
+		unitigNodeEndPosKmers[i].back() = startPos;
 		assert(startPos == unitigGraph.lengths[i]);
 	}
 	for (size_t i = 0; i < kmerGraphReadPaths.size(); i++)
@@ -506,6 +608,10 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNod
 			size_t readPos = kmerGraphReadPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < kmerGraphReadPaths[i].paths[j].path.size(); k++)
 			{
+				if (edgeOverlaps.size() > 0 && k > 0)
+				{
+					readPos -= edgeOverlaps.get(std::make_pair(kmerGraphReadPaths[i].paths[j].path[k-1] & maskUint64_t, kmerGraphReadPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(kmerGraphReadPaths[i].paths[j].path[k] & maskUint64_t, kmerGraphReadPaths[i].paths[j].path[k] & firstBitUint64_t));
+				}
 				std::pair<uint64_t, size_t> thisPos = kmerNodeToUnitig[kmerGraphReadPaths[i].paths[j].path[k] & maskUint64_t];
 				if (thisPos.first == std::numeric_limits<uint64_t>::max())
 				{
@@ -514,7 +620,7 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNod
 						assert(result[i].paths.back().path.size() >= 1);
 						if (lastPos.first & firstBitUint64_t)
 						{
-							result[i].paths.back().pathRightClipKmers = unitigGraph.lengths[lastPos.first & maskUint64_t] - unitigNodeStartPosKmers[lastPos.first & maskUint64_t][lastPos.second+1];
+							result[i].paths.back().pathRightClipKmers = unitigGraph.lengths[lastPos.first & maskUint64_t] - unitigNodeEndPosKmers[lastPos.first & maskUint64_t][lastPos.second];
 						}
 						else
 						{
@@ -551,13 +657,17 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNod
 						lastPos = thisPos;
 						continue;
 					}
+					else
+					{
+						assert(!(unitigGraph.edgeCoverages.hasValue(reverse(key.second), reverse(key.first))));
+					}
 				}
 				if (lastPos.first != std::numeric_limits<uint64_t>::max())
 				{
 					assert(result[i].paths.back().path.size() >= 1);
 					if (lastPos.first & firstBitUint64_t)
 					{
-						result[i].paths.back().pathRightClipKmers = unitigGraph.lengths[lastPos.first & maskUint64_t] - unitigNodeStartPosKmers[lastPos.first & maskUint64_t][lastPos.second+1];
+						result[i].paths.back().pathRightClipKmers = unitigGraph.lengths[lastPos.first & maskUint64_t] - unitigNodeEndPosKmers[lastPos.first & maskUint64_t][lastPos.second];
 					}
 					else
 					{
@@ -572,8 +682,8 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNod
 				}
 				else
 				{
-					assert(unitigNodeStartPosKmers[thisPos.first & maskUint64_t][unitigs[thisPos.first].size()-1-thisPos.second] <= unitigGraph.lengths[thisPos.first & maskUint64_t] - 1);
-					result[i].paths.back().pathLeftClipKmers = unitigGraph.lengths[thisPos.first & maskUint64_t] - unitigNodeStartPosKmers[thisPos.first & maskUint64_t][unitigs[thisPos.first].size()-thisPos.second];
+					assert(unitigNodeEndPosKmers[thisPos.first & maskUint64_t][unitigs[thisPos.first].size()-1-thisPos.second] <= unitigGraph.lengths[thisPos.first & maskUint64_t]);
+					result[i].paths.back().pathLeftClipKmers = unitigGraph.lengths[thisPos.first & maskUint64_t] - unitigNodeEndPosKmers[thisPos.first & maskUint64_t][unitigs[thisPos.first].size()-1-thisPos.second];
 				}
 				if (k == 0) result[i].paths.back().pathLeftClipKmers += kmerGraphReadPaths[i].paths[j].pathLeftClipKmers;
 				result[i].paths.back().path.emplace_back(thisPos.first);
@@ -586,7 +696,7 @@ std::vector<ReadPathBundle> getReadPaths(const std::vector<size_t>& kmerGraphNod
 				assert(result[i].paths.back().path.size() >= 1);
 				if (lastPos.first & firstBitUint64_t)
 				{
-					result[i].paths.back().pathRightClipKmers = unitigGraph.lengths[lastPos.first & maskUint64_t] - unitigNodeStartPosKmers[lastPos.first & maskUint64_t][lastPos.second+1];
+					result[i].paths.back().pathRightClipKmers = unitigGraph.lengths[lastPos.first & maskUint64_t] - unitigNodeEndPosKmers[lastPos.first & maskUint64_t][lastPos.second];
 				}
 				else
 				{
@@ -616,9 +726,11 @@ std::pair<UnitigGraph, std::vector<ReadPathBundle>> makeUnitigGraph(const KmerGr
 			assert(unitigs[kmerNodeToUnitig[i].first & maskUint64_t][unitigs[kmerNodeToUnitig[i].first & maskUint64_t].size() - 1 - kmerNodeToUnitig[i].second] == i);
 		}
 	}
-	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, kmerGraphReadPaths, kmerNodeToUnitig, kmerGraph.lengths);
+	MostlySparse2DHashmap<uint16_t, size_t> fakeOverlaps;
+	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, kmerGraphReadPaths, kmerNodeToUnitig, kmerGraph.lengths, fakeOverlaps);
 	result.edgeCoverages = getUnitigEdgeCoverages(unitigs, minCoverage, kmerGraphReadPaths, kmerNodeToUnitig);
-	auto readPaths = getReadPaths(kmerGraph.lengths, kmerGraphReadPaths, kmerNodeToUnitig, unitigs, result);
+	result.edgeKmerOverlaps = getUnitigEdgeOverlaps(unitigs, result.edgeCoverages, fakeOverlaps);
+	auto readPaths = getReadPaths(kmerGraph.lengths, kmerGraphReadPaths, kmerNodeToUnitig, unitigs, result, fakeOverlaps);
 	return std::make_pair(std::move(result), std::move(readPaths));
 }
 
@@ -629,14 +741,16 @@ size_t UnitigGraph::nodeCount() const
 
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> filterUnitigGraph(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const RankBitvector& keptNodes)
 {
+	assert(unitigGraph.edgeKmerOverlaps.size() == unitigGraph.nodeCount());
 	assert(keptNodes.size() == unitigGraph.nodeCount());
 	UnitigGraph result;
 	std::vector<ReadPathBundle> resultPaths;
 	std::vector<std::vector<uint64_t>> unitigs = getUnitigs(unitigGraph.nodeCount(), keptNodes, getUniqueEdges(readPaths, unitigGraph.nodeCount(), keptNodes));
 	std::vector<std::pair<uint64_t, size_t>> kmerNodeToUnitig = getKmerPosToUnitigPos(unitigs, unitigGraph.nodeCount());
-	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, readPaths, kmerNodeToUnitig, unitigGraph.lengths);
+	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, readPaths, kmerNodeToUnitig, unitigGraph.lengths, unitigGraph.edgeKmerOverlaps);
 	result.edgeCoverages = getUnitigEdgeCoverages(unitigs, 1, readPaths, kmerNodeToUnitig);
-	auto resultReadPaths = getReadPaths(unitigGraph.lengths, readPaths, kmerNodeToUnitig, unitigs, result);
+	result.edgeKmerOverlaps = getUnitigEdgeOverlaps(unitigs, result.edgeCoverages, unitigGraph.edgeKmerOverlaps);
+	auto resultReadPaths = getReadPaths(unitigGraph.lengths, readPaths, kmerNodeToUnitig, unitigs, result, unitigGraph.edgeKmerOverlaps);
 	return std::make_pair(std::move(result), std::move(resultReadPaths));
 }
 
@@ -703,24 +817,28 @@ std::vector<TwobitString> getNodeSequences(const UnitigGraph& unitigGraph, const
 
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unitigify(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths)
 {
+	assert(unitigGraph.edgeKmerOverlaps.size() == unitigGraph.nodeCount());
 	UnitigGraph result;
 	std::vector<ReadPathBundle> resultPaths;
 	std::vector<std::vector<uint64_t>> unitigs = getUnitigs(unitigGraph.nodeCount(), getUniqueEdges(unitigGraph.edgeCoverages, unitigGraph.nodeCount(), 1));
 	std::vector<std::pair<uint64_t, size_t>> kmerNodeToUnitig = getKmerPosToUnitigPos(unitigs, unitigGraph.nodeCount());
-	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, readPaths, kmerNodeToUnitig, unitigGraph.lengths);
+	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, readPaths, kmerNodeToUnitig, unitigGraph.lengths, unitigGraph.edgeKmerOverlaps);
 	result.edgeCoverages = getUnitigEdgeCoverages(unitigs, 1, readPaths, kmerNodeToUnitig);
-	auto resultReadPaths = getReadPaths(unitigGraph.lengths, readPaths, kmerNodeToUnitig, unitigs, result);
+	result.edgeKmerOverlaps = getUnitigEdgeOverlaps(unitigs, result.edgeCoverages, unitigGraph.edgeKmerOverlaps);
+	auto resultReadPaths = getReadPaths(unitigGraph.lengths, readPaths, kmerNodeToUnitig, unitigs, result, unitigGraph.edgeKmerOverlaps);
 	return std::make_pair(std::move(result), std::move(resultReadPaths));
 }
 
 std::pair<UnitigGraph, std::vector<ReadPathBundle>> unitigifyWithFilter(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const RankBitvector& keptNodes)
 {
+	assert(unitigGraph.edgeKmerOverlaps.size() == unitigGraph.nodeCount());
 	UnitigGraph result;
 	std::vector<ReadPathBundle> resultPaths;
 	std::vector<std::vector<uint64_t>> unitigs = getUnitigs(unitigGraph.nodeCount(), keptNodes, getUniqueEdges(unitigGraph.edgeCoverages, keptNodes, unitigGraph.nodeCount(), 1));
 	std::vector<std::pair<uint64_t, size_t>> kmerNodeToUnitig = getKmerPosToUnitigPos(unitigs, unitigGraph.nodeCount());
-	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, readPaths, kmerNodeToUnitig, unitigGraph.lengths);
+	std::tie(result.lengths, result.coverages) = getUnitigLengthAndCoverage(unitigs, readPaths, kmerNodeToUnitig, unitigGraph.lengths, unitigGraph.edgeKmerOverlaps);
 	result.edgeCoverages = getUnitigEdgeCoverages(unitigs, 1, readPaths, kmerNodeToUnitig);
-	auto resultReadPaths = getReadPaths(unitigGraph.lengths, readPaths, kmerNodeToUnitig, unitigs, result);
+	result.edgeKmerOverlaps = getUnitigEdgeOverlaps(unitigs, result.edgeCoverages, unitigGraph.edgeKmerOverlaps);
+	auto resultReadPaths = getReadPaths(unitigGraph.lengths, readPaths, kmerNodeToUnitig, unitigs, result, unitigGraph.edgeKmerOverlaps);
 	return std::make_pair(std::move(result), std::move(resultReadPaths));
 }

@@ -30,8 +30,8 @@ void iterateSyncmersBigK(const std::vector<TwobitString>& readSequences, const s
 	assert(w < k);
 	assert(w >= 3);
 	const size_t s = k-w+1;
-	FastHasher kmer { k };
-	FastHasher smer { s };
+	MBG::FastHasher kmer { k };
+	MBG::FastHasher smer { s };
 	assert(kmer.hash() == 0);
 	assert(kmer.getFwHash() == 0);
 	assert(smer.hash() == 0);

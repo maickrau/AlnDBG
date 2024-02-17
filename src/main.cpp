@@ -16,6 +16,7 @@
 #include "GraphResolver.h"
 #include "AnchorFinder.h"
 #include "ChunkmerFilter.h"
+#include "MultiplexResolverCaller.h"
 
 void writePaths(const std::string& filename, const std::vector<size_t>& readLengths, const std::vector<std::string>& readNames, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readUnitigGraphPaths, const size_t k)
 {
@@ -31,6 +32,14 @@ void writePaths(const std::string& filename, const std::vector<size_t>& readLeng
 				pathstr += (readUnitigGraphPaths[i].paths[j].path[k] & firstBitUint64_t) ? ">" : "<";
 				pathstr += std::to_string(readUnitigGraphPaths[i].paths[j].path[k] & maskUint64_t);
 				pathLengthKmers += unitigGraph.lengths[readUnitigGraphPaths[i].paths[j].path[k] & maskUint64_t];
+				if (k > 0)
+				{
+					std::pair<size_t, bool> from { readUnitigGraphPaths[i].paths[j].path[k-1] & maskUint64_t, readUnitigGraphPaths[i].paths[j].path[k-1] & firstBitUint64_t };
+					std::pair<size_t, bool> to { readUnitigGraphPaths[i].paths[j].path[k] & maskUint64_t, readUnitigGraphPaths[i].paths[j].path[k] & firstBitUint64_t };
+					assert(unitigGraph.edgeKmerOverlaps.hasValue(from, to));
+					size_t overlap = unitigGraph.edgeKmerOverlaps.get(from, to);
+					pathLengthKmers -= overlap;
+				}
 			}
 			assert(pathLengthKmers > readUnitigGraphPaths[i].paths[j].pathLeftClipKmers + readUnitigGraphPaths[i].paths[j].pathRightClipKmers);
 			size_t alnLengthKmers = pathLengthKmers - readUnitigGraphPaths[i].paths[j].pathLeftClipKmers - readUnitigGraphPaths[i].paths[j].pathRightClipKmers;
@@ -155,14 +164,22 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	writePaths("paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
 	// for (size_t i = 0; i < 5; i++)
 	// {
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
+		std::tie(unitigGraph, readUnitigGraphPaths) = runMBGMultiplexResolution(unitigGraph, readUnitigGraphPaths, k, 1000);
 		// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 
 	//nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	//writeGraph("hmm1-graph.gfa", unitigGraph, nodeSequences, k);
 	writeGraph("hmm1-graph.gfa", unitigGraph, k);
 	writePaths("hmm1-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
-		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 100, 100000);
+		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
+	for (size_t i = 0; i < readUnitigGraphPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readUnitigGraphPaths[i].paths.size(); j++)
+		{
+			assert(readUnitigGraphPaths[i].paths[j].readStartPos < readUnitigGraphPaths[i].readLength);
+		}
+	}
+		// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 100, 100000);
 		// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphPolyploidTransitiveClosure(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 		// std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphPolyploidTransitiveClosure(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 
@@ -170,12 +187,13 @@ void makeGraph(const std::vector<size_t>& readLengths, const std::vector<std::st
 	// writeGraph("hmm2-graph.gfa", unitigGraph, nodeSequences, k);
 	writeGraph("hmm2-graph.gfa", unitigGraph, k);
 	writePaths("hmm2-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
-	std::exit(0);
+		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphLocalUniqmersLocation(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage, 100, 100000);
 		// std::tie(unitigGraph, readUnitigGraphPaths) = resolveSpannedTangles(unitigGraph, readUnitigGraphPaths, k, approxOneHapCoverage);
 	// nodeSequences = getNodeSequences(unitigGraph, readUnitigGraphPaths, k, readSequences);
 	// writeGraph("hmm3-graph.gfa", unitigGraph, nodeSequences, k);
 	writeGraph("hmm3-graph.gfa", unitigGraph, k);
 	writePaths("hmm3-paths.gaf", readLengths, readNames, unitigGraph, readUnitigGraphPaths, k);
+	std::exit(0);
 
 		std::tie(unitigGraph, readUnitigGraphPaths) = unzipGraphDiploidMEC(unitigGraph, readUnitigGraphPaths, k, numThreads, approxOneHapCoverage);
 	writeGraph("hmm4-graph.gfa", unitigGraph, k);
@@ -682,7 +700,7 @@ int main(int argc, char** argv)
 	const size_t graphk = std::stoull(argv[6]);
 	const size_t minCoverage = 2;
 	const size_t graphd = 50;
-	const double approxOneHapCoverage = 7;
+	const double approxOneHapCoverage = 20;
 	std::vector<std::string> readFiles;
 	for (size_t i = 7; i < argc; i++)
 	{
@@ -729,7 +747,7 @@ int main(int argc, char** argv)
 		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
 	}
 	auto rawReadLengths = storage.getRawReadLengths();
-	std::vector<bool> usableChunkmers = getFilteredValidChunks(matchIndex, rawReadLengths, std::numeric_limits<size_t>::max(), 10000, 10);
+	std::vector<bool> usableChunkmers = getFilteredValidChunks(matchIndex, rawReadLengths, std::numeric_limits<size_t>::max(), 1000, 10);
 	std::vector<MatchGroup> initialMatches = getMatches(matchIndex, readSequences, numThreads, rawReadLengths, minAlignmentLength, k, graphk, graphd, usableChunkmers, std::numeric_limits<size_t>::max());
 	std::vector<MatchGroup> filteredMatches = initialMatches;
 //	doHaplofilter(matches, readKmerLengths);

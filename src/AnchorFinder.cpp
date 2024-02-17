@@ -968,6 +968,11 @@ std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph&
 			size_t readPos = readPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 			{
+				if (k > 0) readPos -= unitigGraph.edgeKmerOverlaps.get(std::make_pair(readPaths[i].paths[j].path[k-1] & maskUint64_t, readPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(readPaths[i].paths[j].path[k] & maskUint64_t, readPaths[i].paths[j].path[k] & firstBitUint64_t));
+				if (!(readPos < readPaths[i].readLength))
+				{
+					std::cerr << "read " << i << " pos " << readPos << " len " << readPaths[i].readLength << " node " << (readPaths[i].paths[j].path[k] & maskUint64_t) << std::endl;
+				}
 				assert(readPos < readPaths[i].readLength);
 				uint64_t node = readPaths[i].paths[j].path[k];
 				readPos += unitigGraph.lengths[node & maskUint64_t];

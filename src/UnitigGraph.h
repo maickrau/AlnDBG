@@ -16,8 +16,9 @@ class UnitigGraph
 public:
 	size_t nodeCount() const;
 	std::vector<double> coverages;
-	std::vector<size_t> lengths;
-	MostlySparse2DHashmap<uint8_t, size_t> edgeCoverages;
+	std::vector<size_t> lengths; // length in k-mers
+	MostlySparse2DHashmap<uint8_t, size_t> edgeCoverages; // only canonical edges
+	MostlySparse2DHashmap<uint16_t, size_t> edgeKmerOverlaps; // both canon and non-canon edges
 };
 
 void writeGraph(std::string outputFileName, const UnitigGraph& unitigGraph, const std::vector<TwobitString>& nodeSequences, const size_t k);
