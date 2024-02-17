@@ -551,6 +551,190 @@ bool annotationsMismatch(const std::vector<std::vector<HaplotypeInformativeSite>
 	return false;
 }
 
+void tryExtendTransitiveMatch(std::vector<MatchGroup>& result, const size_t firstRead, const size_t middleRead, const size_t thirdRead, const MatchGroup& firstMatch, const MatchGroup& secondMatch, const std::vector<size_t>& rawReadLengths, const size_t graphk)
+{
+	assert(firstRead != thirdRead);
+	assert(firstRead != middleRead);
+	assert(middleRead != thirdRead);
+	int firstStartPosInMiddle;
+	int firstEndPosInMiddle;
+	bool firstFwInMiddle;
+	if (firstMatch.rightFw)
+	{
+		firstFwInMiddle = true;
+		if (firstMatch.leftRead == firstRead)
+		{
+			assert(firstMatch.rightRead == middleRead);
+			firstStartPosInMiddle = (int)firstMatch.rightStart - (int)firstMatch.leftStart;
+			firstEndPosInMiddle = (int)firstMatch.rightEnd + ((int)rawReadLengths[firstRead]-1) - (int)firstMatch.leftEnd;
+		}
+		else
+		{
+			assert(firstMatch.leftRead == middleRead);
+			assert(firstMatch.rightRead == firstRead);
+			firstStartPosInMiddle = (int)firstMatch.leftStart - (int)firstMatch.rightStart;
+			firstEndPosInMiddle = (int)firstMatch.leftEnd + ((int)rawReadLengths[firstRead]-1) - (int)firstMatch.rightEnd;
+		}
+	}
+	else
+	{
+		firstFwInMiddle = false;
+		if (firstMatch.leftRead == firstRead)
+		{
+			assert(firstMatch.rightRead == middleRead);
+			firstStartPosInMiddle = (int)firstMatch.rightStart + (int)firstMatch.leftEnd - ((int)rawReadLengths[firstRead]-1);
+			firstEndPosInMiddle = (int)firstMatch.rightEnd + (int)firstMatch.leftStart;
+		}
+		else
+		{
+			assert(firstMatch.leftRead == middleRead);
+			assert(firstMatch.rightRead == firstRead);
+			firstStartPosInMiddle = (int)firstMatch.leftStart + (int)firstMatch.rightEnd - ((int)rawReadLengths[firstRead]-1);
+			firstEndPosInMiddle = (int)firstMatch.leftEnd + (int)firstMatch.rightStart;
+		}
+	}
+	assert(firstEndPosInMiddle > firstStartPosInMiddle);
+	int thirdStartPosInMiddle;
+	int thirdEndPosInMiddle;
+	bool thirdFwInMiddle;
+	if (secondMatch.rightFw)
+	{
+		thirdFwInMiddle = true;
+		if (secondMatch.leftRead == thirdRead)
+		{
+			assert(secondMatch.rightRead == middleRead);
+			thirdStartPosInMiddle = (int)secondMatch.rightStart - (int)secondMatch.leftStart;
+			thirdEndPosInMiddle = (int)secondMatch.rightEnd + ((int)rawReadLengths[thirdRead]-1) - (int)secondMatch.leftEnd;
+		}
+		else
+		{
+			assert(secondMatch.leftRead == middleRead);
+			assert(secondMatch.rightRead == thirdRead);
+			thirdStartPosInMiddle = (int)secondMatch.leftStart - (int)secondMatch.rightStart;
+			thirdEndPosInMiddle = (int)secondMatch.leftEnd + ((int)rawReadLengths[thirdRead]-1) - (int)secondMatch.rightEnd;
+		}
+	}
+	else
+	{
+		thirdFwInMiddle = false;
+		if (secondMatch.leftRead == thirdRead)
+		{
+			assert(secondMatch.rightRead == middleRead);
+			thirdStartPosInMiddle = (int)secondMatch.rightStart + (int)secondMatch.leftEnd - ((int)rawReadLengths[thirdRead]-1);
+			thirdEndPosInMiddle = (int)secondMatch.rightEnd + (int)secondMatch.leftStart;
+		}
+		else
+		{
+			assert(secondMatch.leftRead == middleRead);
+			assert(secondMatch.rightRead == thirdRead);
+			thirdStartPosInMiddle = (int)secondMatch.leftStart + (int)secondMatch.rightEnd - ((int)rawReadLengths[thirdRead]-1);
+			thirdEndPosInMiddle = (int)secondMatch.leftEnd + (int)secondMatch.rightStart;
+		}
+	}
+	assert(thirdEndPosInMiddle > thirdStartPosInMiddle);
+	std::cerr << "reads first " << firstRead << " middle " << middleRead << " third " << thirdRead << std::endl;
+	std::cerr << "first reads " << firstMatch.leftRead << " (len " << rawReadLengths[firstMatch.leftRead] << ") " << firstMatch.rightRead << " (len " << rawReadLengths[firstMatch.rightRead] << ")" << std::endl;
+	std::cerr << "first match " << firstMatch.leftStart << " " << firstMatch.leftEnd << " " << firstMatch.rightStart << " " << firstMatch.rightEnd << " " << (firstMatch.rightFw ? "fw" : "bw") << std::endl;
+	std::cerr << "second reads " << secondMatch.leftRead << " (len " << rawReadLengths[secondMatch.leftRead] << ") " << secondMatch.rightRead << " (len " << rawReadLengths[secondMatch.rightRead] << ")" << std::endl;
+	std::cerr << "second match " << secondMatch.leftStart << " " << secondMatch.leftEnd << " " << secondMatch.rightStart << " " << secondMatch.rightEnd << " " << (secondMatch.rightFw ? "fw" : "bw") << std::endl;
+	std::cerr << "poses " << firstStartPosInMiddle << " " << firstEndPosInMiddle << " " << thirdStartPosInMiddle << " " << thirdEndPosInMiddle << std::endl;
+	if (thirdStartPosInMiddle >= firstEndPosInMiddle) return;
+	if (firstStartPosInMiddle >= thirdEndPosInMiddle) return;
+	int overlapStart = std::max(firstStartPosInMiddle, thirdStartPosInMiddle);
+	int overlapEnd = std::min(firstEndPosInMiddle, thirdEndPosInMiddle);
+	if (overlapEnd - overlapStart < 2*graphk) return;
+	assert(overlapStart >= firstStartPosInMiddle);
+	assert(overlapEnd <= firstEndPosInMiddle);
+	assert(overlapStart >= thirdStartPosInMiddle);
+	assert(overlapEnd <= thirdEndPosInMiddle);
+	std::cerr << "found overlap " << overlapStart << " " << overlapEnd << std::endl;
+	assert(overlapEnd > overlapStart);
+	result.emplace_back();
+	result.back().leftRead = firstRead;
+	result.back().rightRead = thirdRead;
+	result.back().rightFw = (firstFwInMiddle == thirdFwInMiddle);
+	if (firstFwInMiddle)
+	{
+		result.back().leftStart = overlapStart - firstStartPosInMiddle;
+		result.back().leftEnd = overlapEnd - firstStartPosInMiddle;
+	}
+	else
+	{
+		result.back().leftStart = firstEndPosInMiddle - overlapEnd;
+		result.back().leftEnd = firstEndPosInMiddle - overlapStart;
+	}
+	result.back().leftStart *= rawReadLengths[result.back().leftRead] / (double)(firstEndPosInMiddle - firstStartPosInMiddle);
+	result.back().leftEnd *= rawReadLengths[result.back().leftRead] / (double)(firstEndPosInMiddle - firstStartPosInMiddle);
+	assert(result.back().leftStart < result.back().leftEnd);
+	assert(result.back().leftEnd <= rawReadLengths[result.back().leftRead]);
+	if (result.back().leftEnd == rawReadLengths[result.back().leftRead]) result.back().leftEnd = rawReadLengths[result.back().leftRead]-1;
+	if (thirdFwInMiddle)
+	{
+		result.back().rightStart = overlapStart - thirdStartPosInMiddle;
+		result.back().rightEnd = overlapEnd - thirdStartPosInMiddle;
+	}
+	else
+	{
+		result.back().rightStart = thirdEndPosInMiddle - overlapEnd;
+		result.back().rightEnd = thirdEndPosInMiddle - overlapStart;
+	}
+	result.back().rightStart *= rawReadLengths[result.back().rightRead] / (double)(thirdEndPosInMiddle - thirdStartPosInMiddle);
+	result.back().rightEnd *= rawReadLengths[result.back().rightRead] / (double)(thirdEndPosInMiddle - thirdStartPosInMiddle);
+	assert(result.back().rightStart < result.back().rightEnd);
+	assert(result.back().rightEnd <= rawReadLengths[result.back().rightRead]);
+	if (result.back().rightEnd == rawReadLengths[result.back().rightRead]) result.back().rightEnd = rawReadLengths[result.back().rightRead]-1;
+}
+
+std::vector<MatchGroup> extendTransitiveMatches(const std::vector<MatchGroup>& oldMatches, const std::vector<size_t>& rawReadLengths, const size_t graphk)
+{
+	std::cerr << "try transitively extend matches" << std::endl;
+	std::vector<MatchGroup> result = oldMatches;
+	std::vector<std::vector<size_t>> matchesPerRead;
+	matchesPerRead.resize(rawReadLengths.size());
+	for (size_t i = 0; i < oldMatches.size(); i++)
+	{
+		assert(oldMatches[i].leftRead < matchesPerRead.size());
+		assert(oldMatches[i].rightRead < matchesPerRead.size());
+		matchesPerRead[oldMatches[i].leftRead].push_back(i);
+		matchesPerRead[oldMatches[i].rightRead].push_back(i);
+	}
+	for (size_t i = 0; i < rawReadLengths.size(); i++)
+	{
+		for (size_t match : matchesPerRead[i])
+		{
+			assert(oldMatches[match].leftRead == i || oldMatches[match].rightRead == i);
+			assert(oldMatches[match].leftRead != i || oldMatches[match].rightRead != i);
+			size_t otherRead = i;
+			if (oldMatches[match].leftRead == i)
+			{
+				otherRead = oldMatches[match].rightRead;
+			}
+			else
+			{
+				otherRead = oldMatches[match].leftRead;
+			}
+			assert(otherRead != i);
+			for (size_t match2 : matchesPerRead[otherRead])
+			{
+				assert(oldMatches[match2].leftRead == otherRead || oldMatches[match2].rightRead == otherRead);
+				assert(oldMatches[match2].leftRead != otherRead || oldMatches[match2].rightRead != otherRead);
+				if (oldMatches[match2].leftRead == i || oldMatches[match2].rightRead == i) continue;
+				size_t thirdRead;
+				if (oldMatches[match2].leftRead == otherRead)
+				{
+					thirdRead = oldMatches[match2].rightRead;
+				}
+				else
+				{
+					thirdRead = oldMatches[match2].leftRead;
+				}
+				tryExtendTransitiveMatch(result, i, otherRead, thirdRead, oldMatches[match], oldMatches[match2], rawReadLengths, graphk);
+			}
+		}
+	}
+	return result;
+}
+
 std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIndex, const std::vector<TwobitString>& readSequences, size_t numThreads, const std::vector<size_t>& rawReadLengths, const size_t minAlignmentLength, const size_t k, const size_t graphk, const size_t graphd, const size_t maxIndexCoverage, const std::vector<bool>& usableChunkmers, const std::vector<std::vector<ChainPosition>>& readAnnotations)
 {
 	std::mutex printMutex;
@@ -614,8 +798,9 @@ std::vector<MatchGroup> getMatchesFilteredByAnnotation(const MatchIndex& matchIn
 	std::cerr << result.readChainMatches << " chain matches" << std::endl;
 	std::cerr << result.totalMatches << " window matches" << std::endl;
 	std::cerr << result.maxPerChunk << " max windowchunk size" << std::endl;
-	std::cerr << countFiltered << " mapping matches filtered by annotation mismatch" << std::endl;
 	std::cerr << matches.size() << " mapping matches" << std::endl;
+	// matches = extendTransitiveMatches(matches, rawReadLengths, graphk);
+	// std::cerr << matches.size() << " mapping matches after transitive extension" << std::endl;
 	matches = addKmerMatches(numThreads, readSequences, matches, graphk, graphd);
 	size_t filteredFromKmerGaps = 0;
 	size_t countRemainingKmerMatches = 0;
