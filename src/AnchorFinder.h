@@ -22,7 +22,7 @@ public:
 	size_t numKmerMatches;
 };
 
-std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage);
+std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t initialAnchorMinLength, const double approxOneHapCoverage);
 std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const std::vector<AnchorChain>& anchorChains);
 
 #endif

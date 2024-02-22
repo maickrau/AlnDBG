@@ -7,10 +7,10 @@ SRCDIR=src
 
 LIBS=`pkg-config --libs zlib`
 
-_DEPS = KmerGraph.h KmerMatcher.h MatchGroup.h UnitigGraph.h GraphCleaner.h AlnHaploFilter.h GraphPhaser.h Common.h GraphResolver.h AnchorFinder.h UnionFind.h
+_DEPS = KmerGraph.h KmerMatcher.h MatchGroup.h UnitigGraph.h GraphCleaner.h AlnHaploFilter.h GraphPhaser.h Common.h GraphResolver.h AnchorFinder.h UnionFind.h ChunkmerFilter.h MultiplexResolverCaller.h
 DEPS = $(patsubst %, $(SRCDIR)/%, $(_DEPS))
 
-_OBJ = KmerGraph.o KmerMatcher.o UnitigGraph.o GraphCleaner.o AlnHaploFilter.o GraphPhaser.o Common.o GraphResolver.o AnchorFinder.o UnionFind.o
+_OBJ = KmerGraph.o KmerMatcher.o UnitigGraph.o GraphCleaner.o AlnHaploFilter.o GraphPhaser.o Common.o GraphResolver.o AnchorFinder.o UnionFind.o ChunkmerFilter.o MultiplexResolverCaller.o
 OBJ = $(patsubst %, $(ODIR)/%, $(_OBJ))
 
 LINKFLAGS = $(CPPFLAGS) -Wl,-Bstatic $(LIBS) -Wl,-Bdynamic -Wl,--as-needed -lpthread -pthread -static-libstdc++
@@ -26,6 +26,9 @@ $(BINDIR)/AlnDBG: $(OBJ) $(ODIR)/main.o hifioverlapper/lib/hifioverlapper.a MBG/
 $(BINDIR)/chunkgraph: $(OBJ) $(ODIR)/chunkgraph.o hifioverlapper/lib/hifioverlapper.a MBG/lib/mbg.a
 	$(GPP) -o $@ $^ $(LINKFLAGS)
 
+$(BINDIR)/alncorrect: $(OBJ) $(ODIR)/alncorrect.o hifioverlapper/lib/hifioverlapper.a MBG/lib/mbg.a
+	$(GPP) -o $@ $^ $(LINKFLAGS)
+
 $(ODIR)/%.o: $(SRCDIR)/%.cpp $(DEPS)
 	$(GPP) -c -o $@ $< $(CPPFLAGS)
 
@@ -35,7 +38,7 @@ MBG/lib/mbg.a:
 hifioverlapper/lib/hifioverlapper.a:
 	$(MAKE) -C hifioverlapper lib
 
-all: $(BINDIR)/AlnDBG $(BINDIR)/chunkgraph
+all: $(BINDIR)/AlnDBG $(BINDIR)/alncorrect $(BINDIR)/chunkgraph
 
 clean:
 	rm -f $(ODIR)/*

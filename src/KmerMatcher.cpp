@@ -4,6 +4,7 @@
 #include <phmap.h>
 #include <iostream>
 #include "KmerMatcher.h"
+#include "FastHasher.h"
 
 template <typename F>
 void iterateKmerMatchPositions(const uint64_t kmer, const phmap::flat_hash_map<uint64_t, uint64_t>& firstPositions, const phmap::flat_hash_map<uint64_t, std::vector<uint16_t>>& extraPositions, F callback)
@@ -23,9 +24,62 @@ void iterateKmerMatchPositions(const uint64_t kmer, const phmap::flat_hash_map<u
 }
 
 template <typename F1, typename F2>
+void iterateSyncmersBigK(const std::vector<TwobitString>& readSequences, const size_t k, const size_t w, const size_t maxLen, F1 callback, F2 getchar)
+{
+	thread_local std::vector<std::tuple<size_t, uint64_t>> smerOrder;
+	assert(w < k);
+	assert(w >= 3);
+	const size_t s = k-w+1;
+	MBG::FastHasher kmer { k };
+	MBG::FastHasher smer { s };
+	assert(kmer.hash() == 0);
+	assert(kmer.getFwHash() == 0);
+	assert(smer.hash() == 0);
+	assert(smer.getFwHash() == 0);
+	for (size_t i = 0; i < s; i++)
+	{
+		uint64_t c = getchar(i);
+		smer.addChar(c);
+		kmer.addChar(c);
+	}
+	assert(smerOrder.size() == 0);
+	smerOrder.emplace_back(0, smer.getFwHash());
+	for (size_t i = s; i < k; i++)
+	{
+		uint64_t c = getchar(i);
+		kmer.addChar(c);
+		smer.addChar(c);
+		smer.removeChar(getchar(i-s));
+		while (smerOrder.size() > 0 && std::get<1>(smerOrder.back()) > smer.getFwHash()) smerOrder.pop_back();
+		smerOrder.emplace_back(i-s+1, smer.getFwHash());
+	}
+	if ((std::get<0>(smerOrder.front()) == 0) || (std::get<1>(smerOrder.back()) == std::get<1>(smerOrder.front()) && std::get<0>(smerOrder.back()) == w-1))
+	{
+		callback(kmer.getFwHash(), 0);
+	}
+	for (size_t i = k; i < maxLen; i++)
+	{
+		uint64_t c = getchar(i);
+		kmer.addChar(c);
+		smer.addChar(c);
+		smer.removeChar(getchar(i-s));
+		kmer.removeChar(getchar(i-k));
+		while (smerOrder.size() > 0 && std::get<1>(smerOrder.back()) > smer.getFwHash()) smerOrder.pop_back();
+		while (smerOrder.size() > 0 && std::get<0>(smerOrder.front()) <= i-s+1-w) smerOrder.erase(smerOrder.begin());
+		smerOrder.emplace_back(i-s+1, smer.getFwHash());
+		if ((std::get<0>(smerOrder.front()) == i-s+2-w) || (std::get<1>(smerOrder.back()) == std::get<1>(smerOrder.front()) && std::get<0>(smerOrder.back()) == i-s+1))
+		{
+			callback(kmer.getFwHash(), i-k+1);
+		}
+	}
+	smerOrder.clear();
+}
+
+template <typename F1, typename F2>
 void iterateSyncmers(const std::vector<TwobitString>& readSequences, const size_t k, const size_t w, const size_t maxLen, F1 callback, F2 getchar)
 {
 	thread_local std::vector<std::tuple<size_t, uint64_t>> smerOrder;
+	assert(k <= 31);
 	assert(w < k);
 	assert(w >= 3);
 	const uint64_t mask = (1ull << (2ull*k)) - 1;
@@ -79,13 +133,29 @@ void iterateSyncmers(const std::vector<TwobitString>& readSequences, const size_
 template <typename F>
 void iterateSyncmers(const std::vector<TwobitString>& readSequences, const size_t k, const size_t w, const size_t read, const size_t readStart, const size_t readEnd, const bool fw, F callback)
 {
-	if (fw)
+	assert(readStart < readEnd);
+	assert(readEnd <= readSequences[read].size());
+	if (k <= 31)
 	{
-		iterateSyncmers(readSequences, k, w, readEnd-readStart, callback, [&readSequences, read, readStart, readEnd](size_t index){ return readSequences[read].get(readStart+index); });
+		if (fw)
+		{
+			iterateSyncmers(readSequences, k, w, readEnd-readStart, callback, [&readSequences, read, readStart, readEnd](size_t index){ return readSequences[read].get(readStart+index); });
+		}
+		else
+		{
+			iterateSyncmers(readSequences, k, w, readEnd-readStart, callback, [&readSequences, read, readStart, readEnd](size_t index){ return 3-readSequences[read].get(readSequences[read].size() - 1 - (readStart+index)); });
+		}
 	}
 	else
 	{
-		iterateSyncmers(readSequences, k, w, readEnd-readStart, callback, [&readSequences, read, readStart, readEnd](size_t index){ return 3-readSequences[read].get(readSequences[read].size() - 1 - (readStart+index)); });
+		if (fw)
+		{
+			iterateSyncmersBigK(readSequences, k, w, readEnd-readStart, callback, [&readSequences, read, readStart, readEnd](size_t index){ return readSequences[read].get(readStart+index); });
+		}
+		else
+		{
+			iterateSyncmersBigK(readSequences, k, w, readEnd-readStart, callback, [&readSequences, read, readStart, readEnd](size_t index){ return 3-readSequences[read].get(readSequences[read].size() - 1 - (readStart+index)); });
+		}
 	}
 }
 
@@ -180,6 +250,45 @@ void removeKmer(phmap::flat_hash_map<uint64_t, uint64_t>& firstKmerPositionInLef
 	}
 }
 
+void removeHashCollisionMatches(const std::vector<TwobitString>& readSequences, MatchGroup& mappingMatch, const size_t k)
+{
+	for (size_t matchi = mappingMatch.matches.size()-1; matchi < mappingMatch.matches.size(); matchi--)
+	{
+		for (size_t i = mappingMatch.matches[matchi].length-1+k-1; i < mappingMatch.matches[matchi].length+k; i--)
+		{
+			uint8_t leftChar = readSequences[mappingMatch.leftRead].get(mappingMatch.leftStart+(size_t)mappingMatch.matches[matchi].leftStart+i);
+			uint8_t rightChar;
+			if (mappingMatch.rightFw)
+			{
+				rightChar = readSequences[mappingMatch.rightRead].get(mappingMatch.rightStart+(size_t)mappingMatch.matches[matchi].rightStart+i);
+			}
+			else
+			{
+				rightChar = 3-readSequences[mappingMatch.rightRead].get(readSequences[mappingMatch.rightRead].size()-1-(mappingMatch.rightStart+(size_t)mappingMatch.matches[matchi].rightStart+i));
+			}
+			if (leftChar == rightChar) continue;
+			// std::cerr << "chop match leftread " << mappingMatch.leftRead << " rightread " << mappingMatch.rightRead << " " << (mappingMatch.rightFw ? "fw" : "bw") << " left " << mappingMatch.leftStart+(size_t)mappingMatch.matches[matchi].leftStart+i << " (" << (int)leftChar << ") right " << mappingMatch.rightStart+(size_t)mappingMatch.matches[matchi].rightStart+i << " (" << (int)rightChar << ")" << std::endl;
+			if (i+1 < mappingMatch.matches[matchi].length)
+			{
+				mappingMatch.matches.emplace_back();
+				mappingMatch.matches.back().leftStart = mappingMatch.matches[matchi].leftStart + i + 1;
+				mappingMatch.matches.back().rightStart = mappingMatch.matches[matchi].rightStart + i + 1;
+				mappingMatch.matches.back().length = mappingMatch.matches[matchi].length - (i + 1);
+			}
+			if (i >= k)
+			{
+				mappingMatch.matches[matchi].length = i-(k-1);
+			}
+			else
+			{
+				std::swap(mappingMatch.matches[matchi], mappingMatch.matches.back());
+				mappingMatch.matches.pop_back();
+				break;
+			}
+		}
+	}
+}
+
 void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& mappingMatch, const size_t k, const size_t d)
 {
 	thread_local size_t lastLeftRead = std::numeric_limits<size_t>::max();
@@ -188,8 +297,7 @@ void getKmerMatches(const std::vector<TwobitString>& readSequences, MatchGroup& 
 	thread_local std::vector<std::pair<uint64_t, size_t>> leftSyncmers;
 	assert(mappingMatch.leftEnd - mappingMatch.leftStart < std::numeric_limits<uint16_t>::max());
 	assert(mappingMatch.rightEnd - mappingMatch.rightStart < std::numeric_limits<uint16_t>::max());
-	const size_t syncmerw = 7;
-	assert(k <= 31);
+	const size_t syncmerw = k > 11 ? 7 : (k/2);
 	assert(k % 2 == 1);
 	size_t leftStart = mappingMatch.leftStart;
 	size_t leftEnd = mappingMatch.leftEnd;
@@ -323,16 +431,19 @@ void removeContainedKmerMatches(MatchGroup& matches)
 	}
 }
 
-void addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& readSequences, std::vector<MatchGroup>& matches, const size_t graphk, const size_t graphd)
+std::vector<MatchGroup> addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& readSequences, const std::vector<MatchGroup>& matches, const size_t graphk, const size_t graphd)
 {
+	const size_t SVLengthThreshold = 10000 + graphk;
 	std::atomic<size_t> kmerMatchCount;
 	kmerMatchCount = 0;
 	size_t nextIndex = 0;
 	std::mutex indexMutex;
+	std::mutex resultMutex;
 	std::vector<std::thread> threads;
+	std::vector<MatchGroup> result;
 	for (size_t i = 0; i < numThreads; i++)
 	{
-		threads.emplace_back([&matches, &readSequences, graphk, graphd, &nextIndex, &indexMutex, &kmerMatchCount](){
+		threads.emplace_back([&matches, &readSequences, graphk, graphd, &nextIndex, &indexMutex, &resultMutex, &kmerMatchCount, &result, SVLengthThreshold](){
 			while (true)
 			{
 				size_t startIndex = 0;
@@ -347,10 +458,84 @@ void addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& re
 				if (startIndex >= matches.size()) break;
 				for (size_t i = startIndex; i < endIndex; i++)
 				{
-					getKmerMatches(readSequences, matches[i], graphk, graphd);
-					removeContainedKmerMatches(matches[i]);
-					std::sort(matches[i].matches.begin(), matches[i].matches.end(), [](auto left, auto right) { return left.leftStart < right.leftStart; });
-					kmerMatchCount += matches[i].matches.size();
+					std::vector<MatchGroup> tmp;
+					size_t leftstart = matches[i].leftStart;
+					size_t leftend = matches[i].leftEnd;
+					size_t rightstart = matches[i].rightStart;
+					size_t rightend = matches[i].rightEnd;
+					size_t left = matches[i].leftRead;
+					size_t right = matches[i].rightRead;
+					bool rightFw = matches[i].rightFw;
+					size_t numAlnChunks = std::max(leftend+1-leftstart, rightend+1-rightstart)/(std::numeric_limits<uint16_t>::max()-graphk-graphd-100)+1;
+					assert(numAlnChunks >= 1);
+					if (numAlnChunks == 1)
+					{
+						tmp.emplace_back();
+						tmp.back().leftRead = left;
+						tmp.back().rightRead = right;
+						tmp.back().rightFw = rightFw;
+						tmp.back().leftStart = leftstart;
+						tmp.back().leftEnd = leftend+1;
+						tmp.back().rightStart = rightstart;
+						tmp.back().rightEnd = rightend+1;
+					}
+					else
+					{
+						assert(numAlnChunks >= 2);
+						size_t leftPerChunk = (double)(leftend+1-leftstart)/(double)numAlnChunks;
+						size_t rightPerChunk = (double)(rightend+1-rightstart)/(double)numAlnChunks;
+						for (size_t l = 0; l < numAlnChunks; l++)
+						{
+							tmp.emplace_back();
+							tmp.back().leftRead = left;
+							tmp.back().rightRead = right;
+							tmp.back().rightFw = rightFw;
+							tmp.back().leftStart = leftstart + l * leftPerChunk;
+							tmp.back().leftEnd = leftstart + (l+1) * leftPerChunk + graphk + graphd;
+							tmp.back().rightStart = rightstart + l * rightPerChunk;
+							tmp.back().rightEnd = rightstart + (l+1) * rightPerChunk + graphk + graphd;
+						}
+						tmp.back().leftEnd = leftend+1;
+						tmp.back().rightEnd = rightend+1;
+					}
+					bool valid = true;
+					size_t lastLeftEnd = leftstart;
+					size_t lastRightEnd = rightstart;
+					for (size_t j = 0; j < tmp.size(); j++)
+					{
+						getKmerMatches(readSequences, tmp[j], graphk, graphd);
+						if (graphk > 31) removeHashCollisionMatches(readSequences, tmp[j], graphk);
+						removeContainedKmerMatches(tmp[j]);
+						std::sort(tmp[j].matches.begin(), tmp[j].matches.end(), [](auto left, auto right) { return left.leftStart < right.leftStart; });
+						for (auto match : tmp[j].matches)
+						{
+							if (tmp[j].leftStart + (size_t)match.leftStart > lastLeftEnd + SVLengthThreshold)
+							{
+								valid = false;
+								break;
+							}
+							if (tmp[j].rightStart + (size_t)match.rightStart > lastRightEnd + SVLengthThreshold)
+							{
+								valid = false;
+								break;
+							}
+							lastLeftEnd = tmp[j].leftStart + (size_t)match.leftStart + (size_t)match.length;
+							lastRightEnd = tmp[j].rightStart + (size_t)match.rightStart + (size_t)match.length;
+						}
+						if (!valid) break;
+					}
+					if (lastLeftEnd+SVLengthThreshold < leftend) valid = false;
+					if (lastRightEnd+SVLengthThreshold < rightend) valid = false;
+					if (valid)
+					{
+						std::lock_guard<std::mutex> lock { resultMutex };
+						kmerMatchCount += matches[i].matches.size();
+						result.insert(result.end(), tmp.begin(), tmp.end());
+						for (size_t j = 0; j < tmp.size(); j++)
+						{
+							kmerMatchCount += tmp[j].matches.size();
+						}
+					}
 				}
 			}
 		});
@@ -360,4 +545,5 @@ void addKmerMatches(const size_t numThreads, const std::vector<TwobitString>& re
 		threads[i].join();
 	}
 	std::cerr << kmerMatchCount << " kmer matches" << std::endl;
+	return result;
 }

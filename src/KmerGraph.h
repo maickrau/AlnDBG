@@ -8,6 +8,7 @@
 #include "MostlySparse2DHashmap.h"
 #include "MatchGroup.h"
 #include "Common.h"
+#include "TwobitString.h"
 
 class KmerGraph
 {
@@ -16,6 +17,6 @@ public:
 	std::vector<size_t> lengths;
 };
 
-std::pair<KmerGraph, std::vector<ReadPathBundle>> makeKmerGraph(const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage);
+std::pair<KmerGraph, std::vector<ReadPathBundle>> makeKmerGraph(const std::vector<TwobitString>& readSequences, const std::vector<size_t>& readLengths, const std::vector<MatchGroup>& matches, const size_t minCoverage, const size_t numThreads, const size_t graphk);
 
 #endif

@@ -16,60 +16,9 @@
 #include "GraphPhaser.h"
 #include "GraphResolver.h"
 #include "AnchorFinder.h"
+#include "ChunkmerFilter.h"
 
-std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getChunksPerRead(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadLengths, const std::vector<bool>& useTheseChunks)
-{
-	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead;
-	chunksPerRead.resize(rawReadLengths.size());
-	matchIndex.iterateChunks([&chunksPerRead, &rawReadLengths, &useTheseChunks](const size_t i, const ReadMatchposStorage& reads)
-	{
-		if (!useTheseChunks[i]) return;
-		for (std::tuple<uint32_t, uint32_t, uint32_t> t : reads)
-		{
-			chunksPerRead[std::get<0>(t)].emplace_back(std::get<1>(t), std::get<2>(t), i);
-		}
-	});
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (auto& t : chunksPerRead[i])
-		{
-			if (std::get<0>(t) & 0x70000000)
-			{
-				assert(std::get<1>(t) & 0x70000000);
-				std::swap(std::get<0>(t), std::get<1>(t));
-				std::get<0>(t) ^= 0x70000000;
-				std::get<1>(t) ^= 0x70000000;
-				std::get<2>(t) ^= firstBitUint64_t;
-				std::get<0>(t) = rawReadLengths[i] - std::get<0>(t);
-				std::get<1>(t) = rawReadLengths[i] - std::get<1>(t);
-			}
-		}
-		std::sort(chunksPerRead[i].begin(), chunksPerRead[i].end());
-	}
-	return chunksPerRead;
-}
-
-std::vector<std::pair<size_t, bool>> getParent(const MatchIndex& matchIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
-{
-	std::vector<std::pair<size_t, bool>> parent;
-	const size_t count = matchIndex.numWindowChunks() - matchIndex.numUniqueChunks();
-	for (size_t i = 0; i < count; i++)
-	{
-		parent.emplace_back(i, true);
-	}
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
-		{
-			if (std::get<0>(chunksPerRead[i][j]) != std::get<0>(chunksPerRead[i][j-1])) continue;
-			if (std::get<1>(chunksPerRead[i][j]) != std::get<1>(chunksPerRead[i][j-1])) continue;
-			merge(parent, std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t, std::get<2>(chunksPerRead[i][j]) & maskUint64_t, (std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t) == (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t));
-		}
-	}
-	return parent;
-}
-
-void writeGraph(const std::string& filename, const std::vector<std::vector<size_t>>& lengths, const std::vector<size_t>& coverages, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage)
+void writeGraph(const std::string& filename, const std::vector<std::vector<size_t>>& lengths, const std::vector<size_t>& coverages, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
 {
 	std::ofstream graph { filename };
 	for (size_t i = 0; i < coverages.size(); i++)
@@ -83,7 +32,8 @@ void writeGraph(const std::string& filename, const std::vector<std::vector<size_
 	for (auto pair : edgeCoverage)
 	{
 		if (pair.second < 2) continue;
-		graph << "L\t" << (pair.first.first & maskUint64_t) << "\t" << ((pair.first.first & firstBitUint64_t) ? "+" : "-") << "\t" << (pair.first.second & maskUint64_t) << "\t" << ((pair.first.second & firstBitUint64_t) ? "+" : "-") << "\t0M\tec:i:" << pair.second << std::endl;
+		assert(edgeOverlaps.count(pair.first) == 1);
+		graph << "L\t" << (pair.first.first & maskUint64_t) << "\t" << ((pair.first.first & firstBitUint64_t) ? "+" : "-") << "\t" << (pair.first.second & maskUint64_t) << "\t" << ((pair.first.second & firstBitUint64_t) ? "+" : "-") << "\t" << edgeOverlaps.at(pair.first) << "M\tec:i:" << pair.second << std::endl;
 	}
 }
 
@@ -113,6 +63,34 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCo
 	return std::make_pair(lengths, coverages);
 }
 
+phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeOverlaps(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, std::vector<std::pair<size_t, bool>>& parent)
+{
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<size_t>> overlaps;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
+		{
+			if (std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+			auto prev = find(parent, std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t);
+			auto curr = find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+			if ((std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t) ^ firstBitUint64_t) prev.second = !prev.second;
+			if ((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) ^ firstBitUint64_t) curr.second = !curr.second;
+			auto pairkey = MBG::canon(prev, curr);
+			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
+			size_t overlap = 0;
+			if (std::get<1>(chunksPerRead[i][j-1]) > std::get<0>(chunksPerRead[i][j])) overlap = std::get<1>(chunksPerRead[i][j-1]) - std::get<0>(chunksPerRead[i][j]);
+			overlaps[key].push_back(overlap);
+		}
+	}
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> result;
+	for (auto& pair : overlaps)
+	{
+		std::sort(pair.second.begin(), pair.second.end());
+		result[pair.first] = pair.second[pair.second.size()/2];
+	}
+	return result;
+}
+
 phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, std::vector<std::pair<size_t, bool>>& parent)
 {
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage;
@@ -123,14 +101,48 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(con
 			if (std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
 			auto prev = find(parent, std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t);
 			auto curr = find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			if (std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t) prev.second = !prev.second;
-			if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) curr.second = !curr.second;
-			auto pairkey = canon(prev, curr);
+			if ((std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t) ^ firstBitUint64_t) prev.second = !prev.second;
+			if ((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) ^ firstBitUint64_t) curr.second = !curr.second;
+			auto pairkey = MBG::canon(prev, curr);
 			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 			edgeCoverage[key] += 1;
 		}
 	}
 	return edgeCoverage;
+}
+
+void removeContainedChunks(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, std::vector<std::pair<size_t, bool>>& parent, std::vector<bool>& useTheseChunks)
+{
+	phmap::flat_hash_set<size_t> contained;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		size_t coveredUntil = 0;
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (std::get<1>(chunksPerRead[i][j]) < coveredUntil)
+			{
+				contained.insert(find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t).first);
+			}
+			else
+			{
+				for (size_t k = 0; k < j; k++)
+				{
+					if (std::get<0>(chunksPerRead[i][k]) == std::get<0>(chunksPerRead[i][j])) break;
+					if (std::get<1>(chunksPerRead[i][k]) >= std::get<1>(chunksPerRead[i][j]))
+					{
+						contained.insert(find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t).first);
+						break;
+					}
+				}
+			}
+			coveredUntil = std::max(coveredUntil, std::get<1>(chunksPerRead[i][j]));
+		}
+	}
+	for (size_t i = 0; i < useTheseChunks.size(); i++)
+	{
+		if (!useTheseChunks[i]) continue;
+		if (contained.count(find(parent, i).first) == 1) useTheseChunks[i] = false;
+	}
 }
 
 void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadLengths)
@@ -144,7 +156,30 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead, parent);
 	{
 		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead, parent);
-		writeGraph("graph-round1.gfa", lengths, coverages, edgeCoverage);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead, parent);
+		writeGraph("graph-round1.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
+		std::ofstream pathfile { "fakepaths.txt" };
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+				auto t = chunksPerRead[i][j];
+				uint64_t rawnode = std::get<2>(t);
+				auto newnode = find(parent, rawnode & maskUint64_t);
+				uint64_t realnode = ((rawnode & firstBitUint64_t) ^ (newnode.second ? 0 : firstBitUint64_t)) + newnode.first;
+				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((realnode & firstBitUint64_t) ? ">" : "<") << (realnode & maskUint64_t) << std::endl;
+			}
+		}
+	}
+	removeContainedChunks(chunksPerRead, parent, useTheseChunks);
+	chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
+	parent = getParent(matchIndex, chunksPerRead);
+	{
+		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead, parent);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead, parent);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead, parent);
+		writeGraph("graph-round2.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
 	}
 	for (size_t i = 0; i < useTheseChunks.size(); i++)
 	{
@@ -153,13 +188,6 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 			useTheseChunks[i] = false;
 		}
 	}
-	// chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
-	// parent = getParent(matchIndex, chunksPerRead);
-	// {
-	// 	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead, parent);
-	// 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead, parent);
-	// 	writeGraph("graph-round2.gfa", lengths, coverages, edgeCoverage);
-	// }
 	phmap::flat_hash_map<size_t, size_t> countRepetitive;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -167,7 +195,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			std::pair<size_t, bool> pairkey = find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) pairkey.second = !pairkey.second;
+			if ((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) ^ firstBitUint64_t) pairkey.second = !pairkey.second;
 			uint64_t key = pairkey.first + (pairkey.second ? firstBitUint64_t : 0);
 			if (lastPos.count(key) == 1)
 			{
@@ -190,7 +218,8 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	parent = getParent(matchIndex, chunksPerRead);
 	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead, parent);
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead, parent);
-	writeGraph("graph.gfa", lengths, coverages, edgeCoverage);
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead, parent);
+	writeGraph("graph.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
 }
 
 int main(int argc, char** argv)
@@ -231,6 +260,5 @@ int main(int argc, char** argv)
 	{
 		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
 	}
-	auto rawReadLengths = storage.getRawReadLengths();
-	makeGraph(matchIndex, rawReadLengths);
+	makeGraph(matchIndex, readBasepairLengths);
 }

@@ -4,11 +4,23 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <thread>
+#include "MBGCommon.h"
 #include "SparseEdgeContainer.h"
 #include "MostlySparse2DHashmap.h"
 
 const uint64_t firstBitUint64_t = 1ull << 63ull;
 const uint64_t maskUint64_t = firstBitUint64_t-1;
+
+inline auto reverse(auto x) -> decltype(MBG::reverse(x))
+{
+	return MBG::reverse(x);
+}
+
+inline auto canon(auto x, auto y) -> decltype(MBG::canon(x, y))
+{
+	return MBG::canon(x, y);
+}
 
 class ReadPathBundle
 {
@@ -28,5 +40,29 @@ public:
 
 SparseEdgeContainer getActiveEdges(const MostlySparse2DHashmap<uint8_t, size_t>& edges, const size_t numNodes);
 size_t intersectSize(const std::vector<size_t>& left, const std::vector<size_t>& right);
+
+template <typename F>
+void iterateMultithreaded(size_t start, size_t end, size_t numThreads, F callback)
+{
+	std::vector<std::thread> threads;
+	std::atomic<size_t> nextIndex;
+	nextIndex = start;
+	for (size_t i = 0; i < numThreads; i++)
+	{
+		threads.emplace_back([&nextIndex, start, end, callback]()
+		{
+			while (true)
+			{
+				size_t gotIndex = nextIndex++;
+				if (gotIndex >= end) break;
+				callback(gotIndex);
+			}
+		});
+	}
+	for (size_t i = 0; i < numThreads; i++)
+	{
+		threads[i].join();
+	}
+}
 
 #endif

@@ -113,6 +113,31 @@ bool isReachableWithoutNodeEvenBackwards(const uint64_t startNode, const uint64_
 	return false;
 }
 
+bool cutsGraph(const UnitigGraph& unitigGraph, const SparseEdgeContainer& edges, const uint64_t midNode, const std::vector<bool>& anchor)
+{
+	phmap::flat_hash_set<uint64_t> reachableFromBw;
+	std::vector<uint64_t> checkStack;
+	checkStack.emplace_back(midNode);
+	while (checkStack.size() >= 1)
+	{
+		auto top = checkStack.back();
+		checkStack.pop_back();
+		if (reachableFromBw.count(top) == 1) continue;
+		if (top == midNode + firstBitUint64_t) return false;
+		reachableFromBw.insert(top);
+		if (!anchor[top & maskUint64_t] && (top & maskUint64_t) != midNode)
+		{
+			checkStack.emplace_back(top ^ firstBitUint64_t);
+		}
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			checkStack.emplace_back(edge.first + (edge.second ? 0 : firstBitUint64_t));
+		}
+	}
+	assert(reachableFromBw.count(midNode + firstBitUint64_t) == 0);
+	return true;
+}
+
 bool blocksGraphPath(const UnitigGraph& unitigGraph, const SparseEdgeContainer& edges, const uint64_t startNode, const uint64_t midNode, const uint64_t endNode, const std::vector<bool>& anchor)
 {
 	if (!isReachableWithoutNodeEvenBackwards(startNode, endNode, std::numeric_limits<size_t>::max(), edges, anchor)) return false;
@@ -350,6 +375,33 @@ SparseEdgeContainer getAnchorEdges(const UnitigGraph& unitigGraph, const std::ve
 	return result;
 }
 
+std::vector<uint64_t> getReachableAnchors(const SparseEdgeContainer& edges, const uint64_t start, const std::vector<bool>& anchor)
+{
+	assert(!anchor[start & maskUint64_t]);
+	std::vector<uint64_t> stack;
+	stack.emplace_back(start);
+	phmap::flat_hash_set<uint64_t> visited;
+	while (stack.size() >= 1)
+	{
+		auto top = stack.back();
+		stack.pop_back();
+		if (visited.count(top) == 1) continue;
+		visited.insert(top);
+		if (anchor[top & maskUint64_t]) continue;
+		for (auto edge : edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			stack.push_back(edge.first + (edge.second ? firstBitUint64_t : 0));
+		}
+	}
+	std::vector<uint64_t> result;
+	for (uint64_t node : visited)
+	{
+		if (!anchor[node & maskUint64_t]) continue;
+		result.emplace_back(node);
+	}
+	return result;
+}
+
 void setReachableAnchors(const SparseEdgeContainer& edges, std::vector<std::vector<uint64_t>>& forwardReachableAnchors, std::vector<std::vector<uint64_t>>& backwardReachableAnchors, const uint64_t startNode, const std::vector<bool>& anchor)
 {
 	std::vector<uint64_t> stack;
@@ -421,38 +473,17 @@ void extendAnchors(const UnitigGraph& unitigGraph, const std::vector<ReadPathBun
 			tryExtendingThese[i] = false;
 		}
 	}
-	std::vector<std::vector<uint64_t>> forwardReachableAnchors;
-	std::vector<std::vector<uint64_t>> backwardReachableAnchors;
-	forwardReachableAnchors.resize(unitigGraph.nodeCount());
-	backwardReachableAnchors.resize(unitigGraph.nodeCount());
 	std::vector<bool> anchorsBeforeExtension = anchor;
-	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
-	{
-		if (!anchor[i]) continue;
-		if (!tryExtendingThese[i]) continue;
-		setReachableAnchors(edges, forwardReachableAnchors, backwardReachableAnchors, i + firstBitUint64_t, anchor);
-		setReachableAnchors(edges, forwardReachableAnchors, backwardReachableAnchors, i, anchor);
-	}
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
 		if (anchor[i]) continue;
 		if (!tryExtendingThese[i]) continue;
-		if (forwardReachableAnchors[i].size() != 1 && backwardReachableAnchors[i].size() != 1) continue;
-		if (forwardReachableAnchors[i].size() == 0 || backwardReachableAnchors[i].size() == 0) continue;
-		bool anyNotBlocked = false;
-		for (size_t j = 0; j < forwardReachableAnchors[i].size(); j++)
-		{
-			for (size_t k = 0; k < backwardReachableAnchors[i].size(); k++)
-			{
-				if (!blocksGraphPath(unitigGraph, edges, backwardReachableAnchors[i][k], i, forwardReachableAnchors[i][j] ^ firstBitUint64_t, anchorsBeforeExtension))
-				{
-					anyNotBlocked = true;
-					break;
-				}
-			}
-			if (anyNotBlocked) break;
-		}
-		if (anyNotBlocked) continue;
+		if (!cutsGraph(unitigGraph, edges, i, anchorsBeforeExtension)) continue;
+		auto fwAnchors = getReachableAnchors(edges, i+firstBitUint64_t, anchorsBeforeExtension);
+		if (fwAnchors.size() == 0) continue;
+		auto bwAnchors = getReachableAnchors(edges, i, anchorsBeforeExtension);
+		if (bwAnchors.size() == 0) continue;
+		if (fwAnchors.size() != 1 && bwAnchors.size() != 1) continue;
 		anchor[i] = true;
 	}
 }
@@ -471,6 +502,7 @@ size_t getPloidy(const std::vector<uint64_t>& nodes, const UnitigGraph& unitigGr
 	}
 	assert(coverageDivisor > 0);
 	size_t estimatedPloidy = (coverageSum / coverageDivisor) / approxOneHapCoverage + 0.5;
+	if (coverageDivisor > 1000 && estimatedPloidy == 0 && (coverageSum / coverageDivisor) >= approxOneHapCoverage*0.25) estimatedPloidy = 1;
 	if (coverageDivisor > 10000 && estimatedPloidy == 0 && (coverageSum / coverageDivisor) >= 3) estimatedPloidy = 1;
 	return estimatedPloidy;
 }
@@ -497,19 +529,6 @@ std::vector<uint64_t> getChain(std::vector<bool>& checked, const size_t startNod
 {
 	assert(edges.size() == checked.size());
 	assert(startNode < checked.size());
-	for (size_t i = 0; i < edges.size(); i++)
-	{
-		std::pair<size_t, bool> fw { i, true };
-		for (auto pair : edges.getEdges(fw))
-		{
-			assert(edges.hasEdge(reverse(pair), reverse(fw)));
-		}
-		std::pair<size_t, bool> bw { i, false };
-		for (auto pair : edges.getEdges(bw))
-		{
-			assert(edges.hasEdge(reverse(pair), reverse(bw)));
-		}
-	}
 	assert(!checked[startNode]);
 	std::vector<uint64_t> fwChain = getChainOneWay(startNode + firstBitUint64_t, edges);
 	std::vector<uint64_t> bwChain = getChainOneWay(startNode, edges);
@@ -549,7 +568,7 @@ std::vector<uint64_t> getChain(std::vector<bool>& checked, const size_t startNod
 	return bwChain;
 }
 
-void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<int>>& distances, const std::vector<bool> anchor, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths)
+void getDistances(phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<int>>& distances, const std::vector<bool>& anchor, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths)
 {
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
@@ -629,7 +648,7 @@ double average(const std::vector<int>& values)
 	return sum / values.size();
 }
 
-void addOffsets(std::vector<AnchorChain>& chains, const std::vector<bool> anchor, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths)
+void addOffsets(std::vector<AnchorChain>& chains, const std::vector<bool>& anchor, const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths)
 {
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<int>> distances;
 	for (size_t i = 0; i < chains.size(); i++)
@@ -880,13 +899,13 @@ void refineAnchorChainPloidies(std::vector<AnchorChain>& anchorChains, const Spa
 	}
 }
 
-std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const double approxOneHapCoverage)
+std::vector<AnchorChain> getAnchorChains(const UnitigGraph& unitigGraph, const std::vector<ReadPathBundle>& readPaths, const size_t initialAnchorMinLength, const double approxOneHapCoverage)
 {
 	std::vector<bool> anchor;
 	anchor.resize(unitigGraph.nodeCount(), false);
 	for (size_t i = 0; i < unitigGraph.nodeCount(); i++)
 	{
-		if (unitigGraph.lengths[i] >= 100) anchor[i] = true;
+		if (unitigGraph.lengths[i] >= initialAnchorMinLength) anchor[i] = true;
 	}
 	extendAnchors(unitigGraph, readPaths, anchor);
 	SparseEdgeContainer edges = getAnchorEdges(unitigGraph, readPaths, anchor, approxOneHapCoverage*.25);
@@ -949,6 +968,11 @@ std::vector<std::vector<ChainPosition>> getReadChainPositions(const UnitigGraph&
 			size_t readPos = readPaths[i].paths[j].readStartPos;
 			for (size_t k = 0; k < readPaths[i].paths[j].path.size(); k++)
 			{
+				if (k > 0) readPos -= unitigGraph.edgeKmerOverlaps.get(std::make_pair(readPaths[i].paths[j].path[k-1] & maskUint64_t, readPaths[i].paths[j].path[k-1] & firstBitUint64_t), std::make_pair(readPaths[i].paths[j].path[k] & maskUint64_t, readPaths[i].paths[j].path[k] & firstBitUint64_t));
+				if (!(readPos < readPaths[i].readLength))
+				{
+					std::cerr << "read " << i << " pos " << readPos << " len " << readPaths[i].readLength << " node " << (readPaths[i].paths[j].path[k] & maskUint64_t) << std::endl;
+				}
 				assert(readPos < readPaths[i].readLength);
 				uint64_t node = readPaths[i].paths[j].path[k];
 				readPos += unitigGraph.lengths[node & maskUint64_t];
