@@ -217,17 +217,80 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 	}
 }
 
-void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadLengths)
+size_t getNumMismatches(const std::vector<TwobitString>& readSequences, const std::tuple<size_t, size_t, uint64_t> left, const std::tuple<size_t, size_t, uint64_t> right, const size_t maxMismatches)
+{
+	assert((std::get<2>(left) & maskUint64_t) == (std::get<2>(right) & maskUint64_t));
+	size_t leftLen = std::get<1>(left) - std::get<0>(left);
+	size_t rightLen = std::get<1>(right) - std::get<0>(right);
+	if (leftLen > rightLen + maxMismatches) return maxMismatches+1;
+	if (rightLen > leftLen + maxMismatches) return maxMismatches+1;
+	return 0;
+}
+
+void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	const double mismatchFraction = 0.05;
+	const size_t mismatchFloor = 10;
+	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
+			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
+		}
+	}
+	size_t nextNum = 0;
+	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	{
+		std::sort(occurrencesPerChunk[i].begin(), occurrencesPerChunk[i].end(), [&chunksPerRead](auto left, auto right) { return std::get<1>(chunksPerRead[left.first][left.second])-std::get<0>(chunksPerRead[left.first][left.second]) < std::get<1>(chunksPerRead[right.first][right.second])-std::get<0>(chunksPerRead[right.first][right.second]); });
+		std::vector<size_t> parent;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			parent.emplace_back(j);
+		}
+		for (size_t j = 1; j < occurrencesPerChunk[i].size(); j++)
+		{
+			for (size_t k = j-1; k < occurrencesPerChunk[i].size(); k--)
+			{
+				if (find(parent, k) == find(parent, j)) continue;
+				auto left = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+				auto right = chunksPerRead[occurrencesPerChunk[i][k].first][occurrencesPerChunk[i][k].second];
+				assert(std::get<1>(left) - std::get<0>(left) >= std::get<1>(right) - std::get<0>(right));
+				size_t maxMismatches = std::max(mismatchFloor, (size_t)((std::get<1>(left) - std::get<0>(left))*mismatchFraction));
+				if ((std::get<1>(left) - std::get<0>(left)) - (std::get<1>(right) - std::get<0>(right)) >= maxMismatches) break;
+				size_t mismatches = getNumMismatches(readSequences, left, right, maxMismatches);
+				if (mismatches > maxMismatches) continue;
+				merge(parent, j, k);
+			}
+		}
+		phmap::flat_hash_map<size_t, size_t> keyToNode;
+		for (size_t j = 0; j < parent.size(); j++)
+		{
+			size_t key = find(parent, j);
+			if (keyToNode.count(key) == 1) continue;
+			keyToNode[key] = nextNum;
+			nextNum += 1;
+		}
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
+		}
+	}
+}
+
+void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences)
 {
 	std::vector<bool> useTheseChunks;
 	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
 	mergePerLocation(matchIndex, chunksPerRead);
 	splitPerLength(chunksPerRead);
-	std::vector<std::vector<size_t>> lengths;
-	std::vector<size_t> coverages;
-	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
 	{
+		std::vector<std::vector<size_t>> lengths;
+		std::vector<size_t> coverages;
+		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
 		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
 		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
 		writeGraph("graph-round1.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
@@ -243,13 +306,27 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 			}
 		}
 	}
-	chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
+	splitPerSequenceIdentity(readSequences, chunksPerRead);
 	{
+		std::vector<std::vector<size_t>> lengths;
+		std::vector<size_t> coverages;
 		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
 		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
 		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
 		writeGraph("graph-round2.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-	}/*
+		std::ofstream pathfile { "fakepaths2.txt" };
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+				auto t = chunksPerRead[i][j];
+				uint64_t rawnode = std::get<2>(t);
+				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
+			}
+		}
+	}
+	/*
 	for (size_t i = 0; i < useTheseChunks.size(); i++)
 	{
 		if (coverages[find(parent, i).first] >= 40)
@@ -329,5 +406,5 @@ int main(int argc, char** argv)
 	{
 		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
 	}
-	makeGraph(matchIndex, readBasepairLengths);
+	makeGraph(matchIndex, readBasepairLengths, readSequences);
 }
