@@ -42,10 +42,18 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getChunksPerRead(
 	return chunksPerRead;
 }
 
-std::vector<std::pair<size_t, bool>> getParent(const MatchIndex& matchIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+std::vector<std::pair<size_t, bool>> getParent(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
 	std::vector<std::pair<size_t, bool>> parent;
-	const size_t count = matchIndex.numWindowChunks() - matchIndex.numUniqueChunks();
+	size_t count = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			count = std::max(count, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+		}
+	}
+	count += 1;
 	for (size_t i = 0; i < count; i++)
 	{
 		parent.emplace_back(i, true);
@@ -56,7 +64,6 @@ std::vector<std::pair<size_t, bool>> getParent(const MatchIndex& matchIndex, con
 		{
 			if (std::get<0>(chunksPerRead[i][j]) != std::get<0>(chunksPerRead[i][j-1])) continue;
 			if (std::get<1>(chunksPerRead[i][j]) != std::get<1>(chunksPerRead[i][j-1])) continue;
-			std::cerr << (std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t) << " " << (std::get<2>(chunksPerRead[i][j]) & maskUint64_t) << " " << (((std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t) == (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t)) ? "fw" : "bw") << std::endl;
 			merge(parent, std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t, std::get<2>(chunksPerRead[i][j]) & maskUint64_t, (std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t) == (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t));
 		}
 	}
@@ -68,7 +75,7 @@ std::vector<bool> getFilteredValidChunks(const MatchIndex& matchIndex, const std
 	std::vector<bool> useTheseChunks;
 	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
-	std::vector<std::pair<size_t, bool>> parent = getParent(matchIndex, chunksPerRead);
+	std::vector<std::pair<size_t, bool>> parent = getParent(chunksPerRead);
 	std::vector<size_t> coverages;
 	coverages.resize(parent.size(), 0);
 	for (size_t i = 0; i < chunksPerRead.size(); i++)

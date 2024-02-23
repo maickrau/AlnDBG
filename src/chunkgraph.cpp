@@ -37,18 +37,21 @@ void writeGraph(const std::string& filename, const std::vector<std::vector<size_
 	}
 }
 
-std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCoverages(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, std::vector<std::pair<size_t, bool>>& parent)
+std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCoverages(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
 	std::vector<std::vector<size_t>> lengths;
 	std::vector<size_t> coverages;
-	coverages.resize(parent.size(), 0);
-	lengths.resize(parent.size());
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			auto key = find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			lengths[key.first].emplace_back(std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]));
+			if ((std::get<2>(chunksPerRead[i][j]) & maskUint64_t) >= coverages.size())
+			{
+				coverages.resize((std::get<2>(chunksPerRead[i][j]) & maskUint64_t)+1, 0);
+				lengths.resize((std::get<2>(chunksPerRead[i][j]) & maskUint64_t)+1);
+			}
+			if (j > 1 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+			lengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t].emplace_back(std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]));
 		}
 	}
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -56,14 +59,13 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCo
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			if (j > 1 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-			auto key = find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			coverages[key.first] += 1;
+			coverages[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] += 1;
 		}
 	}
 	return std::make_pair(lengths, coverages);
 }
 
-phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeOverlaps(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, std::vector<std::pair<size_t, bool>>& parent)
+phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeOverlaps(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, std::vector<size_t>> overlaps;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -71,11 +73,9 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeOverlaps(cons
 		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
 		{
 			if (std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-			auto prev = find(parent, std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t);
-			auto curr = find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			if ((std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t) ^ firstBitUint64_t) prev.second = !prev.second;
-			if ((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) ^ firstBitUint64_t) curr.second = !curr.second;
-			auto pairkey = MBG::canon(prev, curr);
+			auto prev = std::get<2>(chunksPerRead[i][j-1]);
+			auto curr = std::get<2>(chunksPerRead[i][j]);
+			auto pairkey = MBG::canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
 			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 			size_t overlap = 0;
 			if (std::get<1>(chunksPerRead[i][j-1]) > std::get<0>(chunksPerRead[i][j])) overlap = std::get<1>(chunksPerRead[i][j-1]) - std::get<0>(chunksPerRead[i][j]);
@@ -91,7 +91,7 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeOverlaps(cons
 	return result;
 }
 
-phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, std::vector<std::pair<size_t, bool>>& parent)
+phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -99,11 +99,9 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(con
 		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
 		{
 			if (std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-			auto prev = find(parent, std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t);
-			auto curr = find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			if ((std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t) ^ firstBitUint64_t) prev.second = !prev.second;
-			if ((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) ^ firstBitUint64_t) curr.second = !curr.second;
-			auto pairkey = MBG::canon(prev, curr);
+			auto prev = std::get<2>(chunksPerRead[i][j-1]);
+			auto curr = std::get<2>(chunksPerRead[i][j]);
+			auto pairkey = MBG::canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
 			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 			edgeCoverage[key] += 1;
 		}
@@ -111,7 +109,7 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(con
 	return edgeCoverage;
 }
 
-void removeContainedChunks(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, std::vector<std::pair<size_t, bool>>& parent, std::vector<bool>& useTheseChunks)
+void removeContainedChunks(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, std::vector<bool>& useTheseChunks)
 {
 	phmap::flat_hash_set<size_t> contained;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -121,7 +119,7 @@ void removeContainedChunks(const std::vector<std::vector<std::tuple<size_t, size
 		{
 			if (std::get<1>(chunksPerRead[i][j]) < coveredUntil)
 			{
-				contained.insert(find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t).first);
+				contained.insert(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
 			}
 			else
 			{
@@ -130,7 +128,7 @@ void removeContainedChunks(const std::vector<std::vector<std::tuple<size_t, size
 					if (std::get<0>(chunksPerRead[i][k]) == std::get<0>(chunksPerRead[i][j])) break;
 					if (std::get<1>(chunksPerRead[i][k]) >= std::get<1>(chunksPerRead[i][j]))
 					{
-						contained.insert(find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t).first);
+						contained.insert(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
 						break;
 					}
 				}
@@ -141,7 +139,81 @@ void removeContainedChunks(const std::vector<std::vector<std::tuple<size_t, size
 	for (size_t i = 0; i < useTheseChunks.size(); i++)
 	{
 		if (!useTheseChunks[i]) continue;
-		if (contained.count(find(parent, i).first) == 1) useTheseChunks[i] = false;
+		if (contained.count(i) == 1) useTheseChunks[i] = false;
+	}
+}
+
+void mergePerLocation(const MatchIndex& matchIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	std::vector<std::pair<size_t, bool>> parent = getParent(chunksPerRead);
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto found = find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+			uint64_t result = found.first + (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t);
+			if (!found.second) result ^= firstBitUint64_t;
+			std::get<2>(chunksPerRead[i][j]) = result;
+		}
+	}
+}
+
+void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	const double differenceFraction = 0.05;
+	const size_t differenceConstant = 50;
+	phmap::flat_hash_map<size_t, std::vector<size_t>> lengthsPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (auto t : chunksPerRead[i])
+		{
+			lengthsPerChunk[std::get<2>(t) & maskUint64_t].emplace_back(std::get<1>(t) - std::get<0>(t));
+		}
+	}
+	phmap::flat_hash_map<size_t, std::vector<size_t>> splitters;
+	for (auto& pair : lengthsPerChunk)
+	{
+		std::sort(pair.second.begin(), pair.second.end());
+		splitters[pair.first].emplace_back(0);
+		for (size_t i = 1; i < pair.second.size(); i++)
+		{
+			size_t distance = pair.second[i] - pair.second[i-1];
+			if (distance < std::max((size_t)(pair.second[i] * differenceFraction), (size_t)differenceConstant)) continue;
+			splitters[pair.first].emplace_back((pair.second[i] + pair.second[i-1])/2);
+		}
+	}
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> splitterToNode;
+	size_t nextNum = 0;
+	for (const auto& pair : splitters)
+	{
+		for (const size_t len : pair.second)
+		{
+			auto key = std::make_pair(pair.first, len);
+			assert(splitterToNode.count(key) == 0);
+			assert(nextNum == splitterToNode.size());
+			splitterToNode[key] = nextNum;
+			nextNum += 1;
+		}
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (auto& t : chunksPerRead[i])
+		{
+			assert(std::get<1>(t) > std::get<0>(t));
+			size_t distance = std::get<1>(t) - std::get<0>(t);
+			size_t newNode = std::numeric_limits<size_t>::max();
+			size_t dist = std::numeric_limits<size_t>::max();
+			for (size_t len : splitters[std::get<2>(t) & maskUint64_t])
+			{
+				if (len >= distance) break;
+				dist = len;
+			}
+			assert(dist != std::numeric_limits<size_t>::max());
+			assert(dist < distance);
+			auto key = std::make_pair(std::get<2>(t) & maskUint64_t, dist);
+			assert(splitterToNode.count(key) == 1);
+			std::get<2>(t) = (std::get<2>(t) & firstBitUint64_t) + splitterToNode.at(key);
+		}
 	}
 }
 
@@ -150,13 +222,14 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	std::vector<bool> useTheseChunks;
 	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
-	std::vector<std::pair<size_t, bool>> parent = getParent(matchIndex, chunksPerRead);
+	mergePerLocation(matchIndex, chunksPerRead);
+	splitPerLength(chunksPerRead);
 	std::vector<std::vector<size_t>> lengths;
 	std::vector<size_t> coverages;
-	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead, parent);
+	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
 	{
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead, parent);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead, parent);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
 		writeGraph("graph-round1.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
 		std::ofstream pathfile { "fakepaths.txt" };
 		for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -166,21 +239,17 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
 				auto t = chunksPerRead[i][j];
 				uint64_t rawnode = std::get<2>(t);
-				auto newnode = find(parent, rawnode & maskUint64_t);
-				uint64_t realnode = ((rawnode & firstBitUint64_t) ^ (newnode.second ? 0 : firstBitUint64_t)) + newnode.first;
-				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((realnode & firstBitUint64_t) ? ">" : "<") << (realnode & maskUint64_t) << std::endl;
+				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
 			}
 		}
 	}
-	removeContainedChunks(chunksPerRead, parent, useTheseChunks);
 	chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
-	parent = getParent(matchIndex, chunksPerRead);
 	{
-		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead, parent);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead, parent);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead, parent);
+		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
 		writeGraph("graph-round2.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-	}
+	}/*
 	for (size_t i = 0; i < useTheseChunks.size(); i++)
 	{
 		if (coverages[find(parent, i).first] >= 40)
@@ -215,11 +284,11 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 		}
 	}
 	chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
-	parent = getParent(matchIndex, chunksPerRead);
+	parent = getParent(chunksPerRead);
 	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead, parent);
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead, parent);
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead, parent);
-	writeGraph("graph.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
+	writeGraph("graph.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);*/
 }
 
 int main(int argc, char** argv)
