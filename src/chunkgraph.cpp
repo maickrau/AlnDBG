@@ -145,6 +145,7 @@ void removeContainedChunks(const std::vector<std::vector<std::tuple<size_t, size
 
 void mergePerLocation(const MatchIndex& matchIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
+	std::cerr << "merging per location" << std::endl;
 	std::vector<std::pair<size_t, bool>> parent = getParent(chunksPerRead);
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -160,6 +161,7 @@ void mergePerLocation(const MatchIndex& matchIndex, std::vector<std::vector<std:
 
 void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
+	std::cerr << "splitting per length" << std::endl;
 	const double differenceFraction = 0.05;
 	const size_t differenceConstant = 50;
 	phmap::flat_hash_map<size_t, std::vector<size_t>> lengthsPerChunk;
@@ -217,18 +219,89 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 	}
 }
 
-size_t getNumMismatches(const std::vector<TwobitString>& readSequences, const std::tuple<size_t, size_t, uint64_t> left, const std::tuple<size_t, size_t, uint64_t> right, const size_t maxMismatches)
+template <typename F1, typename F2>
+size_t getNumMismatches(F1 leftSequenceGetter, F2 rightSequenceGetter, const size_t leftSequenceLength, const size_t rightSequenceLength, const size_t maxMismatches)
+{
+	assert(leftSequenceLength >= rightSequenceLength);
+	assert(rightSequenceLength + maxMismatches >= leftSequenceLength);
+	// left sequence: left to right
+	// right sequence: up to down
+	// offset: diagonally down-right
+	// diagonal: left-right
+	std::vector<size_t> offset;
+	size_t maxBefore = (leftSequenceLength - rightSequenceLength) + (maxMismatches - (leftSequenceLength - rightSequenceLength))/2;
+	size_t maxAfter = (maxMismatches - (leftSequenceLength - rightSequenceLength))/2;
+	assert(maxBefore < maxMismatches);
+	assert(maxAfter < maxMismatches);
+	offset.resize(maxBefore + maxAfter + 1, std::numeric_limits<size_t>::max());
+	offset[maxBefore] = 0;
+	while (offset[maxBefore] < leftSequenceLength && offset[maxBefore] < rightSequenceLength && leftSequenceGetter(offset[maxBefore]) == rightSequenceGetter(offset[maxBefore])) offset[maxBefore] += 1;
+	if (leftSequenceLength == rightSequenceLength && offset[maxBefore] == leftSequenceLength) return 0;
+	// zero diagonal (top left corner) at maxBefore
+	for (size_t score = 1; score < maxMismatches; score++)
+	{
+		if (score <= maxBefore) offset[maxBefore-score] = score;
+		if (maxBefore+score < offset.size()) offset[maxBefore+score] = score;
+		for (size_t diagonal = (score < maxBefore ? (maxBefore - score) : 0); diagonal <= maxBefore + score && diagonal < offset.size(); diagonal++)
+		{
+			assert(offset[diagonal] != std::numeric_limits<size_t>::max());
+			offset[diagonal] += 1;
+			if (diagonal > 0 && offset[diagonal-1] != std::numeric_limits<size_t>::max())
+			{
+				offset[diagonal] = std::max(offset[diagonal], offset[diagonal-1]);
+			}
+			if (diagonal+1 < offset.size() && offset[diagonal+1] != std::numeric_limits<size_t>::max())
+			{
+				offset[diagonal] = std::max(offset[diagonal], offset[diagonal+1]+1);
+			}
+			offset[diagonal] = std::min(offset[diagonal], std::min(leftSequenceLength, rightSequenceLength+maxBefore-diagonal));
+		}
+		for (size_t diagonal = (score < maxBefore ? (maxBefore - score) : 0); diagonal <= maxBefore + score && diagonal < offset.size(); diagonal++)
+		{
+			assert(offset[diagonal] <= leftSequenceLength);
+			assert(offset[diagonal]+diagonal-maxBefore <= rightSequenceLength);
+			while (offset[diagonal] < leftSequenceLength && offset[diagonal]+diagonal-maxBefore < rightSequenceLength && leftSequenceGetter(offset[diagonal]) == rightSequenceGetter(offset[diagonal]+diagonal-maxBefore)) offset[diagonal] += 1;
+			if (offset[diagonal] == leftSequenceLength && offset[diagonal]+diagonal-maxBefore == rightSequenceLength) return score;
+		}
+	}
+	return maxMismatches+1;
+}
+
+size_t getNumMismatches(const std::vector<TwobitString>& readSequences, const size_t leftRead, const size_t rightRead, const std::tuple<size_t, size_t, uint64_t> left, const std::tuple<size_t, size_t, uint64_t> right, const size_t maxMismatches)
 {
 	assert((std::get<2>(left) & maskUint64_t) == (std::get<2>(right) & maskUint64_t));
 	size_t leftLen = std::get<1>(left) - std::get<0>(left);
 	size_t rightLen = std::get<1>(right) - std::get<0>(right);
+	if (rightLen > leftLen) return getNumMismatches(readSequences, rightRead, leftRead, right, left, maxMismatches);
+	assert(leftLen >= rightLen);
 	if (leftLen > rightLen + maxMismatches) return maxMismatches+1;
-	if (rightLen > leftLen + maxMismatches) return maxMismatches+1;
-	return 0;
+	if (std::get<2>(left) & firstBitUint64_t)
+	{
+		if (std::get<2>(right) & firstBitUint64_t)
+		{
+			return getNumMismatches([&readSequences, left, leftRead](size_t pos){return readSequences[leftRead].get(std::get<0>(left)+pos);}, [&readSequences, right, rightRead](size_t pos){return readSequences[rightRead].get(std::get<0>(right)+pos);}, std::get<1>(left)-std::get<0>(left)+1, std::get<1>(right)-std::get<0>(right)+1, maxMismatches);
+		}
+		else
+		{
+			return getNumMismatches([&readSequences, left, leftRead](size_t pos){return readSequences[leftRead].get(std::get<0>(left)+pos);}, [&readSequences, right, rightRead](size_t pos){return 3-readSequences[rightRead].get(std::get<1>(right)-pos);}, std::get<1>(left)-std::get<0>(left)+1, std::get<1>(right)-std::get<0>(right)+1, maxMismatches);
+		}
+	}
+	else
+	{
+		if (std::get<2>(right) & firstBitUint64_t)
+		{
+			return getNumMismatches([&readSequences, left, leftRead](size_t pos){return 3-readSequences[leftRead].get(std::get<1>(left)-pos);}, [&readSequences, right, rightRead](size_t pos){return readSequences[rightRead].get(std::get<0>(right)+pos);}, std::get<1>(left)-std::get<0>(left)+1, std::get<1>(right)-std::get<0>(right)+1, maxMismatches);
+		}
+		else
+		{
+			return getNumMismatches([&readSequences, left, leftRead](size_t pos){return 3-readSequences[leftRead].get(std::get<1>(left)-pos);}, [&readSequences, right, rightRead](size_t pos){return 3-readSequences[rightRead].get(std::get<1>(right)-pos);}, std::get<1>(left)-std::get<0>(left)+1, std::get<1>(right)-std::get<0>(right)+1, maxMismatches);
+		}
+	}
 }
 
 void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
+	std::cerr << "splitting per sequence identity" << std::endl;
 	const double mismatchFraction = 0.05;
 	const size_t mismatchFloor = 10;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
@@ -244,6 +317,7 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 	size_t nextNum = 0;
 	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
 	{
+		std::cerr << "split chunk " << i << " coverage " << occurrencesPerChunk[i].size() << std::endl;
 		std::sort(occurrencesPerChunk[i].begin(), occurrencesPerChunk[i].end(), [&chunksPerRead](auto left, auto right) { return std::get<1>(chunksPerRead[left.first][left.second])-std::get<0>(chunksPerRead[left.first][left.second]) < std::get<1>(chunksPerRead[right.first][right.second])-std::get<0>(chunksPerRead[right.first][right.second]); });
 		std::vector<size_t> parent;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
@@ -260,7 +334,7 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 				assert(std::get<1>(left) - std::get<0>(left) >= std::get<1>(right) - std::get<0>(right));
 				size_t maxMismatches = std::max(mismatchFloor, (size_t)((std::get<1>(left) - std::get<0>(left))*mismatchFraction));
 				if ((std::get<1>(left) - std::get<0>(left)) - (std::get<1>(right) - std::get<0>(right)) >= maxMismatches) break;
-				size_t mismatches = getNumMismatches(readSequences, left, right, maxMismatches);
+				size_t mismatches = getNumMismatches(readSequences, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][k].first, left, right, maxMismatches);
 				if (mismatches > maxMismatches) continue;
 				merge(parent, j, k);
 			}
@@ -273,6 +347,7 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 			keyToNode[key] = nextNum;
 			nextNum += 1;
 		}
+		std::cerr << "splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
@@ -288,6 +363,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	mergePerLocation(matchIndex, chunksPerRead);
 	splitPerLength(chunksPerRead);
 	{
+		std::cerr << "writing first graph" << std::endl;
 		std::vector<std::vector<size_t>> lengths;
 		std::vector<size_t> coverages;
 		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
@@ -308,6 +384,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	}
 	splitPerSequenceIdentity(readSequences, chunksPerRead);
 	{
+		std::cerr << "writing second graph" << std::endl;
 		std::vector<std::vector<size_t>> lengths;
 		std::vector<size_t> coverages;
 		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
