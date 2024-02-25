@@ -1,3 +1,4 @@
+#include <queue>
 #include <mutex>
 #include <fstream>
 #include <iostream>
@@ -162,7 +163,7 @@ void mergePerLocation(const MatchIndex& matchIndex, std::vector<std::vector<std:
 void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
 	std::cerr << "splitting per length" << std::endl;
-	const double differenceFraction = 0.05;
+	const double differenceFraction = 0.02;
 	const size_t differenceConstant = 50;
 	phmap::flat_hash_map<size_t, std::vector<size_t>> lengthsPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -219,84 +220,112 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 	}
 }
 
-template <typename F1, typename F2>
-size_t getNumMismatches(F1 leftSequenceGetter, F2 rightSequenceGetter, const size_t leftSequenceLength, const size_t rightSequenceLength, const size_t maxMismatches)
+size_t getNumMismatches(const TwobitString& leftSequence, const TwobitString& rightSequence, const size_t maxMismatches)
 {
-	assert(leftSequenceLength >= rightSequenceLength);
-	assert(rightSequenceLength + maxMismatches >= leftSequenceLength);
+	assert(leftSequence.size() >= rightSequence.size());
+	assert(rightSequence.size() + maxMismatches >= leftSequence.size());
 	// left sequence: left to right
 	// right sequence: up to down
 	// offset: diagonally down-right
 	// diagonal: left-right
 	std::vector<size_t> offset;
-	size_t maxBefore = (leftSequenceLength - rightSequenceLength) + (maxMismatches - (leftSequenceLength - rightSequenceLength))/2;
-	size_t maxAfter = (maxMismatches - (leftSequenceLength - rightSequenceLength))/2;
+	size_t maxBefore = (leftSequence.size() - rightSequence.size()) + (maxMismatches - (leftSequence.size() - rightSequence.size()))/2;
+	size_t maxAfter = (maxMismatches - (leftSequence.size() - rightSequence.size()))/2;
 	assert(maxBefore < maxMismatches);
 	assert(maxAfter < maxMismatches);
 	offset.resize(maxBefore + maxAfter + 1, std::numeric_limits<size_t>::max());
 	offset[maxBefore] = 0;
-	while (offset[maxBefore] < leftSequenceLength && offset[maxBefore] < rightSequenceLength && leftSequenceGetter(offset[maxBefore]) == rightSequenceGetter(offset[maxBefore])) offset[maxBefore] += 1;
-	if (leftSequenceLength == rightSequenceLength && offset[maxBefore] == leftSequenceLength) return 0;
+	std::vector<size_t> prevOffset;
+	prevOffset.resize(offset.size());
+	while (offset[maxBefore] < leftSequence.size() && offset[maxBefore] < rightSequence.size() && leftSequence.get(offset[maxBefore]) == rightSequence.get(offset[maxBefore])) offset[maxBefore] += 1;
+	if (leftSequence.size() == rightSequence.size() && offset[maxBefore] == leftSequence.size()) return 0;
 	// zero diagonal (top left corner) at maxBefore
 	for (size_t score = 1; score < maxMismatches; score++)
 	{
-		if (score <= maxBefore) offset[maxBefore-score] = score;
-		if (maxBefore+score < offset.size()) offset[maxBefore+score] = score;
+		std::swap(offset, prevOffset);
+		if (score <= maxBefore) prevOffset[maxBefore-score] = score;
+		if (maxBefore+score < offset.size()) prevOffset[maxBefore+score] = score;
 		for (size_t diagonal = (score < maxBefore ? (maxBefore - score) : 0); diagonal <= maxBefore + score && diagonal < offset.size(); diagonal++)
 		{
-			assert(offset[diagonal] != std::numeric_limits<size_t>::max());
-			offset[diagonal] += 1;
-			if (diagonal > 0 && offset[diagonal-1] != std::numeric_limits<size_t>::max())
+			assert(prevOffset[diagonal] != std::numeric_limits<size_t>::max());
+			offset[diagonal] = prevOffset[diagonal]+1;
+			if (diagonal > 0 && prevOffset[diagonal-1] != std::numeric_limits<size_t>::max())
 			{
-				offset[diagonal] = std::max(offset[diagonal], offset[diagonal-1]);
+				offset[diagonal] = std::max(offset[diagonal], prevOffset[diagonal-1]);
 			}
-			if (diagonal+1 < offset.size() && offset[diagonal+1] != std::numeric_limits<size_t>::max())
+			if (diagonal+1 < offset.size() && prevOffset[diagonal+1] != std::numeric_limits<size_t>::max())
 			{
-				offset[diagonal] = std::max(offset[diagonal], offset[diagonal+1]+1);
+				offset[diagonal] = std::max(offset[diagonal], prevOffset[diagonal+1]+1);
 			}
-			offset[diagonal] = std::min(offset[diagonal], std::min(leftSequenceLength, rightSequenceLength+maxBefore-diagonal));
+			offset[diagonal] = std::min(offset[diagonal], std::min(leftSequence.size(), rightSequence.size()+maxBefore-diagonal));
 		}
 		for (size_t diagonal = (score < maxBefore ? (maxBefore - score) : 0); diagonal <= maxBefore + score && diagonal < offset.size(); diagonal++)
 		{
-			assert(offset[diagonal] <= leftSequenceLength);
-			assert(offset[diagonal]+diagonal-maxBefore <= rightSequenceLength);
-			while (offset[diagonal] < leftSequenceLength && offset[diagonal]+diagonal-maxBefore < rightSequenceLength && leftSequenceGetter(offset[diagonal]) == rightSequenceGetter(offset[diagonal]+diagonal-maxBefore)) offset[diagonal] += 1;
-			if (offset[diagonal] == leftSequenceLength && offset[diagonal]+diagonal-maxBefore == rightSequenceLength) return score;
+			assert(offset[diagonal] <= leftSequence.size());
+			assert(offset[diagonal]+diagonal-maxBefore <= rightSequence.size());
+			while (offset[diagonal] < leftSequence.size() && offset[diagonal]+diagonal-maxBefore < rightSequence.size() && leftSequence.get(offset[diagonal]) == rightSequence.get(offset[diagonal]+diagonal-maxBefore)) offset[diagonal] += 1;
+			if (offset[diagonal] == leftSequence.size() && offset[diagonal]+diagonal-maxBefore == rightSequence.size()) return score;
 		}
 	}
 	return maxMismatches+1;
 }
 
-size_t getNumMismatches(const std::vector<TwobitString>& readSequences, const size_t leftRead, const size_t rightRead, const std::tuple<size_t, size_t, uint64_t> left, const std::tuple<size_t, size_t, uint64_t> right, const size_t maxMismatches)
+void countCommonPrefixAndSuffix(const std::vector<std::pair<TwobitString, size_t>>& sequencesPerOccurrence)
 {
-	assert((std::get<2>(left) & maskUint64_t) == (std::get<2>(right) & maskUint64_t));
-	size_t leftLen = std::get<1>(left) - std::get<0>(left);
-	size_t rightLen = std::get<1>(right) - std::get<0>(right);
-	if (rightLen > leftLen) return getNumMismatches(readSequences, rightRead, leftRead, right, left, maxMismatches);
-	assert(leftLen >= rightLen);
-	if (leftLen > rightLen + maxMismatches) return maxMismatches+1;
-	if (std::get<2>(left) & firstBitUint64_t)
+	size_t totalBps = 0;
+	size_t shortestSequence = std::numeric_limits<size_t>::max();
+	size_t longestSequence = 0;
+	for (size_t i = 0; i < sequencesPerOccurrence.size(); i++)
 	{
-		if (std::get<2>(right) & firstBitUint64_t)
-		{
-			return getNumMismatches([&readSequences, left, leftRead](size_t pos){return readSequences[leftRead].get(std::get<0>(left)+pos);}, [&readSequences, right, rightRead](size_t pos){return readSequences[rightRead].get(std::get<0>(right)+pos);}, std::get<1>(left)-std::get<0>(left)+1, std::get<1>(right)-std::get<0>(right)+1, maxMismatches);
-		}
-		else
-		{
-			return getNumMismatches([&readSequences, left, leftRead](size_t pos){return readSequences[leftRead].get(std::get<0>(left)+pos);}, [&readSequences, right, rightRead](size_t pos){return 3-readSequences[rightRead].get(std::get<1>(right)-pos);}, std::get<1>(left)-std::get<0>(left)+1, std::get<1>(right)-std::get<0>(right)+1, maxMismatches);
-		}
+		totalBps += sequencesPerOccurrence[i].first.size();
+		shortestSequence = std::min(shortestSequence, sequencesPerOccurrence[i].first.size());
+		longestSequence = std::max(shortestSequence, sequencesPerOccurrence[i].first.size());
 	}
-	else
+	size_t prefixLen = 0;
+	while (true)
 	{
-		if (std::get<2>(right) & firstBitUint64_t)
+		if (sequencesPerOccurrence[0].first.size() <= prefixLen) break;
+		size_t c = sequencesPerOccurrence[0].first.get(prefixLen);
+		bool valid = true;
+		for (size_t i = 1; i < sequencesPerOccurrence.size(); i++)
 		{
-			return getNumMismatches([&readSequences, left, leftRead](size_t pos){return 3-readSequences[leftRead].get(std::get<1>(left)-pos);}, [&readSequences, right, rightRead](size_t pos){return readSequences[rightRead].get(std::get<0>(right)+pos);}, std::get<1>(left)-std::get<0>(left)+1, std::get<1>(right)-std::get<0>(right)+1, maxMismatches);
+			if (sequencesPerOccurrence[i].first.size() <= prefixLen)
+			{
+				valid = false;
+				break;
+			}
+			if (sequencesPerOccurrence[i].first.get(prefixLen) != c)
+			{
+				valid = false;
+				break;
+			}
 		}
-		else
-		{
-			return getNumMismatches([&readSequences, left, leftRead](size_t pos){return 3-readSequences[leftRead].get(std::get<1>(left)-pos);}, [&readSequences, right, rightRead](size_t pos){return 3-readSequences[rightRead].get(std::get<1>(right)-pos);}, std::get<1>(left)-std::get<0>(left)+1, std::get<1>(right)-std::get<0>(right)+1, maxMismatches);
-		}
+		if (!valid) break;
+		prefixLen += 1;
 	}
+	size_t suffixLen = 0;
+	while (true)
+	{
+		if (sequencesPerOccurrence[0].first.size() <= suffixLen) break;
+		size_t c = sequencesPerOccurrence[0].first.get(sequencesPerOccurrence[0].first.size()-1-suffixLen);
+		bool valid = true;
+		for (size_t i = 1; i < sequencesPerOccurrence.size(); i++)
+		{
+			if (sequencesPerOccurrence[i].first.size() <= suffixLen)
+			{
+				valid = false;
+				break;
+			}
+			if (sequencesPerOccurrence[i].first.get(sequencesPerOccurrence[i].first.size()-1-suffixLen) != c)
+			{
+				valid = false;
+				break;
+			}
+		}
+		if (!valid) break;
+		suffixLen += 1;
+	}
+	std::cerr << "coverage " << sequencesPerOccurrence.size() << " minlen " << shortestSequence << " maxlen " << longestSequence << " total bp " << totalBps << " shared prefix " << prefixLen << " shared suffix " << suffixLen << std::endl;
 }
 
 void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
@@ -318,7 +347,40 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
 	{
 		std::cerr << "split chunk " << i << " coverage " << occurrencesPerChunk[i].size() << std::endl;
-		std::sort(occurrencesPerChunk[i].begin(), occurrencesPerChunk[i].end(), [&chunksPerRead](auto left, auto right) { return std::get<1>(chunksPerRead[left.first][left.second])-std::get<0>(chunksPerRead[left.first][left.second]) < std::get<1>(chunksPerRead[right.first][right.second])-std::get<0>(chunksPerRead[right.first][right.second]); });
+		std::vector<std::pair<TwobitString, size_t>> sequencesPerOccurrence;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			sequencesPerOccurrence.emplace_back();
+			sequencesPerOccurrence.back().second = j;
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			if (std::get<2>(t) & firstBitUint64_t)
+			{
+				for (size_t k = std::get<0>(t); k <= std::get<1>(t); k++)
+				{
+					sequencesPerOccurrence.back().first.emplace_back(readSequences[occurrencesPerChunk[i][j].first].get(k));
+				}
+			}
+			else
+			{
+				for (size_t k = std::get<1>(t); k >= std::get<0>(t) && k < readSequences[occurrencesPerChunk[i][j].first].size(); k--)
+				{
+					sequencesPerOccurrence.back().first.emplace_back(3-readSequences[occurrencesPerChunk[i][j].first].get(k));
+				}
+			}
+		}
+		std::sort(sequencesPerOccurrence.begin(), sequencesPerOccurrence.end(), [](const auto& left, const auto& right) {
+			if (left.first.size() < right.first.size()) return true;
+			if (left.first.size() > right.first.size()) return false;
+			return left.first < right.first;
+		});
+		std::vector<bool> differentFromPredecessor;
+		differentFromPredecessor.resize(occurrencesPerChunk[i].size(), false);
+		differentFromPredecessor[0] = true;
+		for (size_t j = 1; j < differentFromPredecessor.size(); j++)
+		{
+			if (sequencesPerOccurrence[j].first == sequencesPerOccurrence[j-1].first) continue;
+			differentFromPredecessor[j] = true;
+		}
 		std::vector<size_t> parent;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
@@ -326,15 +388,19 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 		}
 		for (size_t j = 1; j < occurrencesPerChunk[i].size(); j++)
 		{
+			if (!differentFromPredecessor[j])
+			{
+				merge(parent, j, j-1);
+				continue;
+			}
 			for (size_t k = j-1; k < occurrencesPerChunk[i].size(); k--)
 			{
+				if (!differentFromPredecessor[k]) continue;
 				if (find(parent, k) == find(parent, j)) continue;
-				auto left = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
-				auto right = chunksPerRead[occurrencesPerChunk[i][k].first][occurrencesPerChunk[i][k].second];
-				assert(std::get<1>(left) - std::get<0>(left) >= std::get<1>(right) - std::get<0>(right));
-				size_t maxMismatches = std::max(mismatchFloor, (size_t)((std::get<1>(left) - std::get<0>(left))*mismatchFraction));
-				if ((std::get<1>(left) - std::get<0>(left)) - (std::get<1>(right) - std::get<0>(right)) >= maxMismatches) break;
-				size_t mismatches = getNumMismatches(readSequences, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][k].first, left, right, maxMismatches);
+				assert(sequencesPerOccurrence[j].first.size() >= sequencesPerOccurrence[k].first.size());
+				size_t maxMismatches = std::max(mismatchFloor, (size_t)(sequencesPerOccurrence[k].first.size()*mismatchFraction));
+				if (sequencesPerOccurrence[j].first.size() - sequencesPerOccurrence[k].first.size() >= maxMismatches) break;
+				size_t mismatches = getNumMismatches(sequencesPerOccurrence[j].first, sequencesPerOccurrence[k].first, maxMismatches);
 				if (mismatches > maxMismatches) continue;
 				merge(parent, j, k);
 			}
@@ -350,7 +416,244 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 		std::cerr << "splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
+			size_t index = sequencesPerOccurrence[j].second;
+			std::get<2>(chunksPerRead[occurrencesPerChunk[i][index].first][occurrencesPerChunk[i][index].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][index].first][occurrencesPerChunk[i][index].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
+		}
+	}
+}
+
+// https://naml.us/post/inverse-of-a-hash-function/
+uint64_t hash(uint64_t key) {
+	key = (~key) + (key << 21); // key = (key << 21) - key - 1;
+	key = key ^ (key >> 24);
+	key = (key + (key << 3)) + (key << 8); // key * 265
+	key = key ^ (key >> 14);
+	key = (key + (key << 2)) + (key << 4); // key * 21
+	key = key ^ (key >> 28);
+	key = key + (key << 31);
+	return key;
+}
+
+std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, const size_t count)
+{
+	assert(sequence.size() > k + count);
+	uint64_t kmer = 0;
+	uint64_t mask = (1ull << 2ull*k) - 1;
+	for (size_t i = 0; i < k; i++)
+	{
+		kmer <<= 2;
+		switch(sequence[i])
+		{
+			case 'A':
+				kmer += 0;
+				break;
+			case 'C':
+				kmer += 1;
+				break;
+			case 'G':
+				kmer += 2;
+				break;
+			case 'T':
+				kmer += 3;
+				break;
+			default:
+				assert(false);
+		}
+	}
+	std::priority_queue<size_t> queue;
+	queue.emplace(hash(kmer));
+	for (size_t i = k; i < sequence.size(); i++)
+	{
+		kmer <<= 2;
+		switch(sequence[i])
+		{
+			case 'A':
+				kmer += 0;
+				break;
+			case 'C':
+				kmer += 1;
+				break;
+			case 'G':
+				kmer += 2;
+				break;
+			case 'T':
+				kmer += 3;
+				break;
+			default:
+				assert(false);
+		}
+		kmer &= mask;
+		size_t h = hash(kmer);
+		if (queue.size() < count)
+		{
+			queue.emplace(h);
+		}
+		else if (h < queue.top())
+		{
+			queue.pop();
+			queue.emplace(h);
+		}
+	}
+	std::vector<size_t> result;
+	while (queue.size() > 0)
+	{
+		result.emplace_back(queue.top());
+		queue.pop();
+	}
+	return result;
+}
+
+void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	const double mismatchFraction = 0.05;
+	const size_t mismatchFloor = 10;
+	std::cerr << "splitting by base counts" << std::endl;
+	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t) + 1);
+			occurrencesPerChunk[std::get<2>(t)].emplace_back(i, j);
+		}
+	}
+	size_t nextNum = 0;
+	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	{
+		std::vector<std::vector<size_t>> countsPerOccurrence;
+		countsPerOccurrence.resize(occurrencesPerChunk[i].size());
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			countsPerOccurrence[j].resize(4);
+			for (size_t k = std::get<0>(t); k < std::get<1>(t); k++)
+			{
+				countsPerOccurrence[j][readSequences[occurrencesPerChunk[i][j].first].get(k)] += 1;
+			}
+			if ((std::get<2>(t) & firstBitUint64_t) ^ firstBitUint64_t)
+			{
+				std::swap(countsPerOccurrence[j][0], countsPerOccurrence[j][3]);
+				std::swap(countsPerOccurrence[j][1], countsPerOccurrence[j][2]);
+			}
+		}
+		std::vector<size_t> parent;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			parent.emplace_back(j);
+		}
+		for (size_t j = 1; j < occurrencesPerChunk[i].size(); j++)
+		{
+			for (size_t k = 0; k < j; k++)
+			{
+				size_t maxEdits = std::min(std::get<1>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) - std::get<0>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]), std::get<1>(chunksPerRead[occurrencesPerChunk[i][k].first][occurrencesPerChunk[i][k].second]) - std::get<0>(chunksPerRead[occurrencesPerChunk[i][k].first][occurrencesPerChunk[i][k].second]));
+				maxEdits *= mismatchFraction;
+				maxEdits = std::max(maxEdits, mismatchFloor);
+				size_t edits = 0;
+				for (size_t c = 0; c < 4; c++)
+				{
+					if (countsPerOccurrence[j][c] > countsPerOccurrence[k][c])
+					{
+						edits += countsPerOccurrence[j][c] - countsPerOccurrence[k][c];
+					}
+					else
+					{
+						edits += countsPerOccurrence[k][c] - countsPerOccurrence[j][c];
+					}
+				}
+				if (edits < maxEdits) merge(parent, j, k);
+			}
+		}
+		phmap::flat_hash_map<size_t, size_t> keyToNode;
+		for (size_t j = 0; j < parent.size(); j++)
+		{
+			size_t key = find(parent, j);
+			if (keyToNode.count(key) == 1) continue;
+			keyToNode[key] = nextNum;
+			nextNum += 1;
+		}
+		std::cerr << "base count splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
 			std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
+		}
+	}
+}
+
+void splitPerMinHashes(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	std::cerr << "splitting by minhash" << std::endl;
+	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t) + 1);
+			occurrencesPerChunk[std::get<2>(t)].emplace_back(i, j);
+		}
+	}
+	size_t nextNum = 0;
+	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	{
+		phmap::flat_hash_map<size_t, size_t> parent;
+		std::vector<size_t> oneHashPerLocation;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			std::vector<uint64_t> minHashes;
+			assert(std::get<0>(t) < std::get<1>(t));
+			assert(std::get<1>(t) < readSequences[occurrencesPerChunk[i][j].first].size());
+			if (std::get<2>(t) & firstBitUint64_t)
+			{
+				minHashes = getMinHashes(readSequences[occurrencesPerChunk[i][j].first].substr(std::get<0>(t), std::get<1>(t)-std::get<0>(t)+1), 11, 10);
+			}
+			else
+			{
+				minHashes = getMinHashes(MBG::revCompRaw(readSequences[occurrencesPerChunk[i][j].first].substr(std::get<0>(t), std::get<1>(t)-std::get<0>(t)+1)), 11, 10);
+			}
+			assert(minHashes.size() >= 1);
+			for (auto hash : minHashes)
+			{
+				if (parent.count(hash) == 0) parent[hash] = hash;
+			}
+			for (auto hash : minHashes)
+			{
+				merge(parent, hash, minHashes[0]);
+			}
+			oneHashPerLocation.emplace_back(minHashes[0]);
+		}
+		phmap::flat_hash_map<size_t, size_t> clusterToNode;
+		for (auto hash : oneHashPerLocation)
+		{
+			if (clusterToNode.count(find(parent, hash)) == 1) continue;
+			clusterToNode[find(parent, hash)] = nextNum;
+			nextNum += 1;
+		}
+		std::cerr << "minhash splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << clusterToNode.size() << " chunks" << std::endl;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = clusterToNode.at(find(parent, oneHashPerLocation[j])) + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
+		}
+	}
+}
+
+void removeHighCoverageChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t maxCoverage)
+{
+	phmap::flat_hash_map<size_t, size_t> coverage;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (auto t : chunksPerRead[i])
+		{
+			coverage[std::get<2>(t) & maskUint64_t] += 1;
+		}
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = chunksPerRead[i].size()-1; j < chunksPerRead[i].size(); j--)
+		{
+			if (coverage.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) < maxCoverage) continue;
+			chunksPerRead[i].erase(chunksPerRead[i].begin()+j);
 		}
 	}
 }
@@ -382,7 +685,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 			}
 		}
 	}
-	splitPerSequenceIdentity(readSequences, chunksPerRead);
+	splitPerBaseCounts(readSequences, chunksPerRead);
 	{
 		std::cerr << "writing second graph" << std::endl;
 		std::vector<std::vector<size_t>> lengths;
@@ -392,6 +695,69 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
 		writeGraph("graph-round2.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
 		std::ofstream pathfile { "fakepaths2.txt" };
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+				auto t = chunksPerRead[i][j];
+				uint64_t rawnode = std::get<2>(t);
+				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
+			}
+		}
+	}
+	splitPerMinHashes(readSequences, chunksPerRead);
+	{
+		std::cerr << "writing third graph" << std::endl;
+		std::vector<std::vector<size_t>> lengths;
+		std::vector<size_t> coverages;
+		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
+		writeGraph("graph-round3.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
+		std::ofstream pathfile { "fakepaths3.txt" };
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+				auto t = chunksPerRead[i][j];
+				uint64_t rawnode = std::get<2>(t);
+				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
+			}
+		}
+	}
+	splitPerSequenceIdentity(readSequences, chunksPerRead);
+	{
+		std::cerr << "writing fourth graph" << std::endl;
+		std::vector<std::vector<size_t>> lengths;
+		std::vector<size_t> coverages;
+		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
+		writeGraph("graph-round4.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
+		std::ofstream pathfile { "fakepaths4.txt" };
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+				auto t = chunksPerRead[i][j];
+				uint64_t rawnode = std::get<2>(t);
+				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
+			}
+		}
+	}
+	removeHighCoverageChunks(chunksPerRead, 60);
+	{
+		std::cerr << "writing fifth graph" << std::endl;
+		std::vector<std::vector<size_t>> lengths;
+		std::vector<size_t> coverages;
+		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
+		writeGraph("graph-round5.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
+		std::ofstream pathfile { "fakepaths5.txt" };
 		for (size_t i = 0; i < chunksPerRead.size(); i++)
 		{
 			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
