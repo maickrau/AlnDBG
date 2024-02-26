@@ -538,7 +538,7 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 	}
 }
 
-void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting per sequence identity" << std::endl;
 	const double mismatchFraction = 0.05;
@@ -554,9 +554,13 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 		}
 	}
 	size_t nextNum = 0;
-	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	std::mutex resultMutex;
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, mismatchFraction, mismatchFloor](const size_t i)
 	{
-		std::cerr << "split chunk " << i << " coverage " << occurrencesPerChunk[i].size() << std::endl;
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			std::cerr << "split chunk " << i << " coverage " << occurrencesPerChunk[i].size() << std::endl;
+		}
 		std::vector<std::pair<TwobitString, size_t>> sequencesPerOccurrence;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
@@ -616,20 +620,23 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 			}
 		}
 		phmap::flat_hash_map<size_t, size_t> keyToNode;
-		for (size_t j = 0; j < parent.size(); j++)
 		{
-			size_t key = find(parent, j);
-			if (keyToNode.count(key) == 1) continue;
-			keyToNode[key] = nextNum;
-			nextNum += 1;
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < parent.size(); j++)
+			{
+				size_t key = find(parent, j);
+				if (keyToNode.count(key) == 1) continue;
+				keyToNode[key] = nextNum;
+				nextNum += 1;
+			}
+			std::cerr << "splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				size_t index = sequencesPerOccurrence[j].second;
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][index].first][occurrencesPerChunk[i][index].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][index].first][occurrencesPerChunk[i][index].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
+			}
 		}
-		std::cerr << "splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
-		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
-		{
-			size_t index = sequencesPerOccurrence[j].second;
-			std::get<2>(chunksPerRead[occurrencesPerChunk[i][index].first][occurrencesPerChunk[i][index].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][index].first][occurrencesPerChunk[i][index].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
-		}
-	}
+	});
 }
 
 // https://naml.us/post/inverse-of-a-hash-function/
@@ -868,7 +875,7 @@ void removeHighCoverageChunks(std::vector<std::vector<std::tuple<size_t, size_t,
 	}
 }
 
-void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences)
+void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads)
 {
 	std::vector<bool> useTheseChunks;
 	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
@@ -958,7 +965,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 			}
 		}
 	}
-	splitPerSequenceIdentity(readSequences, chunksPerRead);
+	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
 	{
 		std::cerr << "writing fifth graph" << std::endl;
 		std::vector<std::vector<size_t>> lengths;
@@ -1080,5 +1087,5 @@ int main(int argc, char** argv)
 	{
 		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
 	}
-	makeGraph(matchIndex, readBasepairLengths, readSequences);
+	makeGraph(matchIndex, readBasepairLengths, readSequences, numThreads);
 }
