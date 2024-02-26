@@ -110,37 +110,35 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(con
 	return edgeCoverage;
 }
 
-void removeContainedChunks(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, std::vector<bool>& useTheseChunks)
+void removeContainedChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
-	phmap::flat_hash_set<size_t> contained;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
-		size_t coveredUntil = 0;
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		for (size_t j = chunksPerRead[i].size()-1; j < chunksPerRead[i].size(); j--)
 		{
-			if (std::get<1>(chunksPerRead[i][j]) < coveredUntil)
+			if (j > 0)
 			{
-				contained.insert(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			}
-			else
-			{
-				for (size_t k = 0; k < j; k++)
+				assert(std::get<1>(chunksPerRead[i][j-1]) <= std::get<1>(chunksPerRead[i][j]));
+				assert(std::get<0>(chunksPerRead[i][j-1]) <= std::get<0>(chunksPerRead[i][j]));
+				if (std::get<1>(chunksPerRead[i][j-1]) == std::get<1>(chunksPerRead[i][j]))
 				{
-					if (std::get<0>(chunksPerRead[i][k]) == std::get<0>(chunksPerRead[i][j])) break;
-					if (std::get<1>(chunksPerRead[i][k]) >= std::get<1>(chunksPerRead[i][j]))
-					{
-						contained.insert(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-						break;
-					}
+					assert(std::get<0>(chunksPerRead[i][j-1]) < std::get<0>(chunksPerRead[i][j]));
+					chunksPerRead[i].erase(chunksPerRead[i].begin()+j);
+					continue;
 				}
 			}
-			coveredUntil = std::max(coveredUntil, std::get<1>(chunksPerRead[i][j]));
+			if (j+1 < chunksPerRead[i].size())
+			{
+				assert(std::get<1>(chunksPerRead[i][j]) <= std::get<1>(chunksPerRead[i][j+1]));
+				assert(std::get<0>(chunksPerRead[i][j]) <= std::get<0>(chunksPerRead[i][j+1]));
+				if (std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j+1]))
+				{
+					assert(std::get<1>(chunksPerRead[i][j]) < std::get<1>(chunksPerRead[i][j+1]));
+					chunksPerRead[i].erase(chunksPerRead[i].begin()+j);
+					continue;
+				}
+			}
 		}
-	}
-	for (size_t i = 0; i < useTheseChunks.size(); i++)
-	{
-		if (!useTheseChunks[i]) continue;
-		if (contained.count(i) == 1) useTheseChunks[i] = false;
 	}
 }
 
@@ -225,8 +223,9 @@ size_t getNumMismatches(const TwobitString& leftSequence, const TwobitString& ri
 	assert(rightSequence.size() + maxMismatches >= leftSequence.size());
 	// left sequence: left to right
 	// right sequence: up to down
-	// offset: diagonally down-right
-	// diagonal: left-right
+	// offset: diagonally to down-right
+	// diagonal: up to down
+	// zero diagonal (top left corner) at maxBefore
 	std::vector<size_t> offset;
 	size_t maxBefore = (leftSequence.size() - rightSequence.size()) + (maxMismatches - (leftSequence.size() - rightSequence.size()))/2;
 	size_t maxAfter = (maxMismatches - (leftSequence.size() - rightSequence.size()))/2;
@@ -238,7 +237,6 @@ size_t getNumMismatches(const TwobitString& leftSequence, const TwobitString& ri
 	prevOffset.resize(offset.size());
 	while (offset[maxBefore] < leftSequence.size() && offset[maxBefore] < rightSequence.size() && leftSequence.get(offset[maxBefore]) == rightSequence.get(offset[maxBefore])) offset[maxBefore] += 1;
 	if (leftSequence.size() == rightSequence.size() && offset[maxBefore] == leftSequence.size()) return 0;
-	// zero diagonal (top left corner) at maxBefore
 	for (size_t score = 1; score < maxMismatches; score++)
 	{
 		std::swap(offset, prevOffset);
@@ -909,6 +907,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
 	mergePerLocation(matchIndex, chunksPerRead);
+	removeContainedChunks(chunksPerRead);
 	splitPerLength(chunksPerRead);
 	{
 		std::cerr << "writing first graph" << std::endl;
@@ -1024,6 +1023,27 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
 		writeGraph("graph-round6.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
 		std::ofstream pathfile { "fakepaths6.txt" };
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+				auto t = chunksPerRead[i][j];
+				uint64_t rawnode = std::get<2>(t);
+				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
+			}
+		}
+	}
+	removeHighCoverageChunks(chunksPerRead, 60);
+	{
+		std::cerr << "writing seventh graph" << std::endl;
+		std::vector<std::vector<size_t>> lengths;
+		std::vector<size_t> coverages;
+		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
+		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
+		writeGraph("graph-round7.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
+		std::ofstream pathfile { "fakepaths7.txt" };
 		for (size_t i = 0; i < chunksPerRead.size(); i++)
 		{
 			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
