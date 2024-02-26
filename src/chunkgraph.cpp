@@ -51,7 +51,8 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCo
 				coverages.resize((std::get<2>(chunksPerRead[i][j]) & maskUint64_t)+1, 0);
 				lengths.resize((std::get<2>(chunksPerRead[i][j]) & maskUint64_t)+1);
 			}
-			if (j > 1 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+			assert(j == 0 || std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
+			assert(j == 0 || std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
 			lengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t].emplace_back(std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]));
 		}
 	}
@@ -59,7 +60,8 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCo
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (j > 1 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+			assert(j == 0 || std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
+			assert(j == 0 || std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
 			coverages[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] += 1;
 		}
 	}
@@ -73,7 +75,8 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeOverlaps(cons
 	{
 		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
 		{
-			if (std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+			assert(std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
+			assert(std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
 			auto prev = std::get<2>(chunksPerRead[i][j-1]);
 			auto curr = std::get<2>(chunksPerRead[i][j]);
 			auto pairkey = MBG::canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
@@ -99,7 +102,8 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(con
 	{
 		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
 		{
-			if (std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+			assert(std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
+			assert(std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
 			auto prev = std::get<2>(chunksPerRead[i][j-1]);
 			auto curr = std::get<2>(chunksPerRead[i][j]);
 			auto pairkey = MBG::canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
@@ -138,22 +142,6 @@ void removeContainedChunks(std::vector<std::vector<std::tuple<size_t, size_t, ui
 					continue;
 				}
 			}
-		}
-	}
-}
-
-void mergePerLocation(const MatchIndex& matchIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
-{
-	std::cerr << "merging per location" << std::endl;
-	std::vector<std::pair<size_t, bool>> parent = getParent(chunksPerRead);
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-		{
-			auto found = find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			uint64_t result = found.first + (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t);
-			if (!found.second) result ^= firstBitUint64_t;
-			std::get<2>(chunksPerRead[i][j]) = result;
 		}
 	}
 }
@@ -265,64 +253,6 @@ size_t getNumMismatches(const TwobitString& leftSequence, const TwobitString& ri
 		}
 	}
 	return maxMismatches+1;
-}
-
-void countCommonPrefixAndSuffix(const std::vector<std::pair<TwobitString, size_t>>& sequencesPerOccurrence)
-{
-	size_t totalBps = 0;
-	size_t shortestSequence = std::numeric_limits<size_t>::max();
-	size_t longestSequence = 0;
-	for (size_t i = 0; i < sequencesPerOccurrence.size(); i++)
-	{
-		totalBps += sequencesPerOccurrence[i].first.size();
-		shortestSequence = std::min(shortestSequence, sequencesPerOccurrence[i].first.size());
-		longestSequence = std::max(shortestSequence, sequencesPerOccurrence[i].first.size());
-	}
-	size_t prefixLen = 0;
-	while (true)
-	{
-		if (sequencesPerOccurrence[0].first.size() <= prefixLen) break;
-		size_t c = sequencesPerOccurrence[0].first.get(prefixLen);
-		bool valid = true;
-		for (size_t i = 1; i < sequencesPerOccurrence.size(); i++)
-		{
-			if (sequencesPerOccurrence[i].first.size() <= prefixLen)
-			{
-				valid = false;
-				break;
-			}
-			if (sequencesPerOccurrence[i].first.get(prefixLen) != c)
-			{
-				valid = false;
-				break;
-			}
-		}
-		if (!valid) break;
-		prefixLen += 1;
-	}
-	size_t suffixLen = 0;
-	while (true)
-	{
-		if (sequencesPerOccurrence[0].first.size() <= suffixLen) break;
-		size_t c = sequencesPerOccurrence[0].first.get(sequencesPerOccurrence[0].first.size()-1-suffixLen);
-		bool valid = true;
-		for (size_t i = 1; i < sequencesPerOccurrence.size(); i++)
-		{
-			if (sequencesPerOccurrence[i].first.size() <= suffixLen)
-			{
-				valid = false;
-				break;
-			}
-			if (sequencesPerOccurrence[i].first.get(sequencesPerOccurrence[i].first.size()-1-suffixLen) != c)
-			{
-				valid = false;
-				break;
-			}
-		}
-		if (!valid) break;
-		suffixLen += 1;
-	}
-	std::cerr << "coverage " << sequencesPerOccurrence.size() << " minlen " << shortestSequence << " maxlen " << longestSequence << " total bp " << totalBps << " shared prefix " << prefixLen << " shared suffix " << suffixLen << std::endl;
 }
 
 template <typename F>
@@ -906,7 +836,6 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	std::vector<bool> useTheseChunks;
 	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
-	mergePerLocation(matchIndex, chunksPerRead);
 	removeContainedChunks(chunksPerRead);
 	splitPerLength(chunksPerRead);
 	{
@@ -1055,46 +984,6 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 			}
 		}
 	}
-	/*
-	for (size_t i = 0; i < useTheseChunks.size(); i++)
-	{
-		if (coverages[find(parent, i).first] >= 40)
-		{
-			useTheseChunks[i] = false;
-		}
-	}
-	phmap::flat_hash_map<size_t, size_t> countRepetitive;
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		phmap::flat_hash_map<uint64_t, size_t> lastPos;
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-		{
-			std::pair<size_t, bool> pairkey = find(parent, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			if ((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) ^ firstBitUint64_t) pairkey.second = !pairkey.second;
-			uint64_t key = pairkey.first + (pairkey.second ? firstBitUint64_t : 0);
-			if (lastPos.count(key) == 1)
-			{
-				if (lastPos.at(key) + 20000 > std::get<0>(chunksPerRead[i][j]) && lastPos.at(key) != std::get<1>(chunksPerRead[i][j]))
-				{
-					countRepetitive[key & maskUint64_t] += 1;
-				}
-			}
-			lastPos[key] = std::get<1>(chunksPerRead[i][j]);
-		}
-	}
-	for (size_t i = 0; i < useTheseChunks.size(); i++)
-	{
-		if (countRepetitive[find(parent, i).first] >= 5)
-		{
-			useTheseChunks[i] = false;
-		}
-	}
-	chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
-	parent = getParent(chunksPerRead);
-	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead, parent);
-	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead, parent);
-	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead, parent);
-	writeGraph("graph.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);*/
 }
 
 int main(int argc, char** argv)
