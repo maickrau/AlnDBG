@@ -566,10 +566,17 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
 	}
+	std::vector<size_t> iterationOrder;
+	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	{
+		iterationOrder.emplace_back(i);
+	}
+	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, mismatchFraction, mismatchFloor](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &iterationOrder, mismatchFraction, mismatchFloor](const size_t iterationIndex)
 	{
+		const size_t i = iterationOrder[iterationIndex];
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
 			std::cerr << "split chunk " << i << " coverage " << occurrencesPerChunk[i].size() << std::endl;
