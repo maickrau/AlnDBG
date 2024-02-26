@@ -406,7 +406,7 @@ bool checkPhasablePair(const std::vector<std::vector<std::tuple<size_t, size_t, 
 	return true;
 }
 
-void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting per phasing kmers" << std::endl;
 	const size_t k = 11;
@@ -421,35 +421,45 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 		}
 	}
 	size_t nextNum = 0;
-	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	std::mutex resultMutex;
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, k](const size_t i)
 	{
-		phmap::flat_hash_map<size_t, std::vector<size_t>> kmerUniquePosition;
+		phmap::flat_hash_set<size_t> kmersEverywhere;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
-			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmerUniquePosition, &occurrencesPerChunk, j, i](const size_t kmer, const size_t pos)
+			phmap::flat_hash_set<size_t> kmersHere;
+			phmap::flat_hash_set<size_t> kmersRepeatingHere;
+			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&occurrencesPerChunk, &kmersHere, &kmersRepeatingHere, j, i](const size_t kmer, const size_t pos)
 			{
-				if (kmerUniquePosition.count(kmer) == 0) kmerUniquePosition[kmer].resize(occurrencesPerChunk[i].size(), std::numeric_limits<size_t>::max());
-				if (kmerUniquePosition[kmer][j] == std::numeric_limits<size_t>::max())
+				if (kmersHere.count(kmer) == 0)
 				{
-					kmerUniquePosition[kmer][j] = pos;
+					kmersHere.insert(kmer);
+					return;
 				}
 				else
 				{
-					kmerUniquePosition[kmer][j] = std::numeric_limits<size_t>::max()-1;
+					kmersRepeatingHere.insert(kmer);
 				}
 			});
-		}
-		phmap::flat_hash_set<size_t> kmersEverywhere;
-		for (const auto& pair : kmerUniquePosition)
-		{
-			size_t coverage = 0;
-			for (size_t pos : pair.second)
+			if (j == 0)
 			{
-				if (pos >= std::numeric_limits<size_t>::max()-1) continue;
-				coverage += 1;
+				for (size_t kmer : kmersHere)
+				{
+					if (kmersRepeatingHere.count(kmer) == 1) continue;
+					kmersEverywhere.insert(kmer);
+				}
 			}
-			if (coverage == occurrencesPerChunk[i].size()) kmersEverywhere.insert(pair.first);
+			else
+			{
+				phmap::flat_hash_set<size_t> removeKmers;
+				for (size_t kmer : kmersEverywhere)
+				{
+					if (kmersHere.count(kmer) == 0) removeKmers.insert(kmer);
+					if (kmersRepeatingHere.count(kmer) == 1) removeKmers.insert(kmer);
+				}
+				for (size_t kmer : removeKmers) kmersEverywhere.erase(kmer);
+			}
 		}
 		std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> fwForks; // hom pos, hom kmer, het kmer
 		std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> bwForks; // hom pos, hom kmer, het kmer
@@ -522,20 +532,23 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 			if (phaseIdentities[sortedPhaseIdentityIndices[j-1]] != phaseIdentities[sortedPhaseIdentityIndices[j]]) continue;
 			merge(parent, sortedPhaseIdentityIndices[j-1], sortedPhaseIdentityIndices[j]);
 		}
-		phmap::flat_hash_map<size_t, size_t> keyToNode;
-		for (size_t j = 0; j < parent.size(); j++)
 		{
-			size_t key = find(parent, j);
-			if (keyToNode.count(key) == 1) continue;
-			keyToNode[key] = nextNum;
-			nextNum += 1;
+			std::lock_guard<std::mutex> lock { resultMutex };
+			phmap::flat_hash_map<size_t, size_t> keyToNode;
+			for (size_t j = 0; j < parent.size(); j++)
+			{
+				size_t key = find(parent, j);
+				if (keyToNode.count(key) == 1) continue;
+				keyToNode[key] = nextNum;
+				nextNum += 1;
+			}
+			std::cerr << "phasable kmer splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
+			}
 		}
-		std::cerr << "phasable kmer splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
-		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
-		{
-			std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
-		}
-	}
+	});
 }
 
 void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
@@ -720,7 +733,7 @@ std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, co
 	return result;
 }
 
-void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	const double mismatchFraction = 0.05;
 	const size_t mismatchFloor = 10;
@@ -736,7 +749,8 @@ void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vec
 		}
 	}
 	size_t nextNum = 0;
-	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	std::mutex resultMutex;
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, mismatchFraction, mismatchFloor](const size_t i)
 	{
 		std::vector<std::vector<size_t>> countsPerOccurrence;
 		countsPerOccurrence.resize(occurrencesPerChunk[i].size());
@@ -781,23 +795,26 @@ void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vec
 				if (edits < maxEdits) merge(parent, j, k);
 			}
 		}
-		phmap::flat_hash_map<size_t, size_t> keyToNode;
-		for (size_t j = 0; j < parent.size(); j++)
 		{
-			size_t key = find(parent, j);
-			if (keyToNode.count(key) == 1) continue;
-			keyToNode[key] = nextNum;
-			nextNum += 1;
+			std::lock_guard<std::mutex> lock { resultMutex };
+			phmap::flat_hash_map<size_t, size_t> keyToNode;
+			for (size_t j = 0; j < parent.size(); j++)
+			{
+				size_t key = find(parent, j);
+				if (keyToNode.count(key) == 1) continue;
+				keyToNode[key] = nextNum;
+				nextNum += 1;
+			}
+			std::cerr << "base count splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
+			}
 		}
-		std::cerr << "base count splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
-		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
-		{
-			std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
-		}
-	}
+	});
 }
 
-void splitPerMinHashes(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+void splitPerMinHashes(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting by minhash" << std::endl;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
@@ -811,7 +828,8 @@ void splitPerMinHashes(const std::vector<TwobitString>& readSequences, std::vect
 		}
 	}
 	size_t nextNum = 0;
-	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	std::mutex resultMutex;
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences](const size_t i)
 	{
 		phmap::flat_hash_map<size_t, size_t> parent;
 		std::vector<size_t> oneHashPerLocation;
@@ -840,19 +858,22 @@ void splitPerMinHashes(const std::vector<TwobitString>& readSequences, std::vect
 			}
 			oneHashPerLocation.emplace_back(minHashes[0]);
 		}
-		phmap::flat_hash_map<size_t, size_t> clusterToNode;
-		for (auto hash : oneHashPerLocation)
 		{
-			if (clusterToNode.count(find(parent, hash)) == 1) continue;
-			clusterToNode[find(parent, hash)] = nextNum;
-			nextNum += 1;
+			std::lock_guard<std::mutex> lock { resultMutex };
+			phmap::flat_hash_map<size_t, size_t> clusterToNode;
+			for (auto hash : oneHashPerLocation)
+			{
+				if (clusterToNode.count(find(parent, hash)) == 1) continue;
+				clusterToNode[find(parent, hash)] = nextNum;
+				nextNum += 1;
+			}
+			std::cerr << "minhash splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << clusterToNode.size() << " chunks" << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = clusterToNode.at(find(parent, oneHashPerLocation[j])) + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
+			}
 		}
-		std::cerr << "minhash splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << clusterToNode.size() << " chunks" << std::endl;
-		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
-		{
-			std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = clusterToNode.at(find(parent, oneHashPerLocation[j])) + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
-		}
-	}
+	});
 }
 
 void removeHighCoverageChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t maxCoverage)
@@ -902,7 +923,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 			}
 		}
 	}
-	splitPerBaseCounts(readSequences, chunksPerRead);
+	splitPerBaseCounts(readSequences, chunksPerRead, numThreads);
 	{
 		std::cerr << "writing second graph" << std::endl;
 		std::vector<std::vector<size_t>> lengths;
@@ -923,7 +944,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 			}
 		}
 	}
-	splitPerMinHashes(readSequences, chunksPerRead);
+	splitPerMinHashes(readSequences, chunksPerRead, numThreads);
 	{
 		std::cerr << "writing third graph" << std::endl;
 		std::vector<std::vector<size_t>> lengths;
@@ -944,7 +965,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 			}
 		}
 	}
-	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead);
+	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	{
 		std::cerr << "writing fourth graph" << std::endl;
 		std::vector<std::vector<size_t>> lengths;
@@ -986,7 +1007,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 			}
 		}
 	}
-	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead);
+	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	{
 		std::cerr << "writing sixth graph" << std::endl;
 		std::vector<std::vector<size_t>> lengths;
