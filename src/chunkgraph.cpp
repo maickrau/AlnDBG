@@ -18,6 +18,7 @@
 #include "GraphResolver.h"
 #include "AnchorFinder.h"
 #include "ChunkmerFilter.h"
+#include "edlib.h"
 
 void writeGraph(const std::string& filename, const std::vector<std::vector<size_t>>& lengths, const std::vector<size_t>& coverages, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
 {
@@ -205,54 +206,16 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 	}
 }
 
-size_t getNumMismatches(const TwobitString& leftSequence, const TwobitString& rightSequence, const size_t maxMismatches)
+size_t getNumMismatches(const std::string& leftSequence, const std::string& rightSequence, const size_t maxMismatches)
 {
-	assert(leftSequence.size() >= rightSequence.size());
-	assert(rightSequence.size() + maxMismatches >= leftSequence.size());
-	// left sequence: left to right
-	// right sequence: up to down
-	// offset: diagonally to down-right
-	// diagonal: up to down
-	// zero diagonal (top left corner) at maxBefore
-	std::vector<size_t> offset;
-	size_t maxBefore = (leftSequence.size() - rightSequence.size()) + (maxMismatches - (leftSequence.size() - rightSequence.size()))/2;
-	size_t maxAfter = (maxMismatches - (leftSequence.size() - rightSequence.size()))/2;
-	assert(maxBefore < maxMismatches);
-	assert(maxAfter < maxMismatches);
-	offset.resize(maxBefore + maxAfter + 1, std::numeric_limits<size_t>::max());
-	offset[maxBefore] = 0;
-	std::vector<size_t> prevOffset;
-	prevOffset.resize(offset.size());
-	while (offset[maxBefore] < leftSequence.size() && offset[maxBefore] < rightSequence.size() && leftSequence.get(offset[maxBefore]) == rightSequence.get(offset[maxBefore])) offset[maxBefore] += 1;
-	if (leftSequence.size() == rightSequence.size() && offset[maxBefore] == leftSequence.size()) return 0;
-	for (size_t score = 1; score < maxMismatches; score++)
+	EdlibAlignResult result = edlibAlign(leftSequence.data(), leftSequence.size(), rightSequence.data(), rightSequence.size(), edlibNewAlignConfig(maxMismatches+1, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE, NULL, 0));
+	size_t mismatches = maxMismatches+1;
+	if (result.status == EDLIB_STATUS_OK)
 	{
-		std::swap(offset, prevOffset);
-		if (score <= maxBefore) prevOffset[maxBefore-score] = score;
-		if (maxBefore+score < offset.size()) prevOffset[maxBefore+score] = score;
-		for (size_t diagonal = (score < maxBefore ? (maxBefore - score) : 0); diagonal <= maxBefore + score && diagonal < offset.size(); diagonal++)
-		{
-			assert(prevOffset[diagonal] != std::numeric_limits<size_t>::max());
-			offset[diagonal] = prevOffset[diagonal]+1;
-			if (diagonal > 0 && prevOffset[diagonal-1] != std::numeric_limits<size_t>::max())
-			{
-				offset[diagonal] = std::max(offset[diagonal], prevOffset[diagonal-1]);
-			}
-			if (diagonal+1 < offset.size() && prevOffset[diagonal+1] != std::numeric_limits<size_t>::max())
-			{
-				offset[diagonal] = std::max(offset[diagonal], prevOffset[diagonal+1]+1);
-			}
-			offset[diagonal] = std::min(offset[diagonal], std::min(leftSequence.size(), rightSequence.size()+maxBefore-diagonal));
-		}
-		for (size_t diagonal = (score < maxBefore ? (maxBefore - score) : 0); diagonal <= maxBefore + score && diagonal < offset.size(); diagonal++)
-		{
-			assert(offset[diagonal] <= leftSequence.size());
-			assert(offset[diagonal]+diagonal-maxBefore <= rightSequence.size());
-			while (offset[diagonal] < leftSequence.size() && offset[diagonal]+diagonal-maxBefore < rightSequence.size() && leftSequence.get(offset[diagonal]) == rightSequence.get(offset[diagonal]+diagonal-maxBefore)) offset[diagonal] += 1;
-			if (offset[diagonal] == leftSequence.size() && offset[diagonal]+diagonal-maxBefore == rightSequence.size()) return score;
-		}
+		mismatches = result.editDistance;
 	}
-	return maxMismatches+1;
+	edlibFreeAlignResult(result);
+	return mismatches;
 }
 
 template <typename F>
@@ -509,7 +472,7 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 			std::lock_guard<std::mutex> lock { resultMutex };
 			std::cerr << "split chunk " << i << " coverage " << occurrencesPerChunk[i].size() << std::endl;
 		}
-		std::vector<std::pair<TwobitString, size_t>> sequencesPerOccurrence;
+		std::vector<std::pair<std::string, size_t>> sequencesPerOccurrence;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			sequencesPerOccurrence.emplace_back();
@@ -519,14 +482,14 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 			{
 				for (size_t k = std::get<0>(t); k <= std::get<1>(t); k++)
 				{
-					sequencesPerOccurrence.back().first.emplace_back(readSequences[occurrencesPerChunk[i][j].first].get(k));
+					sequencesPerOccurrence.back().first.push_back("ACGT"[readSequences[occurrencesPerChunk[i][j].first].get(k)]);
 				}
 			}
 			else
 			{
 				for (size_t k = std::get<1>(t); k >= std::get<0>(t) && k < readSequences[occurrencesPerChunk[i][j].first].size(); k--)
 				{
-					sequencesPerOccurrence.back().first.emplace_back(3-readSequences[occurrencesPerChunk[i][j].first].get(k));
+					sequencesPerOccurrence.back().first.push_back("ACGT"[3-readSequences[occurrencesPerChunk[i][j].first].get(k)]);
 				}
 			}
 		}

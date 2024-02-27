@@ -1,5 +1,5 @@
 GPP=$(CXX)
-CPPFLAGS=-Wall -Wextra -std=c++17 -O3 -g -Izstr/src -Iparallel-hashmap/parallel_hashmap/ -Icxxopts/include -Wno-unused-parameter `pkg-config --cflags zlib` -IMBG/src -Iconcurrentqueue -Ihifioverlapper/src
+CPPFLAGS=-Wall -Wextra -std=c++17 -O3 -g -Izstr/src -Iedlib/edlib/include -Iparallel-hashmap/parallel_hashmap/ -Icxxopts/include -Wno-unused-parameter `pkg-config --cflags zlib` -IMBG/src -Iconcurrentqueue -Ihifioverlapper/src
 
 ODIR=obj
 BINDIR=bin
@@ -23,7 +23,7 @@ $(shell mkdir -p obj)
 $(BINDIR)/AlnDBG: $(OBJ) $(ODIR)/main.o hifioverlapper/lib/hifioverlapper.a MBG/lib/mbg.a
 	$(GPP) -o $@ $^ $(LINKFLAGS)
 
-$(BINDIR)/chunkgraph: $(OBJ) $(ODIR)/chunkgraph.o hifioverlapper/lib/hifioverlapper.a MBG/lib/mbg.a
+$(BINDIR)/chunkgraph: $(OBJ) $(ODIR)/chunkgraph.o hifioverlapper/lib/hifioverlapper.a MBG/lib/mbg.a edlib/edlib/src/edlib.cpp
 	$(GPP) -o $@ $^ $(LINKFLAGS)
 
 $(BINDIR)/alncorrect: $(OBJ) $(ODIR)/alncorrect.o hifioverlapper/lib/hifioverlapper.a MBG/lib/mbg.a

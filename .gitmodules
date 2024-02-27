@@ -16,3 +16,6 @@
 [submodule "hifioverlapper"]
 	path = hifioverlapper
 	url = https://github.com/maickrau/hifioverlapper.git
+[submodule "edlib"]
+	path = edlib
+	url = https://github.com/Martinsos/edlib.git
