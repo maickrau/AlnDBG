@@ -20,6 +20,8 @@
 #include "ChunkmerFilter.h"
 #include "edlib.h"
 
+const double mismatchFraction = 0.03; // try 2-3x avg error rate
+
 void writeGraph(const std::string& filename, const std::vector<std::vector<size_t>>& lengths, const std::vector<size_t>& coverages, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
 {
 	std::ofstream graph { filename };
@@ -445,7 +447,6 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting per sequence identity" << std::endl;
-	const double mismatchFraction = 0.05;
 	const size_t mismatchFloor = 10;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -633,7 +634,6 @@ std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, co
 
 void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
-	const double mismatchFraction = 0.05;
 	const size_t mismatchFloor = 10;
 	std::cerr << "splitting by base counts" << std::endl;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
