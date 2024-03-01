@@ -993,6 +993,29 @@ void removeHighCoverageChunks(std::vector<std::vector<std::tuple<size_t, size_t,
 	}
 }
 
+void writeGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	std::cerr << "writing graph " << graphFile << std::endl;
+	std::vector<std::vector<size_t>> lengths;
+	std::vector<size_t> coverages;
+	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
+	writeGraph(graphFile, lengths, coverages, edgeCoverage, edgeOverlaps);
+	std::cerr << "writing paths " << pathsFile << std::endl;
+	std::ofstream pathfile { pathsFile };
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+			auto t = chunksPerRead[i][j];
+			uint64_t rawnode = std::get<2>(t);
+			pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
+		}
+	}
+}
+
 void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads)
 {
 	std::vector<bool> useTheseChunks;
@@ -1000,196 +1023,24 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
 	removeContainedChunks(chunksPerRead);
 	splitPerLength(chunksPerRead);
-	{
-		std::cerr << "writing first graph" << std::endl;
-		std::vector<std::vector<size_t>> lengths;
-		std::vector<size_t> coverages;
-		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
-		writeGraph("graph-round1.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-		std::ofstream pathfile { "fakepaths.txt" };
-		for (size_t i = 0; i < chunksPerRead.size(); i++)
-		{
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-				auto t = chunksPerRead[i][j];
-				uint64_t rawnode = std::get<2>(t);
-				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
-			}
-		}
-	}
+	writeGraph("graph-round1.gfa", "fakepaths1.txt", chunksPerRead);
 	splitPerBaseCounts(readSequences, chunksPerRead, numThreads);
-	{
-		std::cerr << "writing second graph" << std::endl;
-		std::vector<std::vector<size_t>> lengths;
-		std::vector<size_t> coverages;
-		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
-		writeGraph("graph-round2.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-		std::ofstream pathfile { "fakepaths2.txt" };
-		for (size_t i = 0; i < chunksPerRead.size(); i++)
-		{
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-				auto t = chunksPerRead[i][j];
-				uint64_t rawnode = std::get<2>(t);
-				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
-			}
-		}
-	}
+	writeGraph("graph-round2.gfa", "fakepaths2.txt", chunksPerRead);
 	splitPerMinHashes(readSequences, chunksPerRead, numThreads);
-	{
-		std::cerr << "writing third graph" << std::endl;
-		std::vector<std::vector<size_t>> lengths;
-		std::vector<size_t> coverages;
-		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
-		writeGraph("graph-round3.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-		std::ofstream pathfile { "fakepaths3.txt" };
-		for (size_t i = 0; i < chunksPerRead.size(); i++)
-		{
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-				auto t = chunksPerRead[i][j];
-				uint64_t rawnode = std::get<2>(t);
-				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
-			}
-		}
-	}
+	writeGraph("graph-round3.gfa", "fakepath3.txt", chunksPerRead);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	{
-		std::cerr << "writing fourth graph" << std::endl;
-		std::vector<std::vector<size_t>> lengths;
-		std::vector<size_t> coverages;
-		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
-		writeGraph("graph-round4.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-		std::ofstream pathfile { "fakepaths4.txt" };
-		for (size_t i = 0; i < chunksPerRead.size(); i++)
-		{
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-				auto t = chunksPerRead[i][j];
-				uint64_t rawnode = std::get<2>(t);
-				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
-			}
-		}
-	}
+	writeGraph("graph-round4.gfa", "fakepath4.txt", chunksPerRead);
 	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
-	{
-		std::cerr << "writing fifth graph" << std::endl;
-		std::vector<std::vector<size_t>> lengths;
-		std::vector<size_t> coverages;
-		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
-		writeGraph("graph-round5.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-		std::ofstream pathfile { "fakepaths5.txt" };
-		for (size_t i = 0; i < chunksPerRead.size(); i++)
-		{
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-				auto t = chunksPerRead[i][j];
-				uint64_t rawnode = std::get<2>(t);
-				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
-			}
-		}
-	}
+	writeGraph("graph-round5.gfa", "fakepath5.txt", chunksPerRead);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-//	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
-	{
-		std::cerr << "writing sixth graph" << std::endl;
-		std::vector<std::vector<size_t>> lengths;
-		std::vector<size_t> coverages;
-		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
-		writeGraph("graph-round6.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-		std::ofstream pathfile { "fakepaths6.txt" };
-		for (size_t i = 0; i < chunksPerRead.size(); i++)
-		{
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-				auto t = chunksPerRead[i][j];
-				uint64_t rawnode = std::get<2>(t);
-				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
-			}
-		}
-	}
+	writeGraph("graph-round6.gfa", "fakepath6.txt", chunksPerRead);
 	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	{
-		std::cerr << "writing seventh graph" << std::endl;
-		std::vector<std::vector<size_t>> lengths;
-		std::vector<size_t> coverages;
-		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
-		writeGraph("graph-round7.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-		std::ofstream pathfile { "fakepaths7.txt" };
-		for (size_t i = 0; i < chunksPerRead.size(); i++)
-		{
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-				auto t = chunksPerRead[i][j];
-				uint64_t rawnode = std::get<2>(t);
-				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
-			}
-		}
-	}
+	writeGraph("graph-round7.gfa", "fakepath7.txt", chunksPerRead);
 	removeSingleCopyChunks(chunksPerRead);
-	{
-		std::cerr << "writing eighth graph" << std::endl;
-		std::vector<std::vector<size_t>> lengths;
-		std::vector<size_t> coverages;
-		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
-		writeGraph("graph-round8.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-		std::ofstream pathfile { "fakepaths8.txt" };
-		for (size_t i = 0; i < chunksPerRead.size(); i++)
-		{
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-				auto t = chunksPerRead[i][j];
-				uint64_t rawnode = std::get<2>(t);
-				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
-			}
-		}
-	}
+	writeGraph("graph-round8.gfa", "fakepath8.txt", chunksPerRead);
 	removeHighCoverageChunks(chunksPerRead, 60);
-	{
-		std::cerr << "writing ninth graph" << std::endl;
-		std::vector<std::vector<size_t>> lengths;
-		std::vector<size_t> coverages;
-		std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
-		phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
-		writeGraph("graph-round9.gfa", lengths, coverages, edgeCoverage, edgeOverlaps);
-		std::ofstream pathfile { "fakepaths9.txt" };
-		for (size_t i = 0; i < chunksPerRead.size(); i++)
-		{
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-				auto t = chunksPerRead[i][j];
-				uint64_t rawnode = std::get<2>(t);
-				pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
-			}
-		}
-	}
+	writeGraph("graph-round9.gfa", "fakepath9.txt", chunksPerRead);
 }
 
 int main(int argc, char** argv)
