@@ -645,7 +645,7 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &iterationOrder, mismatchFraction, mismatchFloor](const size_t iterationIndex)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &iterationOrder, mismatchFloor](const size_t iterationIndex)
 	{
 		const size_t i = iterationOrder[iterationIndex];
 		{
@@ -827,7 +827,7 @@ void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vec
 	}
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, mismatchFraction, mismatchFloor](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, mismatchFloor](const size_t i)
 	{
 		std::vector<std::vector<size_t>> countsPerOccurrence;
 		countsPerOccurrence.resize(occurrencesPerChunk[i].size());
@@ -886,6 +886,441 @@ void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vec
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
 				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
+			}
+		}
+	});
+}
+
+void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+{
+	std::cerr << "splitting by interchunk phasing kmers" << std::endl;
+	const size_t k = 11;
+	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t) + 1);
+			occurrencesPerChunk[std::get<2>(t)].emplace_back(i, j);
+		}
+	}
+	std::vector<bool> repetitive;
+	repetitive.resize(occurrencesPerChunk.size(), false);
+	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	{
+		phmap::flat_hash_set<size_t> readsHere;
+		size_t repeats = 0;
+		for (auto t : occurrencesPerChunk[i])
+		{
+			if (readsHere.count(t.first) == 1) repeats += 1;
+			readsHere.insert(t.first);
+		}
+		if (repeats >= 2) repetitive[i] = true;
+	}
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<uint64_t>> edges;
+	{
+		phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, size_t>> edgeCoverage;
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 1; j < chunksPerRead[i].size(); j++)
+			{
+				uint64_t prevNode = std::get<2>(chunksPerRead[i][j-1]);
+				uint64_t thisNode = std::get<2>(chunksPerRead[i][j]);
+				if (repetitive[prevNode & maskUint64_t]) continue;
+				if (repetitive[thisNode & maskUint64_t]) continue;
+				if (occurrencesPerChunk[prevNode & maskUint64_t].size() == 1) continue;
+				if (occurrencesPerChunk[thisNode & maskUint64_t].size() == 1) continue;
+				edgeCoverage[prevNode][thisNode] += 1;
+				edgeCoverage[thisNode ^ firstBitUint64_t][prevNode ^ firstBitUint64_t] += 1;
+			}
+		}
+		for (const auto& pair : edgeCoverage)
+		{
+			for (const auto pair2 : pair.second)
+			{
+				if (pair2.second == 1) continue;
+				edges[pair.first].emplace(pair2.first);
+			}
+		}
+	}
+	std::vector<std::pair<phmap::flat_hash_set<size_t>, phmap::flat_hash_set<size_t>>> maybePhaseGroups;
+	{
+		phmap::flat_hash_map<uint64_t, std::tuple<size_t, uint64_t, uint64_t>> edgeToGroupMapping;
+		size_t nextPhaseGroup = 0;
+		for (const auto& pair : edges)
+		{
+			if (pair.second.size() != 2) continue;
+			assert(!repetitive[pair.first & maskUint64_t]);
+			uint64_t first = *pair.second.begin();
+			uint64_t second = *(++pair.second.begin());
+			assert(!repetitive[first & maskUint64_t]);
+			assert(!repetitive[second & maskUint64_t]);
+			assert(edges.count(first ^ firstBitUint64_t) == 1);
+			assert(edges.count(second ^ firstBitUint64_t) == 1);
+			if (edges.at(first ^ firstBitUint64_t).size() != 1) continue;
+			if (edges.at(second ^ firstBitUint64_t).size() != 1) continue;
+			assert(first != second);
+			if ((first & maskUint64_t) == (second & maskUint64_t)) continue;
+			assert(*edges.at(first ^ firstBitUint64_t).begin() == (pair.first ^ firstBitUint64_t));
+			assert(*edges.at(second ^ firstBitUint64_t).begin() == (pair.first ^ firstBitUint64_t));
+			edgeToGroupMapping[pair.first] = std::make_tuple(nextPhaseGroup, first, second);
+			nextPhaseGroup += 1;
+			maybePhaseGroups.emplace_back();
+		}
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 1; j < chunksPerRead[i].size(); j++)
+			{
+				uint64_t prevNode = std::get<2>(chunksPerRead[i][j-1]);
+				uint64_t thisNode = std::get<2>(chunksPerRead[i][j]);
+				uint64_t allele = std::numeric_limits<size_t>::max();
+				uint64_t fork = std::numeric_limits<size_t>::max();
+				if (edgeToGroupMapping.count(prevNode) == 1 && edgeToGroupMapping.count(thisNode ^ firstBitUint64_t) == 1) continue;
+				if (edgeToGroupMapping.count(prevNode) == 1)
+				{
+					assert(edgeToGroupMapping.count(thisNode ^ firstBitUint64_t) == 0);
+					fork = prevNode;
+					allele = thisNode;
+				}
+				if (edgeToGroupMapping.count(thisNode ^ firstBitUint64_t) == 1)
+				{
+					assert(edgeToGroupMapping.count(prevNode) == 0);
+					fork = (thisNode ^ firstBitUint64_t);
+					allele = (prevNode ^ firstBitUint64_t);
+				}
+				if (fork == std::numeric_limits<size_t>::max()) continue;
+				assert(allele != std::numeric_limits<size_t>::max());
+				assert(allele != std::get<1>(edgeToGroupMapping.at(fork)) || allele != std::get<2>(edgeToGroupMapping.at(fork)));
+				if (allele == std::get<1>(edgeToGroupMapping.at(fork)))
+				{
+					maybePhaseGroups[std::get<0>(edgeToGroupMapping.at(fork))].first.emplace(i);
+				}
+				else if (allele == std::get<2>(edgeToGroupMapping.at(fork)))
+				{
+					maybePhaseGroups[std::get<0>(edgeToGroupMapping.at(fork))].second.emplace(i);
+				}
+			}
+		}
+		for (size_t i = maybePhaseGroups.size()-1; i < maybePhaseGroups.size(); i--)
+		{
+			phmap::flat_hash_set<size_t> inconsistents;
+			for (size_t read : maybePhaseGroups[i].first)
+			{
+				if (maybePhaseGroups[i].second.count(read) == 1) inconsistents.insert(read);
+			}
+			if (inconsistents.size() >= 3)
+			{
+				std::swap(maybePhaseGroups[i], maybePhaseGroups.back());
+				maybePhaseGroups.pop_back();
+				continue;
+			}
+			for (size_t read : inconsistents)
+			{
+				maybePhaseGroups[i].first.erase(read);
+				maybePhaseGroups[i].second.erase(read);
+			}
+		}
+		for (size_t i = maybePhaseGroups.size()-1; i < maybePhaseGroups.size(); i--)
+		{
+			if (maybePhaseGroups[i].first.size() >= 4 && maybePhaseGroups[i].second.size() >= 4) continue;
+			std::swap(maybePhaseGroups.back(), maybePhaseGroups[i]);
+			maybePhaseGroups.pop_back();
+		}
+	}
+	size_t nextNum = 0;
+	std::mutex resultMutex;
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &repetitive, &maybePhaseGroups, k](const size_t i)
+	{
+		std::vector<size_t> applicablePhasingGroups;
+		std::vector<size_t> readsHere;
+		{
+			phmap::flat_hash_set<size_t> readsHereUnique;
+			for (auto t : occurrencesPerChunk[i])
+			{
+				readsHereUnique.emplace(t.first);
+			}
+			readsHere.insert(readsHere.end(), readsHereUnique.begin(), readsHereUnique.end());
+		}
+		for (size_t j = 0; j < maybePhaseGroups.size(); j++)
+		{
+			size_t firsts = 0;
+			size_t seconds = 0;
+			for (size_t read : readsHere)
+			{
+				if (maybePhaseGroups[j].first.count(read) == 1) firsts += 1;
+				if (maybePhaseGroups[j].second.count(read) == 1) seconds += 1;
+			}
+			if (firsts < 3) continue;
+			if (seconds < 3) continue;
+			if (firsts+seconds < readsHere.size() * 0.75) continue;
+			applicablePhasingGroups.push_back(j);
+		}
+		phmap::flat_hash_map<size_t, std::vector<size_t>> phaseGroupsPerRead;
+		size_t nextGroupNum = 0;
+		for (const size_t phaseGroup : applicablePhasingGroups)
+		{
+			phmap::flat_hash_set<size_t> kmersInFirst;
+			phmap::flat_hash_set<size_t> kmersInSecond;
+			phmap::flat_hash_set<size_t> kmersInEvenOneFirst;
+			phmap::flat_hash_set<size_t> kmersInEvenOneSecond;
+			bool hasFirst = false;
+			bool hasSecond = false;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				size_t read = occurrencesPerChunk[i][j].first;
+				if (maybePhaseGroups[phaseGroup].first.count(read) == 0 && maybePhaseGroups[phaseGroup].second.count(read) == 0) continue;
+				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+				phmap::flat_hash_set<size_t> kmersHere;
+				iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersHere](const size_t kmer, const size_t pos)
+				{
+					kmersHere.insert(kmer);
+				});
+				if (maybePhaseGroups[phaseGroup].first.count(read) == 1)
+				{
+					kmersInEvenOneFirst.insert(kmersHere.begin(), kmersHere.end());
+					assert(maybePhaseGroups[phaseGroup].second.count(read) == 0);
+					if (!hasFirst)
+					{
+						hasFirst = true;
+						kmersInFirst = kmersHere;
+					}
+					else
+					{
+						phmap::flat_hash_set<size_t> removeKmers;
+						for (size_t kmer : kmersInFirst)
+						{
+							if (kmersHere.count(kmer) == 0) removeKmers.insert(kmer);
+						}
+						for (size_t kmer : removeKmers)
+						{
+							kmersInFirst.erase(kmer);
+						}
+					}
+				}
+				else
+				{
+					kmersInEvenOneSecond.insert(kmersHere.begin(), kmersHere.end());
+					assert(maybePhaseGroups[phaseGroup].second.count(read) == 1);
+					if (!hasSecond)
+					{
+						hasSecond = true;
+						kmersInSecond = kmersHere;
+					}
+					else
+					{
+						phmap::flat_hash_set<size_t> removeKmers;
+						for (size_t kmer : kmersInSecond)
+						{
+							if (kmersHere.count(kmer) == 0) removeKmers.insert(kmer);
+						}
+						for (size_t kmer : removeKmers)
+						{
+							kmersInSecond.erase(kmer);
+						}
+					}
+				}
+			}
+			{
+				for (size_t kmer : kmersInEvenOneFirst)
+				{
+					if (kmersInSecond.count(kmer) == 0) continue;
+					kmersInSecond.erase(kmer);
+				}
+				for (size_t kmer : kmersInEvenOneSecond)
+				{
+					if (kmersInFirst.count(kmer) == 0) continue;
+					kmersInFirst.erase(kmer);
+				}
+			}
+			{
+				phmap::flat_hash_set<size_t> sharedKmers;
+				for (auto kmer : kmersInFirst)
+				{
+					if (kmersInSecond.count(kmer) == 0) continue;
+					sharedKmers.insert(kmer);
+				}
+				for (auto kmer : sharedKmers)
+				{
+					kmersInFirst.erase(kmer);
+					kmersInSecond.erase(kmer);
+				}
+			}
+			if (kmersInFirst.size() == 0 || kmersInSecond.size() == 0) continue;
+			bool possiblyValid = true;
+			phmap::flat_hash_set<size_t> removeKmers;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				size_t read = occurrencesPerChunk[i][j].first;
+				if (maybePhaseGroups[phaseGroup].first.count(read) == 1 || maybePhaseGroups[phaseGroup].second.count(read) == 1) continue;
+				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+				phmap::flat_hash_set<size_t> kmersHere;
+				iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersHere](const size_t kmer, const size_t pos)
+				{
+					kmersHere.insert(kmer);
+				});
+				size_t firstMatches = 0;
+				size_t secondMatches = 0;
+				for (size_t kmer : kmersHere)
+				{
+					if (kmersInFirst.count(kmer) == 1)
+					{
+						assert(kmersInSecond.count(kmer) == 0);
+						firstMatches += 1;
+					}
+					if (kmersInSecond.count(kmer) == 1)
+					{
+						assert(kmersInFirst.count(kmer) == 0);
+						secondMatches += 1;
+					}
+				}
+				if (firstMatches == secondMatches)
+				{
+					possiblyValid = false;
+					break;
+				}
+				if (firstMatches > secondMatches)
+				{
+					for (size_t kmer : kmersInFirst)
+					{
+						if (kmersHere.count(kmer) == 1) continue;
+						removeKmers.insert(kmer);
+					}
+					for (size_t kmer : kmersInSecond)
+					{
+						if (kmersHere.count(kmer) == 0) continue;
+						removeKmers.insert(kmer);
+					}
+				}
+				else
+				{
+					assert(firstMatches < secondMatches);
+					for (size_t kmer : kmersInSecond)
+					{
+						if (kmersHere.count(kmer) == 1) continue;
+						removeKmers.insert(kmer);
+					}
+					for (size_t kmer : kmersInFirst)
+					{
+						if (kmersHere.count(kmer) == 0) continue;
+						removeKmers.insert(kmer);
+					}
+				}
+			}
+			if (!possiblyValid) continue;
+			for (auto kmer : removeKmers)
+			{
+				assert(kmersInFirst.count(kmer) == 1 || kmersInSecond.count(kmer) == 1);
+				if (kmersInFirst.count(kmer) == 1)
+				{
+					assert(kmersInSecond.count(kmer) == 0);
+					kmersInFirst.erase(kmer);
+				}
+				else
+				{
+					assert(kmersInSecond.count(kmer) == 1);
+					kmersInSecond.erase(kmer);
+				}
+			}
+			phmap::flat_hash_map<size_t, size_t> assignments;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				size_t read = occurrencesPerChunk[i][j].first;
+				if (maybePhaseGroups[phaseGroup].first.count(read) == 1)
+				{
+					assert(maybePhaseGroups[phaseGroup].second.count(read) == 0);
+					assignments[read] = 0;
+					continue;
+				}
+				if (maybePhaseGroups[phaseGroup].second.count(read) == 1)
+				{
+					assignments[read] = 1;
+					continue;
+				}
+				assert(maybePhaseGroups[phaseGroup].first.count(read) == 0);
+				assert(maybePhaseGroups[phaseGroup].second.count(read) == 0);
+				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+				phmap::flat_hash_set<size_t> kmersHere;
+				iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersHere](const size_t kmer, const size_t pos)
+				{
+					kmersHere.insert(kmer);
+				});
+				size_t firstMatches = 0;
+				size_t secondMatches = 0;
+				for (size_t kmer : kmersHere)
+				{
+					if (kmersInFirst.count(kmer) == 1)
+					{
+						assert(kmersInSecond.count(kmer) == 0);
+						firstMatches += 1;
+					}
+					if (kmersInSecond.count(kmer) == 1)
+					{
+						assert(kmersInFirst.count(kmer) == 0);
+						secondMatches += 1;
+					}
+				}
+				if (firstMatches == secondMatches)
+				{
+					possiblyValid = false;
+					break;
+				}
+				if (firstMatches > secondMatches)
+				{
+					assert(assignments.count(read) == 0 || assignments.at(read) == 0);
+					assignments[read] = 0;
+				}
+				else
+				{
+					assert(assignments.count(read) == 0 || assignments.at(read) == 1);
+					assignments[read] = 1;
+				}
+			}
+			if (!possiblyValid) continue;
+			for (auto pair : assignments)
+			{
+				phaseGroupsPerRead[pair.first].push_back(nextGroupNum + pair.second);
+			}
+			nextGroupNum += 2;
+		}
+		std::vector<size_t> parent;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			parent.emplace_back(j);
+		}
+		if (phaseGroupsPerRead.size() == 0)
+		{
+			for (size_t j = 1; j < occurrencesPerChunk[i].size(); j++)
+			{
+				merge(parent, 0, j);
+			}
+		}
+		else
+		{
+			for (size_t j = 1; j < occurrencesPerChunk[i].size(); j++)
+			{
+				for (size_t k = 0; k < j; k++)
+				{
+					size_t readj = occurrencesPerChunk[i][j].first;
+					size_t readk = occurrencesPerChunk[i][k].first;
+					if (phaseGroupsPerRead.at(readj) != phaseGroupsPerRead.at(readk)) continue;
+					merge(parent, j, k);
+				}
+			}
+		}
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			phmap::flat_hash_map<size_t, size_t> clusterToNode;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				if (clusterToNode.count(find(parent, j)) == 1) continue;
+				clusterToNode[find(parent, j)] = nextNum;
+				nextNum += 1;
+			}
+			std::cerr << "interchunk phasing kmers splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << clusterToNode.size() << " chunks" << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = clusterToNode.at(find(parent, j)) + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
 			}
 		}
 	});
@@ -1037,10 +1472,14 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeGraph("graph-round7.gfa", "fakepath7.txt", chunksPerRead);
-	removeSingleCopyChunks(chunksPerRead);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeGraph("graph-round8.gfa", "fakepath8.txt", chunksPerRead);
-	removeHighCoverageChunks(chunksPerRead, 60);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeGraph("graph-round9.gfa", "fakepath9.txt", chunksPerRead);
+	removeSingleCopyChunks(chunksPerRead);
+	writeGraph("graph-round10.gfa", "fakepath10.txt", chunksPerRead);
+	removeHighCoverageChunks(chunksPerRead, 60);
+	writeGraph("graph-round11.gfa", "fakepath11.txt", chunksPerRead);
 }
 
 int main(int argc, char** argv)
