@@ -22,23 +22,42 @@
 
 const double mismatchFraction = 0.03; // try 2-3x avg error rate
 
-void writeGraph(const std::string& filename, const std::vector<std::vector<size_t>>& lengths, const std::vector<size_t>& coverages, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
+void writeGraph(const std::string& filename, const std::vector<bool>& allowedNode, const SparseEdgeContainer& allowedEdges, const std::vector<std::vector<size_t>>& lengths, const std::vector<size_t>& coverages, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
 {
 	std::ofstream graph { filename };
 	for (size_t i = 0; i < coverages.size(); i++)
 	{
 		assert(lengths[i].size() >= coverages[i]);
-		if (coverages[i] < 2) continue;
+		if (!allowedNode[i]) continue;
 		size_t length = lengths[i][lengths[i].size()/2];
 		size_t coverage = coverages[i];
 		graph << "S\t" << i << "\t*\tLN:i:" << length << "\tll:i:" << coverage << "\tFC:i:" << length*coverage << std::endl;
 	}
 	for (auto pair : edgeCoverage)
 	{
-		if (pair.second < 2) continue;
+		if (!allowedEdges.hasEdge(std::make_pair(pair.first.first & maskUint64_t, pair.first.first & firstBitUint64_t), std::make_pair(pair.first.second & maskUint64_t, pair.first.second & firstBitUint64_t))) continue;
 		assert(edgeOverlaps.count(pair.first) == 1);
 		graph << "L\t" << (pair.first.first & maskUint64_t) << "\t" << ((pair.first.first & firstBitUint64_t) ? "+" : "-") << "\t" << (pair.first.second & maskUint64_t) << "\t" << ((pair.first.second & firstBitUint64_t) ? "+" : "-") << "\t" << edgeOverlaps.at(pair.first) << "M\tec:i:" << pair.second << std::endl;
 	}
+}
+
+std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const std::vector<size_t>& coverages, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	std::vector<bool> allowedNode;
+	allowedNode.resize(coverages.size(), false);
+	SparseEdgeContainer allowedEdges;
+	allowedEdges.resize(coverages.size());
+	for (size_t i = 0; i < coverages.size(); i++)
+	{
+		allowedNode[i] = (coverages[i] >= 2);
+	}
+	for (auto pair : edgeCoverage)
+	{
+		if (pair.second < 2) continue;
+		allowedEdges.addEdge(std::make_pair(pair.first.first & maskUint64_t, pair.first.first & firstBitUint64_t), std::make_pair(pair.first.second & maskUint64_t, pair.first.second & firstBitUint64_t));
+		allowedEdges.addEdge(std::make_pair(pair.first.second & maskUint64_t, (pair.first.second ^ firstBitUint64_t) & firstBitUint64_t), std::make_pair(pair.first.first & maskUint64_t, (pair.first.first ^ firstBitUint64_t) & firstBitUint64_t));
+	}
+	return std::make_pair(allowedNode, allowedEdges);
 }
 
 std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCoverages(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
@@ -1436,7 +1455,10 @@ void writeGraph(const std::string& graphFile, const std::string& pathsFile, cons
 	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
-	writeGraph(graphFile, lengths, coverages, edgeCoverage, edgeOverlaps);
+	std::vector<bool> allowedNode;
+	SparseEdgeContainer allowedEdges;
+	std::tie(allowedNode, allowedEdges) = getAllowedNodesAndEdges(coverages, edgeCoverage, chunksPerRead);
+	writeGraph(graphFile, allowedNode, allowedEdges, lengths, coverages, edgeCoverage, edgeOverlaps);
 	std::cerr << "writing paths " << pathsFile << std::endl;
 	std::ofstream pathfile { pathsFile };
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
