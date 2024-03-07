@@ -1363,11 +1363,21 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 				}
 				if (firstMatches > secondMatches)
 				{
+					if (assignments.count(read) == 1 && assignments.at(read) != 0)
+					{
+						possiblyValid = false;
+						break;
+					}
 					assert(assignments.count(read) == 0 || assignments.at(read) == 0);
 					assignments[read] = 0;
 				}
 				else
 				{
+					if (assignments.count(read) == 1 && assignments.at(read) != 1)
+					{
+						possiblyValid = false;
+						break;
+					}
 					assert(assignments.count(read) == 0 || assignments.at(read) == 1);
 					assignments[read] = 1;
 				}
