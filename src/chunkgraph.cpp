@@ -57,6 +57,83 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 		allowedEdges.addEdge(std::make_pair(pair.first.first & maskUint64_t, pair.first.first & firstBitUint64_t), std::make_pair(pair.first.second & maskUint64_t, pair.first.second & firstBitUint64_t));
 		allowedEdges.addEdge(std::make_pair(pair.first.second & maskUint64_t, (pair.first.second ^ firstBitUint64_t) & firstBitUint64_t), std::make_pair(pair.first.first & maskUint64_t, (pair.first.first ^ firstBitUint64_t) & firstBitUint64_t));
 	}
+	phmap::flat_hash_set<uint64_t> tip;
+	for (size_t i = 0; i < coverages.size(); i++)
+	{
+		if (!allowedNode[i]) continue;
+		if (allowedEdges.getEdges(std::make_pair(i, true)).size() == 0) tip.insert(i + firstBitUint64_t);
+		if (allowedEdges.getEdges(std::make_pair(i, false)).size() == 0) tip.insert(i);
+	}
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, size_t>> tipConnections;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		size_t lastTip = std::numeric_limits<size_t>::max();
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (!allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
+			if (lastTip != std::numeric_limits<size_t>::max() && tip.count(std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t) == 1)
+			{
+				uint64_t tipHere = std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t;
+				tipConnections[lastTip][tipHere] += 1;
+				tipConnections[tipHere][lastTip] += 1;
+			}
+			lastTip = std::numeric_limits<size_t>::max();
+			if (tip.count(std::get<2>(chunksPerRead[i][j])) == 1)
+			{
+				lastTip = std::get<2>(chunksPerRead[i][j]);
+			}
+		}
+	}
+	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> allowedTips;
+	for (uint64_t t : tip)
+	{
+		if (tipConnections.count(t) == 0) continue;
+		if (tipConnections.at(t).size() != 1) continue;
+		uint64_t otherEnd = tipConnections.at(t).begin()->first;
+		assert(tipConnections.count(otherEnd) == 1);
+		if (tipConnections.at(otherEnd).size() != 1) continue;
+		assert((tipConnections.at(otherEnd).begin()->first) == t);
+		allowedTips.emplace(t, otherEnd);
+		allowedTips.emplace(otherEnd, t);
+		std::cerr << "allowed tip from " << ((t & firstBitUint64_t) ? ">" : "<") << (t & maskUint64_t) << " to " << ((otherEnd & firstBitUint64_t) ? ">" : "<") << (otherEnd & maskUint64_t) << std::endl;
+	}
+	phmap::flat_hash_set<size_t> newlyAllowedNodes;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		size_t lastTip = std::numeric_limits<size_t>::max();
+		size_t lastTipIndex = std::numeric_limits<size_t>::max();
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (!allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
+			if (lastTip != std::numeric_limits<size_t>::max() && tip.count(std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t) == 1)
+			{
+				assert(lastTipIndex < j);
+				uint64_t tipHere = std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t;
+				if (allowedTips.count(std::make_pair(lastTip, tipHere)) == 1)
+				{
+					for (size_t k = lastTipIndex; k < j; k++)
+					{
+						newlyAllowedNodes.insert(std::get<2>(chunksPerRead[i][k]) & maskUint64_t);
+						std::pair<size_t, bool> fromnode { std::get<2>(chunksPerRead[i][k]) & maskUint64_t, std::get<2>(chunksPerRead[i][k]) & firstBitUint64_t };
+						std::pair<size_t, bool> tonode { std::get<2>(chunksPerRead[i][k+1]) & maskUint64_t, std::get<2>(chunksPerRead[i][k+1]) & firstBitUint64_t };
+						allowedEdges.addEdge(fromnode, tonode);
+						allowedEdges.addEdge(reverse(tonode), reverse(fromnode));
+					}
+				}
+			}
+			lastTip = std::numeric_limits<size_t>::max();
+			lastTipIndex = std::numeric_limits<size_t>::max();
+			if (tip.count(std::get<2>(chunksPerRead[i][j])) == 1)
+			{
+				lastTip = std::get<2>(chunksPerRead[i][j]);
+				lastTipIndex = j;
+			}
+		}
+	}
+	for (auto node : newlyAllowedNodes)
+	{
+		allowedNode[node] = true;
+	}
 	return std::make_pair(allowedNode, allowedEdges);
 }
 
