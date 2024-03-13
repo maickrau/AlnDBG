@@ -1967,30 +1967,30 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
 	removeContainedChunks(chunksPerRead);
 	splitPerLength(chunksPerRead);
-	writeUnitigGraph("graph-round1.gfa", "fakepath1.txt", chunksPerRead, readNames, rawReadLengths);
+	writeUnitigGraph("graph-round1.gfa", "paths1.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerBaseCounts(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round2.gfa", "fakepath2.txt", chunksPerRead, readNames, rawReadLengths);
+	writeUnitigGraph("graph-round2.gfa", "paths2.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerMinHashes(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round3.gfa", "fakepath3.txt", chunksPerRead, readNames, rawReadLengths);
+	writeUnitigGraph("graph-round3.gfa", "paths3.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round4.gfa", "fakepath4.txt", chunksPerRead, readNames, rawReadLengths);
+	writeUnitigGraph("graph-round4.gfa", "paths4.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round5.gfa", "fakepath5.txt", chunksPerRead, readNames, rawReadLengths);
+	writeUnitigGraph("graph-round5.gfa", "paths5.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round6.gfa", "fakepath6.txt", chunksPerRead, readNames, rawReadLengths);
+	writeUnitigGraph("graph-round6.gfa", "paths6.gaf", chunksPerRead, readNames, rawReadLengths);
 //	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round7.gfa", "fakepath7.txt", chunksPerRead, readNames, rawReadLengths);
+	writeUnitigGraph("graph-round7.gfa", "paths7.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round8.gfa", "fakepath8.txt", chunksPerRead, readNames, rawReadLengths);
+	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
-	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
-	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
-	writeUnitigGraph("graph-round9.gfa", "fakepath9.txt", chunksPerRead, readNames, rawReadLengths);
+//	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
+//	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
+	writeUnitigGraph("graph-round9.gfa", "paths9.gaf", chunksPerRead, readNames, rawReadLengths);
 	removeSingleCopyChunks(chunksPerRead);
-	writeUnitigGraph("graph-round10.gfa", "fakepath10.txt", chunksPerRead, readNames, rawReadLengths);
+	writeUnitigGraph("graph-round10.gfa", "paths10.gaf", chunksPerRead, readNames, rawReadLengths);
 	removeHighCoverageChunks(chunksPerRead, 60);
-	writeUnitigGraph("graph-round11.gfa", "fakepath11.txt", chunksPerRead, readNames, rawReadLengths);
+	writeUnitigGraph("graph-round11.gfa", "paths11.gaf", chunksPerRead, readNames, rawReadLengths);
 }
 
 int main(int argc, char** argv)
