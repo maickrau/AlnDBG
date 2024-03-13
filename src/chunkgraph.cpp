@@ -22,43 +22,67 @@
 
 const double mismatchFraction = 0.03; // try 2-3x avg error rate
 
-void writeUnitigGraph(const std::string& filename, const std::vector<std::vector<uint64_t>>& unitigs, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const std::vector<size_t>& unitigLengths, const std::vector<size_t>& coverages, const SparseEdgeContainer& allowedEdges, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
+class ChunkUnitigGraph
 {
-	std::ofstream graph { filename };
-	for (size_t i = 0; i < unitigs.size(); i++)
+public:
+	std::vector<size_t> unitigLengths;
+	std::vector<double> coverages;
+	SparseEdgeContainer edges;
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps;
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverages;
+private:
+};
+
+class UnitigPath
+{
+public:
+	std::vector<uint64_t> path;
+	size_t pathLeftClip;
+	size_t pathRightClip;
+	size_t readStartPos;
+	size_t readEndPos;
+};
+
+void writeUnitigPaths(const std::string& filename, const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths)
+{
+	std::ofstream file { filename };
+	for (size_t i = 0; i < readPaths.size(); i++)
 	{
-		double coverage = 0;
-		for (auto node : unitigs[i])
+		for (size_t j = 0; j < readPaths[i].size(); j++)
 		{
-			coverage += coverages[node & maskUint64_t];
+			std::string pathstr;
+			size_t pathLength = 0;
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				uint64_t node = readPaths[i][j].path[k];
+				pathstr += ((node & firstBitUint64_t) ? ">" : "<") + std::to_string(node & maskUint64_t);
+				pathLength += unitigGraph.unitigLengths[node & maskUint64_t];
+				if (k >= 1)
+				{
+					uint64_t prevNode = readPaths[i][j].path[k-1];
+					auto pairkey = MBG::canon(std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t), std::make_pair(node & maskUint64_t, node & firstBitUint64_t));
+					std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
+					pathLength -= unitigGraph.edgeOverlaps.at(key);
+				}
+			}
+			file << readNames[i] << "\t" << rawReadLengths[i] << "\t" << readPaths[i][j].readStartPos << "\t" << readPaths[i][j].readEndPos << "\t+\t" << pathstr << "\t" << pathLength << "\t" << readPaths[i][j].pathLeftClip << "\t" << (pathLength - readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t60" << std::endl;
 		}
-		coverage /= unitigs[i].size();
-		graph << "S\t" << i << "\t*\tLN:i:" << unitigLengths[i] << "\tll:f:" << coverage << "\tFC:f:" << (unitigLengths[i] * coverage) << std::endl;
 	}
-	for (size_t i = 0; i < unitigs.size(); i++)
+}
+
+void writeUnitigGraph(const std::string& filename, const ChunkUnitigGraph& unitigGraph)
+{
+	assert(unitigGraph.unitigLengths.size() == unitigGraph.coverages.size());
+	std::ofstream file { filename };
+	for (size_t i = 0; i < unitigGraph.unitigLengths.size(); i++)
 	{
-		std::pair<size_t, bool> lastNode { unitigs[i].back() & maskUint64_t, unitigs[i].back() & firstBitUint64_t};
-		for (auto edge : allowedEdges.getEdges(lastNode))
-		{
-			uint64_t toUnitig = std::get<0>(chunkLocationInUnitig[edge.first]);
-			if (!edge.second) toUnitig ^= firstBitUint64_t;
-			auto pairkey = MBG::canon(lastNode, edge);
-			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
-			size_t overlap = edgeOverlaps.at(key);
-			size_t coverage = edgeCoverage.at(key);
-			graph << "L\t" << i << "\t+\t" << (toUnitig & maskUint64_t) << "\t" << ((toUnitig & firstBitUint64_t) ? "+" : "-") << "\t" << overlap << "M\tec:i:" << coverage << std::endl;
-		}
-		std::pair<size_t, bool> firstNode { unitigs[i][0] & maskUint64_t, (unitigs[i][0] ^ firstBitUint64_t) & firstBitUint64_t};
-		for (auto edge : allowedEdges.getEdges(firstNode))
-		{
-			uint64_t toUnitig = std::get<0>(chunkLocationInUnitig[edge.first]);
-			if (!edge.second) toUnitig ^= firstBitUint64_t;
-			auto pairkey = MBG::canon(firstNode, edge);
-			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
-			size_t overlap = edgeOverlaps.at(key);
-			size_t coverage = edgeCoverage.at(key);
-			graph << "L\t" << i << "\t-\t" << (toUnitig & maskUint64_t) << "\t" << ((toUnitig & firstBitUint64_t) ? "+" : "-") << "\t" << overlap << "M\tec:i:" << coverage << std::endl;
-		}
+		file << "S\t" << i << "\t*\tLN:i:" << unitigGraph.unitigLengths[i] << "\tll:f:" << unitigGraph.coverages[i] << "\tFC:f:" << (unitigGraph.unitigLengths[i] * unitigGraph.coverages[i]) << std::endl;
+	}
+	for (auto pair : unitigGraph.edgeOverlaps)
+	{
+		assert(unitigGraph.edges.hasEdge(std::make_pair(pair.first.first & maskUint64_t, pair.first.first & firstBitUint64_t), std::make_pair(pair.first.second & maskUint64_t, pair.first.second & firstBitUint64_t)) == 1);
+		assert(unitigGraph.edges.hasEdge(std::make_pair(pair.first.second & maskUint64_t, (pair.first.second ^ firstBitUint64_t) & firstBitUint64_t), std::make_pair(pair.first.first & maskUint64_t, (pair.first.first ^ firstBitUint64_t) & firstBitUint64_t)) == 1);
+		file << "L\t" << (pair.first.first & maskUint64_t) << "\t" << ((pair.first.first & firstBitUint64_t) ? "+" : "-") << "\t" << (pair.first.second & maskUint64_t) << "\t" << ((pair.first.second & firstBitUint64_t) ? "+" : "-") << "\t" << pair.second << "M\tec:i:" << unitigGraph.edgeCoverages.at(pair.first) << std::endl; 
 	}
 }
 
@@ -1790,12 +1814,12 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 		unitigLengths.emplace_back(0);
 		for (size_t j = 0; j < unitigs[i].size(); j++)
 		{
+			assert(lengths[unitigs[i][j] & maskUint64_t].size() >= 1);
 			size_t length = lengths[unitigs[i][j] & maskUint64_t][lengths[unitigs[i][j] & maskUint64_t].size()/2];
+			assert(length >= 0);
+			assert(length <= 1000000);
 			assert(std::get<2>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) == 0);
 			assert(std::get<3>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) == 0);
-			std::get<2>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back();
-			std::get<3>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back() + length;
-			unitigLengths.back() += length;
 			if (j > 0)
 			{
 				std::pair<size_t, bool> fromnode { unitigs[i][j-1] & maskUint64_t, unitigs[i][j-1] & firstBitUint64_t };
@@ -1804,6 +1828,9 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 				std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 				unitigLengths.back() -= edgeOverlaps.at(key);
 			}
+			std::get<2>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back();
+			std::get<3>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back() + length;
+			unitigLengths.back() += length;
 		}
 	}
 	for (size_t i = 0; i < chunkLocationInUnitig.size(); i++)
@@ -1813,21 +1840,143 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 			assert(std::get<0>(chunkLocationInUnitig[i]) == std::numeric_limits<uint64_t>::max());
 			continue;
 		}
+		size_t unitig = std::get<0>(chunkLocationInUnitig[i]) & maskUint64_t;
 		assert(std::get<0>(chunkLocationInUnitig[i]) != std::numeric_limits<uint64_t>::max());
 		assert(std::get<3>(chunkLocationInUnitig[i]) != 0);
+		assert(std::get<2>(chunkLocationInUnitig[i]) < std::get<3>(chunkLocationInUnitig[i]));
+		assert(std::get<3>(chunkLocationInUnitig[i]) <= unitigLengths[unitig]);
 		if (std::get<0>(chunkLocationInUnitig[i]) & firstBitUint64_t) continue;
-		size_t unitig = std::get<0>(chunkLocationInUnitig[i]) & maskUint64_t;
 		std::get<1>(chunkLocationInUnitig[i]) = unitigs[unitig].size() - 1 - std::get<1>(chunkLocationInUnitig[i]);
 		std::swap(std::get<2>(chunkLocationInUnitig[i]), std::get<3>(chunkLocationInUnitig[i]));
 		std::get<2>(chunkLocationInUnitig[i]) = unitigLengths[unitig] - std::get<2>(chunkLocationInUnitig[i]);
 		std::get<3>(chunkLocationInUnitig[i]) = unitigLengths[unitig] - std::get<3>(chunkLocationInUnitig[i]);
+		assert(std::get<2>(chunkLocationInUnitig[i]) < std::get<3>(chunkLocationInUnitig[i]));
+		assert(std::get<3>(chunkLocationInUnitig[i]) <= unitigLengths[unitig]);
 	}
 	return std::make_tuple(unitigs, unitigLengths, chunkLocationInUnitig);
 }
 
-void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths)
+std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& graph, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<bool>& allowedNode, const std::vector<std::vector<uint64_t>>& unitigs, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig)
 {
-	std::cerr << "writing unitig graph " << graphFile << std::endl;
+	std::vector<std::vector<UnitigPath>> result;
+	result.resize(chunksPerRead.size());
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		std::vector<uint64_t> path;
+		uint64_t currentUnitig;
+		size_t currentUnitigIndex;
+		size_t currentPathLeftClip;
+		size_t currentPathRightClip;
+		size_t currentReadStart;
+		size_t currentReadEnd;
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (!allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
+			{
+				if (path.size() > 0)
+				{
+					result[i].emplace_back();
+					result[i].back().path = path;
+					result[i].back().pathLeftClip = currentPathLeftClip;
+					result[i].back().pathRightClip = currentPathRightClip;
+					result[i].back().readStartPos = currentReadStart;
+					result[i].back().readEndPos = currentReadEnd;
+				}
+				path.clear();
+				currentUnitig = std::numeric_limits<size_t>::max();
+				currentUnitigIndex = 0;
+				currentPathLeftClip= 0;
+				currentPathRightClip = 0;
+				currentReadStart = 0;
+				currentReadEnd = 0;
+				continue;
+			}
+			uint64_t chunk = std::get<2>(chunksPerRead[i][j]);
+			uint64_t unitig = std::get<0>(chunkLocationInUnitig[chunk]);
+			size_t unitigIndex = std::get<1>(chunkLocationInUnitig[chunk]);
+			size_t unitigStartPos = std::get<2>(chunkLocationInUnitig[chunk]);
+			size_t unitigEndPos = std::get<3>(chunkLocationInUnitig[chunk]);
+			size_t readStart = std::get<0>(chunksPerRead[i][j]);
+			size_t readEnd = std::get<1>(chunksPerRead[i][j]);
+			assert(unitigEndPos > unitigStartPos);
+			assert(unitigEndPos <= graph.unitigLengths[unitig & maskUint64_t]);
+			if ((chunk ^ firstBitUint64_t) & firstBitUint64_t)
+			{
+				unitig ^= firstBitUint64_t;
+				unitigIndex = unitigs[unitig & maskUint64_t].size()-1-unitigIndex;
+				std::swap(unitigStartPos, unitigEndPos);
+				unitigStartPos = graph.unitigLengths[unitig & maskUint64_t] - unitigStartPos;
+				unitigEndPos = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
+			}
+			assert(unitigEndPos > unitigStartPos);
+			assert(unitigEndPos <= graph.unitigLengths[unitig & maskUint64_t]);
+			assert(readEnd > readStart);
+			if (path.size() == 0)
+			{
+				path.emplace_back(unitig);
+				currentUnitig = unitig;
+				currentUnitigIndex = unitigIndex;
+				currentPathLeftClip = unitigStartPos;
+				currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
+				currentReadStart = readStart;
+				currentReadEnd = readEnd;
+				continue;
+			}
+			if (currentUnitig == unitig && currentUnitigIndex+1 == unitigIndex)
+			{
+				assert(readEnd > currentReadEnd);
+				assert(graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos < currentPathRightClip);
+				currentUnitigIndex = unitigIndex;
+				currentReadEnd = readEnd;
+				currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
+				continue;
+			}
+			if (currentUnitigIndex+1 == unitigs[currentUnitig & maskUint64_t].size() && unitigIndex == 0)
+			{
+				std::pair<size_t, bool> fromUnitig { currentUnitig & maskUint64_t, currentUnitig & firstBitUint64_t };
+				std::pair<size_t, bool> thisUnitig { unitig & maskUint64_t, unitig & firstBitUint64_t };
+				if (graph.edges.hasEdge(fromUnitig, thisUnitig))
+				{
+					assert(readEnd > currentReadEnd);
+					path.emplace_back(unitig);
+					currentUnitig = unitig;
+					currentUnitigIndex = unitigIndex;
+					currentReadEnd = readEnd;
+					currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
+					continue;
+				}
+			}
+			result[i].emplace_back();
+			result[i].back().path = path;
+			result[i].back().pathLeftClip = currentPathLeftClip;
+			result[i].back().pathRightClip = currentPathRightClip;
+			result[i].back().readStartPos = currentReadStart;
+			result[i].back().readEndPos = currentReadEnd;
+			path.clear();
+			path.emplace_back(unitig);
+			currentUnitig = unitig;
+			currentUnitigIndex = unitigIndex;
+			currentPathLeftClip = unitigStartPos;
+			currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
+			currentReadStart = readStart;
+			currentReadEnd = readEnd;
+		}
+		if (path.size() >= 1)
+		{
+			result[i].emplace_back();
+			result[i].back().path = path;
+			result[i].back().pathLeftClip = currentPathLeftClip;
+			result[i].back().pathRightClip = currentPathRightClip;
+			result[i].back().readStartPos = currentReadStart;
+			result[i].back().readEndPos = currentReadEnd;
+		}
+	}
+	return result;
+}
+
+std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUnitigGraph(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	ChunkUnitigGraph result;
 	std::vector<std::vector<size_t>> lengths;
 	std::vector<size_t> coverages;
 	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
@@ -1840,124 +1989,65 @@ void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile
 	std::vector<size_t> unitigLengths;
 	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig;
 	std::tie(unitigs, unitigLengths, chunkLocationInUnitig) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps);
-	writeUnitigGraph(graphFile, unitigs, chunkLocationInUnitig, unitigLengths, coverages, allowedEdges, edgeCoverage, edgeOverlaps);
-	std::cerr << "writing unitig paths " << pathsFile << std::endl;
-	std::ofstream pathfile { pathsFile };
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	result.unitigLengths = unitigLengths;
+	result.edges.resize(result.unitigLengths.size());
+	for (size_t i = 0; i < unitigs.size(); i++)
 	{
-		std::string pathstr = "";
-		uint64_t currentUnitig;
-		size_t currentPathLength;
-		size_t currentUnitigIndex;
-		size_t currentPathStart;
-		size_t currentPathEnd;
-		size_t currentReadStart;
-		size_t currentReadEnd;
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		std::pair<size_t, bool> lastNode { unitigs[i].back() & maskUint64_t, unitigs[i].back() & firstBitUint64_t };
+		std::pair<size_t, bool> firstNode { unitigs[i][0] & maskUint64_t, (unitigs[i][0] ^ firstBitUint64_t) & firstBitUint64_t };
+		for (auto edge : allowedEdges.getEdges(lastNode))
 		{
-			if (!allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
-			{
-				if (pathstr.size() > 0)
-				{
-					pathfile << readNames[i] << "\t" << rawReadLengths[i] << "\t" << currentReadStart << "\t" << currentReadEnd << "\t+\t" << pathstr << "\t" << currentPathLength << "\t" << currentPathStart << "\t" << currentPathEnd << "\t" << (currentPathEnd-currentPathStart) << "\t" << (currentPathEnd-currentPathStart) << "\t60" << std::endl;
-				}
-				pathstr = "";
-				currentUnitig = std::numeric_limits<size_t>::max();
-				currentPathLength = 0;
-				currentUnitigIndex = 0;
-				currentPathStart= 0;
-				currentPathEnd = 0;
-				currentReadStart = 0;
-				currentReadEnd = 0;
-				continue;
-			}
-			uint64_t chunk = std::get<2>(chunksPerRead[i][j]);
-			uint64_t unitig = std::get<0>(chunkLocationInUnitig[chunk]);
-			size_t unitigIndex = std::get<1>(chunkLocationInUnitig[chunk]);
-			size_t unitigStartPos = std::get<2>(chunkLocationInUnitig[chunk]);
-			size_t unitigEndPos = std::get<3>(chunkLocationInUnitig[chunk]);
-			size_t readStart = std::get<0>(chunksPerRead[i][j]);
-			size_t readEnd = std::get<1>(chunksPerRead[i][j]);
-			if ((chunk ^ firstBitUint64_t) & firstBitUint64_t)
-			{
-				unitig ^= firstBitUint64_t;
-				unitigIndex = unitigs[unitig].size()-1-unitigIndex;
-				std::swap(unitigStartPos, unitigEndPos);
-				unitigStartPos = unitigLengths[unitig] - unitigStartPos;
-				unitigEndPos = unitigLengths[unitig] - unitigEndPos;
-			}
-			if (pathstr == "")
-			{
-				pathstr = ((unitig & firstBitUint64_t) ? ">" : "<") + std::to_string(unitig & maskUint64_t);
-				currentUnitig = unitig;
-				currentUnitigIndex = unitigIndex;
-				currentPathLength = unitigLengths[unitig & maskUint64_t];
-				currentPathStart = unitigStartPos;
-				currentPathEnd = unitigEndPos;
-				currentReadStart = readStart;
-				currentReadEnd = readEnd;
-				continue;
-			}
-			if (currentUnitig == unitig && currentUnitigIndex+1 == unitigIndex)
-			{
-				currentUnitigIndex = unitigIndex;
-				assert(readEnd > currentReadEnd);
-				currentReadEnd = readEnd;
-				currentPathEnd = currentPathLength - (unitigLengths[unitig & maskUint64_t] - unitigEndPos);
-				continue;
-			}
-			bool hasEdge = true;
-			if (unitigIndex != 0 || currentUnitigIndex+1 != unitigs[currentUnitig & maskUint64_t].size()) hasEdge = false;
-			if (hasEdge)
-			{
-				uint64_t lastNode;
-				if (currentUnitig & firstBitUint64_t)
-				{
-					lastNode = unitigs[currentUnitig & maskUint64_t].back();
-				}
-				else
-				{
-					lastNode = unitigs[currentUnitig & maskUint64_t][0] ^ firstBitUint64_t;
-				}
-				uint64_t thisNode;
-				if (unitig & firstBitUint64_t)
-				{
-					thisNode = unitigs[unitig & maskUint64_t][0];
-				}
-				else
-				{
-					thisNode = unitigs[unitig & maskUint64_t].back() ^ firstBitUint64_t;
-				}
-				std::pair<size_t, bool> fromPair { lastNode & maskUint64_t, lastNode & firstBitUint64_t };
-				std::pair<size_t, bool> thisPair { thisNode & maskUint64_t, thisNode & firstBitUint64_t };
-				hasEdge = allowedEdges.hasEdge(fromPair, thisPair);
-				if (hasEdge)
-				{
-					pathstr += ((unitig & firstBitUint64_t) ? ">" : "<") + std::to_string(unitig & maskUint64_t);
-					currentUnitig = unitig;
-					currentPathLength += unitigLengths[unitig & maskUint64_t];
-					currentUnitigIndex = unitigIndex;
-					assert(readEnd > currentReadEnd);
-					currentReadEnd = readEnd;
-					auto pairkey = MBG::canon(fromPair, thisPair);
-					std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
-					currentPathLength -= edgeOverlaps.at(key);
-					currentPathEnd = currentPathLength - (unitigLengths[unitig & maskUint64_t] - unitigEndPos);
-					continue;
-				}
-			}
-			pathfile << readNames[i] << "\t" << rawReadLengths[i] << "\t" << currentReadStart << "\t" << currentReadEnd << "\t+\t" << pathstr << "\t" << currentPathLength << "\t" << currentPathStart << "\t" << currentPathEnd << "\t" << (currentPathEnd-currentPathStart) << "\t" << (currentPathEnd-currentPathStart) << "\t60" << std::endl;
-			pathstr = ((unitig & firstBitUint64_t) ? ">" : "<") + std::to_string(unitig & maskUint64_t);
-			currentUnitig = unitig;
-			currentUnitigIndex = unitigIndex;
-			currentPathLength = unitigLengths[unitig & maskUint64_t];
-			currentPathStart = unitigStartPos;
-			currentPathEnd = unitigEndPos;
-			currentReadStart = readStart;
-			currentReadEnd = readEnd;
+			uint64_t targetUnitig = std::get<0>(chunkLocationInUnitig[edge.first]);
+			if (!edge.second) targetUnitig ^= firstBitUint64_t;
+			auto nodepairkey = MBG::canon(lastNode, edge);
+			std::pair<uint64_t, uint64_t> nodekey { nodepairkey.first.first + (nodepairkey.first.second ? firstBitUint64_t : 0), nodepairkey.second.first + (nodepairkey.second.second ? firstBitUint64_t : 0) };
+			auto unitigpairkey = MBG::canon(std::make_pair(i, true), std::make_pair(targetUnitig & maskUint64_t, targetUnitig & firstBitUint64_t));
+			std::pair<uint64_t, uint64_t> unitigkey { unitigpairkey.first.first + (unitigpairkey.first.second ? firstBitUint64_t : 0), unitigpairkey.second.first + (unitigpairkey.second.second ? firstBitUint64_t : 0) };
+			result.edges.addEdge(unitigpairkey.first, unitigpairkey.second);
+			result.edges.addEdge(MBG::reverse(unitigpairkey.second), MBG::reverse(unitigpairkey.first));
+			result.edgeOverlaps[unitigkey] = edgeOverlaps.at(nodekey);
+			result.edgeCoverages[unitigkey] = edgeCoverage.at(nodekey);
 		}
-		if (pathstr != "") pathfile << readNames[i] << "\t" << rawReadLengths[i] << "\t" << currentReadStart << "\t" << currentReadEnd << "\t+\t" << pathstr << "\t" << currentPathLength << "\t" << currentPathStart << "\t" << currentPathEnd << "\t" << (currentPathEnd-currentPathStart) << "\t" << (currentPathEnd-currentPathStart) << "\t60" << std::endl;
+		for (auto edge : allowedEdges.getEdges(firstNode))
+		{
+			uint64_t targetUnitig = std::get<0>(chunkLocationInUnitig[edge.first]);
+			if (!edge.second) targetUnitig ^= firstBitUint64_t;
+			auto nodepairkey = MBG::canon(firstNode, edge);
+			std::pair<uint64_t, uint64_t> nodekey { nodepairkey.first.first + (nodepairkey.first.second ? firstBitUint64_t : 0), nodepairkey.second.first + (nodepairkey.second.second ? firstBitUint64_t : 0) };
+			auto unitigpairkey = MBG::canon(std::make_pair(i, false), std::make_pair(targetUnitig & maskUint64_t, targetUnitig & firstBitUint64_t));
+			std::pair<uint64_t, uint64_t> unitigkey { unitigpairkey.first.first + (unitigpairkey.first.second ? firstBitUint64_t : 0), unitigpairkey.second.first + (unitigpairkey.second.second ? firstBitUint64_t : 0) };
+			result.edges.addEdge(unitigpairkey.first, unitigpairkey.second);
+			result.edges.addEdge(MBG::reverse(unitigpairkey.second), MBG::reverse(unitigpairkey.first));
+			result.edgeOverlaps[unitigkey] = edgeOverlaps.at(nodekey);
+			result.edgeCoverages[unitigkey] = edgeCoverage.at(nodekey);
+		}
 	}
+	result.coverages.resize(result.unitigLengths.size(), 0);
+	for (size_t i = 0; i < result.coverages.size(); i++)
+	{
+		double sum = 0;
+		double divisor = 0;
+		for (uint64_t node : unitigs[i])
+		{
+			size_t length = lengths[node & maskUint64_t][lengths[node & maskUint64_t].size() / 2];
+			sum += length * coverages[node & maskUint64_t];
+			divisor += length;
+		}
+		result.coverages[i] = sum / divisor;
+	}
+	auto paths = getUnitigPaths(result, chunksPerRead, allowedNode, unitigs, chunkLocationInUnitig);
+	return std::make_tuple(result, paths);
+}
+
+void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths)
+{
+	std::cerr << "writing unitig graph " << graphFile << std::endl;
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead);
+	writeUnitigGraph(graphFile, graph);
+	std::cerr << "writing unitig paths " << pathsFile << std::endl;
+	writeUnitigPaths(pathsFile, graph, readPaths, readNames, rawReadLengths);
 }
 
 void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads)
