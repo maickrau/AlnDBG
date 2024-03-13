@@ -155,6 +155,10 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCo
 			lengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t].emplace_back(std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]));
 		}
 	}
+	for (size_t i = 0; i < lengths.size(); i++)
+	{
+		std::sort(lengths[i].begin(), lengths[i].end());
+	}
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
@@ -656,6 +660,123 @@ void splitPerAllUniqueKmerSVs(const std::vector<TwobitString>& readSequences, st
 				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
 			}
 		}
+	});
+}
+
+void countGoodishKmersInChunks(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+{
+	std::cerr << "counting goodish kmers per chunk" << std::endl;
+	const size_t k = 11;
+	const size_t distance = 100;
+	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
+			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
+		}
+	}
+	size_t nextNum = 0;
+	std::mutex resultMutex;
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, k, distance](const size_t i)
+	{
+		phmap::flat_hash_set<size_t> kmersEverywhere;
+		size_t averageSize = 0;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(std::get<1>(t) > std::get<0>(t));
+			averageSize += std::get<1>(t) - std::get<0>(t);
+		}
+		averageSize /= occurrencesPerChunk[i].size();
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			phmap::flat_hash_map<size_t, size_t> kmerLastOccurrence;
+			phmap::flat_hash_set<size_t> kmersRepeatingHere;
+			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&occurrencesPerChunk, &kmerLastOccurrence, &kmersRepeatingHere, j, i, distance](const size_t kmer, const size_t pos)
+			{
+				if (kmerLastOccurrence.count(kmer) == 0)
+				{
+					kmerLastOccurrence[kmer] = pos;
+					return;
+				}
+				else if (kmerLastOccurrence.at(kmer) + distance >= pos)
+				{
+					kmersRepeatingHere.insert(kmer);
+				}
+				kmerLastOccurrence[kmer] = pos;
+			});
+			if (j == 0)
+			{
+				for (auto pair : kmerLastOccurrence)
+				{
+					if (kmersRepeatingHere.count(pair.first) == 1) continue;
+					kmersEverywhere.insert(pair.first);
+				}
+			}
+			else
+			{
+				phmap::flat_hash_set<size_t> removeKmers;
+				for (size_t kmer : kmersEverywhere)
+				{
+					if (kmerLastOccurrence.count(kmer) == 0) removeKmers.insert(kmer);
+					if (kmersRepeatingHere.count(kmer) == 1) removeKmers.insert(kmer);
+				}
+				for (size_t kmer : removeKmers) kmersEverywhere.erase(kmer);
+			}
+		}
+		phmap::flat_hash_map<size_t, std::vector<std::pair<size_t, size_t>>> maybeGoodishKmerPositions;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersEverywhere, &maybeGoodishKmerPositions, averageSize, j, i, distance, t](const size_t kmer, const size_t pos)
+			{
+				if (kmersEverywhere.count(kmer) == 0) return;
+				size_t extrapolatedPosition = (double)pos / (double)(std::get<1>(t) - std::get<0>(t)) * (double)averageSize;
+				maybeGoodishKmerPositions[kmer].emplace_back(extrapolatedPosition, j);
+			});
+		}
+		size_t countGoodishClusters = 0;
+		size_t countGoodishKmers = 0;
+		for (auto& pair : maybeGoodishKmerPositions)
+		{
+			std::sort(pair.second.begin(), pair.second.end());
+			phmap::flat_hash_set<size_t> readsSinceLastBreak;
+			assert(pair.second.size() >= 1);
+			readsSinceLastBreak.insert(pair.second[0].second);
+			bool hasAny = false;
+			bool thisValid = true;
+			for (size_t j = 1; j < pair.second.size(); j++)
+			{
+				if (pair.second[j].first < pair.second[j-1].first + distance)
+				{
+					if (readsSinceLastBreak.count(pair.second[j].second) == 1)
+					{
+						thisValid = false;
+					}
+					readsSinceLastBreak.insert(pair.second[j].second);
+					continue;
+				}
+				if (thisValid && readsSinceLastBreak.size() == occurrencesPerChunk[i].size())
+				{
+					hasAny = true;
+					countGoodishClusters += 1;
+				}
+				thisValid = true;
+				readsSinceLastBreak.clear();
+				readsSinceLastBreak.insert(pair.second[j].second);
+			}
+			if (thisValid && readsSinceLastBreak.size() == occurrencesPerChunk[i].size())
+			{
+				hasAny = true;
+				countGoodishClusters += 1;
+			}
+			if (hasAny) countGoodishKmers += 1;
+		}
+		std::cerr << "chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " has " << countGoodishClusters << " goodish clusters, " << countGoodishKmers << " goodish kmers (" << kmersEverywhere.size() << " pre-filter kmers)" << std::endl;
 	});
 }
 
@@ -1567,9 +1688,9 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
 	removeContainedChunks(chunksPerRead);
 	splitPerLength(chunksPerRead);
-	writeGraph("graph-round1.gfa", "fakepaths1.txt", chunksPerRead);
+	writeGraph("graph-round1.gfa", "fakepath1.txt", chunksPerRead);
 	splitPerBaseCounts(readSequences, chunksPerRead, numThreads);
-	writeGraph("graph-round2.gfa", "fakepaths2.txt", chunksPerRead);
+	writeGraph("graph-round2.gfa", "fakepath2.txt", chunksPerRead);
 	splitPerMinHashes(readSequences, chunksPerRead, numThreads);
 	writeGraph("graph-round3.gfa", "fakepath3.txt", chunksPerRead);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
@@ -1578,12 +1699,14 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	writeGraph("graph-round5.gfa", "fakepath5.txt", chunksPerRead);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeGraph("graph-round6.gfa", "fakepath6.txt", chunksPerRead);
-	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
+//	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeGraph("graph-round7.gfa", "fakepath7.txt", chunksPerRead);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeGraph("graph-round8.gfa", "fakepath8.txt", chunksPerRead);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
+	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
 	writeGraph("graph-round9.gfa", "fakepath9.txt", chunksPerRead);
 	removeSingleCopyChunks(chunksPerRead);
 	writeGraph("graph-round10.gfa", "fakepath10.txt", chunksPerRead);
