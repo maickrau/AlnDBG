@@ -1825,7 +1825,7 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 	return std::make_tuple(unitigs, unitigLengths, chunkLocationInUnitig);
 }
 
-void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths)
 {
 	std::cerr << "writing unitig graph " << graphFile << std::endl;
 	std::vector<std::vector<size_t>> lengths;
@@ -1841,51 +1841,156 @@ void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile
 	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig;
 	std::tie(unitigs, unitigLengths, chunkLocationInUnitig) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps);
 	writeUnitigGraph(graphFile, unitigs, chunkLocationInUnitig, unitigLengths, coverages, allowedEdges, edgeCoverage, edgeOverlaps);
-/*	std::cerr << "writing unitig paths " << pathsFile << std::endl;
+	std::cerr << "writing unitig paths " << pathsFile << std::endl;
 	std::ofstream pathfile { pathsFile };
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
+		std::string pathstr = "";
+		uint64_t currentUnitig;
+		size_t currentPathLength;
+		size_t currentUnitigIndex;
+		size_t currentPathStart;
+		size_t currentPathEnd;
+		size_t currentReadStart;
+		size_t currentReadEnd;
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
-			auto t = chunksPerRead[i][j];
-			uint64_t rawnode = std::get<2>(t);
-			pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
+			if (!allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
+			{
+				if (pathstr.size() > 0)
+				{
+					pathfile << readNames[i] << "\t" << rawReadLengths[i] << "\t" << currentReadStart << "\t" << currentReadEnd << "\t+\t" << pathstr << "\t" << currentPathLength << "\t" << currentPathStart << "\t" << currentPathEnd << "\t" << (currentPathEnd-currentPathStart) << "\t" << (currentPathEnd-currentPathStart) << "\t60" << std::endl;
+				}
+				pathstr = "";
+				currentUnitig = std::numeric_limits<size_t>::max();
+				currentPathLength = 0;
+				currentUnitigIndex = 0;
+				currentPathStart= 0;
+				currentPathEnd = 0;
+				currentReadStart = 0;
+				currentReadEnd = 0;
+				continue;
+			}
+			uint64_t chunk = std::get<2>(chunksPerRead[i][j]);
+			uint64_t unitig = std::get<0>(chunkLocationInUnitig[chunk]);
+			size_t unitigIndex = std::get<1>(chunkLocationInUnitig[chunk]);
+			size_t unitigStartPos = std::get<2>(chunkLocationInUnitig[chunk]);
+			size_t unitigEndPos = std::get<3>(chunkLocationInUnitig[chunk]);
+			size_t readStart = std::get<0>(chunksPerRead[i][j]);
+			size_t readEnd = std::get<1>(chunksPerRead[i][j]);
+			if ((chunk ^ firstBitUint64_t) & firstBitUint64_t)
+			{
+				unitig ^= firstBitUint64_t;
+				unitigIndex = unitigs[unitig].size()-1-unitigIndex;
+				std::swap(unitigStartPos, unitigEndPos);
+				unitigStartPos = unitigLengths[unitig] - unitigStartPos;
+				unitigEndPos = unitigLengths[unitig] - unitigEndPos;
+			}
+			if (pathstr == "")
+			{
+				pathstr = ((unitig & firstBitUint64_t) ? ">" : "<") + std::to_string(unitig & maskUint64_t);
+				currentUnitig = unitig;
+				currentUnitigIndex = unitigIndex;
+				currentPathLength = unitigLengths[unitig & maskUint64_t];
+				currentPathStart = unitigStartPos;
+				currentPathEnd = unitigEndPos;
+				currentReadStart = readStart;
+				currentReadEnd = readEnd;
+				continue;
+			}
+			if (currentUnitig == unitig && currentUnitigIndex+1 == unitigIndex)
+			{
+				currentUnitigIndex = unitigIndex;
+				assert(readEnd > currentReadEnd);
+				currentReadEnd = readEnd;
+				currentPathEnd = currentPathLength - (unitigLengths[unitig & maskUint64_t] - unitigEndPos);
+				continue;
+			}
+			bool hasEdge = true;
+			if (unitigIndex != 0 || currentUnitigIndex+1 != unitigs[currentUnitig & maskUint64_t].size()) hasEdge = false;
+			if (hasEdge)
+			{
+				uint64_t lastNode;
+				if (currentUnitig & firstBitUint64_t)
+				{
+					lastNode = unitigs[currentUnitig & maskUint64_t].back();
+				}
+				else
+				{
+					lastNode = unitigs[currentUnitig & maskUint64_t][0] ^ firstBitUint64_t;
+				}
+				uint64_t thisNode;
+				if (unitig & firstBitUint64_t)
+				{
+					thisNode = unitigs[unitig & maskUint64_t][0];
+				}
+				else
+				{
+					thisNode = unitigs[unitig & maskUint64_t].back() ^ firstBitUint64_t;
+				}
+				std::pair<size_t, bool> fromPair { lastNode & maskUint64_t, lastNode & firstBitUint64_t };
+				std::pair<size_t, bool> thisPair { thisNode & maskUint64_t, thisNode & firstBitUint64_t };
+				hasEdge = allowedEdges.hasEdge(fromPair, thisPair);
+				if (hasEdge)
+				{
+					pathstr += ((unitig & firstBitUint64_t) ? ">" : "<") + std::to_string(unitig & maskUint64_t);
+					currentUnitig = unitig;
+					currentPathLength += unitigLengths[unitig & maskUint64_t];
+					currentUnitigIndex = unitigIndex;
+					assert(readEnd > currentReadEnd);
+					currentReadEnd = readEnd;
+					auto pairkey = MBG::canon(fromPair, thisPair);
+					std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
+					currentPathLength -= edgeOverlaps.at(key);
+					currentPathEnd = currentPathLength - (unitigLengths[unitig & maskUint64_t] - unitigEndPos);
+					continue;
+				}
+			}
+			pathfile << readNames[i] << "\t" << rawReadLengths[i] << "\t" << currentReadStart << "\t" << currentReadEnd << "\t+\t" << pathstr << "\t" << currentPathLength << "\t" << currentPathStart << "\t" << currentPathEnd << "\t" << (currentPathEnd-currentPathStart) << "\t" << (currentPathEnd-currentPathStart) << "\t60" << std::endl;
+			pathstr = ((unitig & firstBitUint64_t) ? ">" : "<") + std::to_string(unitig & maskUint64_t);
+			currentUnitig = unitig;
+			currentUnitigIndex = unitigIndex;
+			currentPathLength = unitigLengths[unitig & maskUint64_t];
+			currentPathStart = unitigStartPos;
+			currentPathEnd = unitigEndPos;
+			currentReadStart = readStart;
+			currentReadEnd = readEnd;
 		}
-	}*/
+		if (pathstr != "") pathfile << readNames[i] << "\t" << rawReadLengths[i] << "\t" << currentReadStart << "\t" << currentReadEnd << "\t+\t" << pathstr << "\t" << currentPathLength << "\t" << currentPathStart << "\t" << currentPathEnd << "\t" << (currentPathEnd-currentPathStart) << "\t" << (currentPathEnd-currentPathStart) << "\t60" << std::endl;
+	}
 }
 
-void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads)
+void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads)
 {
 	std::vector<bool> useTheseChunks;
 	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
 	removeContainedChunks(chunksPerRead);
 	splitPerLength(chunksPerRead);
-	writeUnitigGraph("graph-round1.gfa", "fakepath1.txt", chunksPerRead);
+	writeUnitigGraph("graph-round1.gfa", "fakepath1.txt", chunksPerRead, readNames, rawReadLengths);
 	splitPerBaseCounts(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round2.gfa", "fakepath2.txt", chunksPerRead);
+	writeUnitigGraph("graph-round2.gfa", "fakepath2.txt", chunksPerRead, readNames, rawReadLengths);
 	splitPerMinHashes(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round3.gfa", "fakepath3.txt", chunksPerRead);
+	writeUnitigGraph("graph-round3.gfa", "fakepath3.txt", chunksPerRead, readNames, rawReadLengths);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round4.gfa", "fakepath4.txt", chunksPerRead);
+	writeUnitigGraph("graph-round4.gfa", "fakepath4.txt", chunksPerRead, readNames, rawReadLengths);
 	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round5.gfa", "fakepath5.txt", chunksPerRead);
+	writeUnitigGraph("graph-round5.gfa", "fakepath5.txt", chunksPerRead, readNames, rawReadLengths);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round6.gfa", "fakepath6.txt", chunksPerRead);
+	writeUnitigGraph("graph-round6.gfa", "fakepath6.txt", chunksPerRead, readNames, rawReadLengths);
 //	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round7.gfa", "fakepath7.txt", chunksPerRead);
+	writeUnitigGraph("graph-round7.gfa", "fakepath7.txt", chunksPerRead, readNames, rawReadLengths);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round8.gfa", "fakepath8.txt", chunksPerRead);
+	writeUnitigGraph("graph-round8.gfa", "fakepath8.txt", chunksPerRead, readNames, rawReadLengths);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
 	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
-	writeUnitigGraph("graph-round9.gfa", "fakepath9.txt", chunksPerRead);
+	writeUnitigGraph("graph-round9.gfa", "fakepath9.txt", chunksPerRead, readNames, rawReadLengths);
 	removeSingleCopyChunks(chunksPerRead);
-	writeUnitigGraph("graph-round10.gfa", "fakepath10.txt", chunksPerRead);
+	writeUnitigGraph("graph-round10.gfa", "fakepath10.txt", chunksPerRead, readNames, rawReadLengths);
 	removeHighCoverageChunks(chunksPerRead, 60);
-	writeUnitigGraph("graph-round11.gfa", "fakepath11.txt", chunksPerRead);
+	writeUnitigGraph("graph-round11.gfa", "fakepath11.txt", chunksPerRead, readNames, rawReadLengths);
 }
 
 int main(int argc, char** argv)
@@ -1926,5 +2031,5 @@ int main(int argc, char** argv)
 	{
 		std::cerr << "readname " << i << " " << readNames[i] << std::endl;
 	}
-	makeGraph(matchIndex, readBasepairLengths, readSequences, numThreads);
+	makeGraph(matchIndex, readNames, readBasepairLengths, readSequences, numThreads);
 }
