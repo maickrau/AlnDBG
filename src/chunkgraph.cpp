@@ -22,6 +22,46 @@
 
 const double mismatchFraction = 0.03; // try 2-3x avg error rate
 
+void writeUnitigGraph(const std::string& filename, const std::vector<std::vector<uint64_t>>& unitigs, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const std::vector<size_t>& unitigLengths, const std::vector<size_t>& coverages, const SparseEdgeContainer& allowedEdges, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
+{
+	std::ofstream graph { filename };
+	for (size_t i = 0; i < unitigs.size(); i++)
+	{
+		double coverage = 0;
+		for (auto node : unitigs[i])
+		{
+			coverage += coverages[node & maskUint64_t];
+		}
+		coverage /= unitigs[i].size();
+		graph << "S\t" << i << "\t*\tLN:i:" << unitigLengths[i] << "\tll:f:" << coverage << "\tFC:f:" << (unitigLengths[i] * coverage) << std::endl;
+	}
+	for (size_t i = 0; i < unitigs.size(); i++)
+	{
+		std::pair<size_t, bool> lastNode { unitigs[i].back() & maskUint64_t, unitigs[i].back() & firstBitUint64_t};
+		for (auto edge : allowedEdges.getEdges(lastNode))
+		{
+			uint64_t toUnitig = std::get<0>(chunkLocationInUnitig[edge.first]);
+			if (!edge.second) toUnitig ^= firstBitUint64_t;
+			auto pairkey = MBG::canon(lastNode, edge);
+			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
+			size_t overlap = edgeOverlaps.at(key);
+			size_t coverage = edgeCoverage.at(key);
+			graph << "L\t" << i << "\t+\t" << (toUnitig & maskUint64_t) << "\t" << ((toUnitig & firstBitUint64_t) ? "+" : "-") << "\t" << overlap << "M\tec:i:" << coverage << std::endl;
+		}
+		std::pair<size_t, bool> firstNode { unitigs[i][0] & maskUint64_t, (unitigs[i][0] ^ firstBitUint64_t) & firstBitUint64_t};
+		for (auto edge : allowedEdges.getEdges(firstNode))
+		{
+			uint64_t toUnitig = std::get<0>(chunkLocationInUnitig[edge.first]);
+			if (!edge.second) toUnitig ^= firstBitUint64_t;
+			auto pairkey = MBG::canon(firstNode, edge);
+			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
+			size_t overlap = edgeOverlaps.at(key);
+			size_t coverage = edgeCoverage.at(key);
+			graph << "L\t" << i << "\t-\t" << (toUnitig & maskUint64_t) << "\t" << ((toUnitig & firstBitUint64_t) ? "+" : "-") << "\t" << overlap << "M\tec:i:" << coverage << std::endl;
+		}
+	}
+}
+
 void writeGraph(const std::string& filename, const std::vector<bool>& allowedNode, const SparseEdgeContainer& allowedEdges, const std::vector<std::vector<size_t>>& lengths, const std::vector<size_t>& coverages, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
 {
 	std::ofstream graph { filename };
@@ -1681,6 +1721,140 @@ void writeGraph(const std::string& graphFile, const std::string& pathsFile, cons
 	}
 }
 
+std::vector<uint64_t> getUnitig(const uint64_t startNode, const std::vector<bool>& allowedNode, const SparseEdgeContainer& allowedEdges)
+{
+	assert(allowedNode[startNode & maskUint64_t]);
+	uint64_t pos = startNode;
+	while (true)
+	{
+		std::pair<size_t, bool> pairpos { pos & maskUint64_t, pos & firstBitUint64_t };
+		if (allowedEdges.getEdges(pairpos).size() != 1) break;
+		std::pair<size_t, bool> next = allowedEdges.getEdges(pairpos)[0];
+		assert(allowedEdges.hasEdge(MBG::reverse(next), MBG::reverse(pairpos)));
+		if (allowedEdges.getEdges(MBG::reverse(next)).size() != 1) break;
+		if (next.first == pairpos.first) break;
+		if (next.first == (startNode & maskUint64_t)) break;
+		pos = next.first + (next.second ? firstBitUint64_t : 0);
+		assert(allowedNode[pos & maskUint64_t]);
+	}
+	pos = pos ^ firstBitUint64_t;
+	const uint64_t unitigStart = pos;
+	std::vector<uint64_t> result;
+	while (true)
+	{
+		result.emplace_back(pos);
+		std::pair<size_t, bool> pairpos { pos & maskUint64_t, pos & firstBitUint64_t };
+		if (allowedEdges.getEdges(pairpos).size() != 1) break;
+		std::pair<size_t, bool> next = allowedEdges.getEdges(pairpos)[0];
+		assert(allowedEdges.hasEdge(MBG::reverse(next), MBG::reverse(pairpos)));
+		if (allowedEdges.getEdges(MBG::reverse(next)).size() != 1) break;
+		if (next.first == pairpos.first) break;
+		if (next.first == (unitigStart & maskUint64_t)) break;
+		pos = next.first + (next.second ? firstBitUint64_t : 0);
+		assert(allowedNode[pos & maskUint64_t]);
+	}
+	return result;
+}
+
+std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>> getUnitigs(const std::vector<bool>& allowedNode, const SparseEdgeContainer& allowedEdges, const std::vector<std::vector<size_t>>& lengths, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
+{
+	std::vector<std::vector<uint64_t>> unitigs;
+	std::vector<bool> checked;
+	checked.resize(allowedNode.size(), false);
+	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig;
+	chunkLocationInUnitig.resize(allowedNode.size(), std::make_tuple(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()));
+	for (size_t i = 0; i < allowedNode.size(); i++)
+	{
+		if (!allowedNode[i]) continue;
+		if (checked[i])
+		{
+			assert(std::get<0>(chunkLocationInUnitig[i]) != std::numeric_limits<size_t>::max());
+			continue;
+		}
+		assert(std::get<0>(chunkLocationInUnitig[i]) == std::numeric_limits<size_t>::max());
+		auto unitig = getUnitig(i, allowedNode, allowedEdges);
+		assert(unitig.size() >= 1);
+		unitigs.emplace_back(unitig);
+		for (size_t j = 0; j < unitig.size(); j++)
+		{
+			uint64_t node = unitig[j];
+			assert(!checked[node & maskUint64_t]);
+			assert(std::get<0>(chunkLocationInUnitig[node & maskUint64_t]) == std::numeric_limits<size_t>::max());
+			chunkLocationInUnitig[node & maskUint64_t] = std::make_tuple(unitigs.size()-1 + (node & firstBitUint64_t), j, 0, 0);
+			checked[node & maskUint64_t] = true;
+		}
+	}
+	std::vector<size_t> unitigLengths;
+	for (size_t i = 0; i < unitigs.size(); i++)
+	{
+		unitigLengths.emplace_back(0);
+		for (size_t j = 0; j < unitigs[i].size(); j++)
+		{
+			size_t length = lengths[unitigs[i][j] & maskUint64_t][lengths[unitigs[i][j] & maskUint64_t].size()/2];
+			assert(std::get<2>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) == 0);
+			assert(std::get<3>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) == 0);
+			std::get<2>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back();
+			std::get<3>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back() + length;
+			unitigLengths.back() += length;
+			if (j > 0)
+			{
+				std::pair<size_t, bool> fromnode { unitigs[i][j-1] & maskUint64_t, unitigs[i][j-1] & firstBitUint64_t };
+				std::pair<size_t, bool> tonode { unitigs[i][j] & maskUint64_t, unitigs[i][j] & firstBitUint64_t };
+				auto pairkey = MBG::canon(fromnode, tonode);
+				std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
+				unitigLengths.back() -= edgeOverlaps.at(key);
+			}
+		}
+	}
+	for (size_t i = 0; i < chunkLocationInUnitig.size(); i++)
+	{
+		if (!allowedNode[i])
+		{
+			assert(std::get<0>(chunkLocationInUnitig[i]) == std::numeric_limits<uint64_t>::max());
+			continue;
+		}
+		assert(std::get<0>(chunkLocationInUnitig[i]) != std::numeric_limits<uint64_t>::max());
+		assert(std::get<3>(chunkLocationInUnitig[i]) != 0);
+		if (std::get<0>(chunkLocationInUnitig[i]) & firstBitUint64_t) continue;
+		size_t unitig = std::get<0>(chunkLocationInUnitig[i]) & maskUint64_t;
+		std::get<1>(chunkLocationInUnitig[i]) = unitigs[unitig].size() - 1 - std::get<1>(chunkLocationInUnitig[i]);
+		std::swap(std::get<2>(chunkLocationInUnitig[i]), std::get<3>(chunkLocationInUnitig[i]));
+		std::get<2>(chunkLocationInUnitig[i]) = unitigLengths[unitig] - std::get<2>(chunkLocationInUnitig[i]);
+		std::get<3>(chunkLocationInUnitig[i]) = unitigLengths[unitig] - std::get<3>(chunkLocationInUnitig[i]);
+	}
+	return std::make_tuple(unitigs, unitigLengths, chunkLocationInUnitig);
+}
+
+void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	std::cerr << "writing unitig graph " << graphFile << std::endl;
+	std::vector<std::vector<size_t>> lengths;
+	std::vector<size_t> coverages;
+	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
+	std::vector<bool> allowedNode;
+	SparseEdgeContainer allowedEdges;
+	std::tie(allowedNode, allowedEdges) = getAllowedNodesAndEdges(coverages, edgeCoverage, chunksPerRead);
+	std::vector<std::vector<uint64_t>> unitigs;
+	std::vector<size_t> unitigLengths;
+	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig;
+	std::tie(unitigs, unitigLengths, chunkLocationInUnitig) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps);
+	writeUnitigGraph(graphFile, unitigs, chunkLocationInUnitig, unitigLengths, coverages, allowedEdges, edgeCoverage, edgeOverlaps);
+/*	std::cerr << "writing unitig paths " << pathsFile << std::endl;
+	std::ofstream pathfile { pathsFile };
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+			auto t = chunksPerRead[i][j];
+			uint64_t rawnode = std::get<2>(t);
+			pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
+		}
+	}*/
+}
+
 void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads)
 {
 	std::vector<bool> useTheseChunks;
@@ -1688,30 +1862,30 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<size_t>& rawReadL
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
 	removeContainedChunks(chunksPerRead);
 	splitPerLength(chunksPerRead);
-	writeGraph("graph-round1.gfa", "fakepath1.txt", chunksPerRead);
+	writeUnitigGraph("graph-round1.gfa", "fakepath1.txt", chunksPerRead);
 	splitPerBaseCounts(readSequences, chunksPerRead, numThreads);
-	writeGraph("graph-round2.gfa", "fakepath2.txt", chunksPerRead);
+	writeUnitigGraph("graph-round2.gfa", "fakepath2.txt", chunksPerRead);
 	splitPerMinHashes(readSequences, chunksPerRead, numThreads);
-	writeGraph("graph-round3.gfa", "fakepath3.txt", chunksPerRead);
+	writeUnitigGraph("graph-round3.gfa", "fakepath3.txt", chunksPerRead);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	writeGraph("graph-round4.gfa", "fakepath4.txt", chunksPerRead);
+	writeUnitigGraph("graph-round4.gfa", "fakepath4.txt", chunksPerRead);
 	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
-	writeGraph("graph-round5.gfa", "fakepath5.txt", chunksPerRead);
+	writeUnitigGraph("graph-round5.gfa", "fakepath5.txt", chunksPerRead);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	writeGraph("graph-round6.gfa", "fakepath6.txt", chunksPerRead);
+	writeUnitigGraph("graph-round6.gfa", "fakepath6.txt", chunksPerRead);
 //	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	writeGraph("graph-round7.gfa", "fakepath7.txt", chunksPerRead);
+	writeUnitigGraph("graph-round7.gfa", "fakepath7.txt", chunksPerRead);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
-	writeGraph("graph-round8.gfa", "fakepath8.txt", chunksPerRead);
+	writeUnitigGraph("graph-round8.gfa", "fakepath8.txt", chunksPerRead);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
 	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
-	writeGraph("graph-round9.gfa", "fakepath9.txt", chunksPerRead);
+	writeUnitigGraph("graph-round9.gfa", "fakepath9.txt", chunksPerRead);
 	removeSingleCopyChunks(chunksPerRead);
-	writeGraph("graph-round10.gfa", "fakepath10.txt", chunksPerRead);
+	writeUnitigGraph("graph-round10.gfa", "fakepath10.txt", chunksPerRead);
 	removeHighCoverageChunks(chunksPerRead, 60);
-	writeGraph("graph-round11.gfa", "fakepath11.txt", chunksPerRead);
+	writeUnitigGraph("graph-round11.gfa", "fakepath11.txt", chunksPerRead);
 }
 
 int main(int argc, char** argv)
