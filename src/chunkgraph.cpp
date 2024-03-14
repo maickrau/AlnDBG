@@ -22,6 +22,15 @@
 
 const double mismatchFraction = 0.03; // try 2-3x avg error rate
 
+bool NonexistantChunk(const uint64_t chunk)
+{
+	if (chunk == std::numeric_limits<uint64_t>::max()) return true;
+	if (chunk == std::numeric_limits<uint64_t>::max()-1) return true;
+	if (chunk == (std::numeric_limits<uint64_t>::max() ^ firstBitUint64_t)) return true;
+	if (chunk == (std::numeric_limits<uint64_t>::max() ^ firstBitUint64_t)-1) return true;
+	return false;
+}
+
 class ChunkUnitigGraph
 {
 public:
@@ -134,6 +143,7 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 		size_t lastTip = std::numeric_limits<size_t>::max();
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			if (!allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			if (lastTip != std::numeric_limits<size_t>::max() && tip.count(std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t) == 1)
 			{
@@ -151,9 +161,11 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 	phmap::flat_hash_set<std::pair<uint64_t, uint64_t>> allowedTips;
 	for (uint64_t t : tip)
 	{
+		assert(!NonexistantChunk(t));
 		if (tipConnections.count(t) == 0) continue;
 		if (tipConnections.at(t).size() != 1) continue;
 		uint64_t otherEnd = tipConnections.at(t).begin()->first;
+		assert(!NonexistantChunk(otherEnd));
 		assert(tipConnections.count(otherEnd) == 1);
 		if (tipConnections.at(otherEnd).size() != 1) continue;
 		assert((tipConnections.at(otherEnd).begin()->first) == t);
@@ -168,6 +180,7 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 		size_t lastTipIndex = std::numeric_limits<size_t>::max();
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			if (!allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			if (lastTip != std::numeric_limits<size_t>::max() && tip.count(std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t) == 1)
 			{
@@ -177,6 +190,7 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 				{
 					for (size_t k = lastTipIndex; k < j; k++)
 					{
+						if (NonexistantChunk(std::get<2>(chunksPerRead[i][k]))) continue;
 						newlyAllowedNodes.insert(std::get<2>(chunksPerRead[i][k]) & maskUint64_t);
 						std::pair<size_t, bool> fromnode { std::get<2>(chunksPerRead[i][k]) & maskUint64_t, std::get<2>(chunksPerRead[i][k]) & firstBitUint64_t };
 						std::pair<size_t, bool> tonode { std::get<2>(chunksPerRead[i][k+1]) & maskUint64_t, std::get<2>(chunksPerRead[i][k+1]) & firstBitUint64_t };
@@ -196,6 +210,7 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 	}
 	for (auto node : newlyAllowedNodes)
 	{
+		assert(!NonexistantChunk(node));
 		allowedNode[node] = true;
 	}
 	return std::make_pair(allowedNode, allowedEdges);
@@ -209,6 +224,7 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCo
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			if ((std::get<2>(chunksPerRead[i][j]) & maskUint64_t) >= coverages.size())
 			{
 				coverages.resize((std::get<2>(chunksPerRead[i][j]) & maskUint64_t)+1, 0);
@@ -227,6 +243,7 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCo
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			assert(j == 0 || std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
 			assert(j == 0 || std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
 			coverages[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] += 1;
@@ -242,6 +259,8 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeOverlaps(cons
 	{
 		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
 		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j-1]))) continue;
 			assert(std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
 			assert(std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
 			auto prev = std::get<2>(chunksPerRead[i][j-1]);
@@ -269,6 +288,8 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(con
 	{
 		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
 		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j-1]))) continue;
 			assert(std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
 			assert(std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
 			auto prev = std::get<2>(chunksPerRead[i][j-1]);
@@ -323,6 +344,7 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 	{
 		for (auto t : chunksPerRead[i])
 		{
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			lengthsPerChunk[std::get<2>(t) & maskUint64_t].emplace_back(std::get<1>(t) - std::get<0>(t));
 		}
 	}
@@ -355,6 +377,7 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 	{
 		for (auto& t : chunksPerRead[i])
 		{
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			assert(std::get<1>(t) > std::get<0>(t));
 			size_t distance = std::get<1>(t) - std::get<0>(t);
 			size_t dist = std::numeric_limits<size_t>::max();
@@ -486,6 +509,7 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
 			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
@@ -498,6 +522,7 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
 			phmap::flat_hash_set<size_t> kmersHere;
 			phmap::flat_hash_set<size_t> kmersRepeatingHere;
 			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&occurrencesPerChunk, &kmersHere, &kmersRepeatingHere, j, i](const size_t kmer, const size_t pos)
@@ -632,6 +657,7 @@ void splitPerAllUniqueKmerSVs(const std::vector<TwobitString>& readSequences, st
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
 			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
@@ -644,6 +670,7 @@ void splitPerAllUniqueKmerSVs(const std::vector<TwobitString>& readSequences, st
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
 			phmap::flat_hash_set<size_t> kmersHere;
 			phmap::flat_hash_set<size_t> kmersRepeatingHere;
 			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&occurrencesPerChunk, &kmersHere, &kmersRepeatingHere, j, i](const size_t kmer, const size_t pos)
@@ -738,6 +765,7 @@ void countGoodishKmersInChunks(const std::vector<TwobitString>& readSequences, s
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
 			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
@@ -758,6 +786,7 @@ void countGoodishKmersInChunks(const std::vector<TwobitString>& readSequences, s
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
 			phmap::flat_hash_map<size_t, size_t> kmerLastOccurrence;
 			phmap::flat_hash_set<size_t> kmersRepeatingHere;
 			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&occurrencesPerChunk, &kmerLastOccurrence, &kmersRepeatingHere, j, i, distance](const size_t kmer, const size_t pos)
@@ -854,6 +883,7 @@ void countGoodKmersInChunks(const std::vector<TwobitString>& readSequences, std:
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
 			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
@@ -866,6 +896,7 @@ void countGoodKmersInChunks(const std::vector<TwobitString>& readSequences, std:
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
 			phmap::flat_hash_set<size_t> kmersHere;
 			phmap::flat_hash_set<size_t> kmersRepeatingHere;
 			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&occurrencesPerChunk, &kmersHere, &kmersRepeatingHere, j, i](const size_t kmer, const size_t pos)
@@ -914,6 +945,7 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
 			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
@@ -939,6 +971,7 @@ void splitPerSequenceIdentity(const std::vector<TwobitString>& readSequences, st
 			sequencesPerOccurrence.emplace_back();
 			sequencesPerOccurrence.back().second = j;
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
 			if (std::get<2>(t) & firstBitUint64_t)
 			{
 				for (size_t k = std::get<0>(t); k <= std::get<1>(t); k++)
@@ -1102,6 +1135,7 @@ void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vec
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t) + 1);
 			occurrencesPerChunk[std::get<2>(t)].emplace_back(i, j);
 		}
@@ -1115,6 +1149,7 @@ void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vec
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
 			countsPerOccurrence[j].resize(4);
 			for (size_t k = std::get<0>(t); k < std::get<1>(t); k++)
 			{
@@ -1182,6 +1217,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t) + 1);
 			occurrencesPerChunk[std::get<2>(t)].emplace_back(i, j);
 		}
@@ -1208,6 +1244,8 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 			{
 				uint64_t prevNode = std::get<2>(chunksPerRead[i][j-1]);
 				uint64_t thisNode = std::get<2>(chunksPerRead[i][j]);
+				if (NonexistantChunk(prevNode)) continue;
+				if (NonexistantChunk(thisNode)) continue;
 				if (repetitive[prevNode & maskUint64_t]) continue;
 				if (repetitive[thisNode & maskUint64_t]) continue;
 				if (occurrencesPerChunk[prevNode & maskUint64_t].size() == 1) continue;
@@ -1232,9 +1270,12 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 		for (const auto& pair : edges)
 		{
 			if (pair.second.size() != 2) continue;
+			assert(!NonexistantChunk(pair.first));
 			assert(!repetitive[pair.first & maskUint64_t]);
 			uint64_t first = *pair.second.begin();
 			uint64_t second = *(++pair.second.begin());
+			assert(!NonexistantChunk(first));
+			assert(!NonexistantChunk(second));
 			assert(!repetitive[first & maskUint64_t]);
 			assert(!repetitive[second & maskUint64_t]);
 			assert(edges.count(first ^ firstBitUint64_t) == 1);
@@ -1255,6 +1296,8 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 			{
 				uint64_t prevNode = std::get<2>(chunksPerRead[i][j-1]);
 				uint64_t thisNode = std::get<2>(chunksPerRead[i][j]);
+				if (NonexistantChunk(prevNode)) continue;
+				if (NonexistantChunk(thisNode)) continue;
 				uint64_t allele = std::numeric_limits<size_t>::max();
 				uint64_t fork = std::numeric_limits<size_t>::max();
 				if (edgeToGroupMapping.count(prevNode) == 1 && edgeToGroupMapping.count(thisNode ^ firstBitUint64_t) == 1) continue;
@@ -1352,6 +1395,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 				size_t read = occurrencesPerChunk[i][j].first;
 				if (maybePhaseGroups[phaseGroup].first.count(read) == 0 && maybePhaseGroups[phaseGroup].second.count(read) == 0) continue;
 				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+				assert(!NonexistantChunk(std::get<2>(t)));
 				phmap::flat_hash_set<size_t> kmersHere;
 				iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersHere](const size_t kmer, const size_t pos)
 				{
@@ -1435,6 +1479,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 				size_t read = occurrencesPerChunk[i][j].first;
 				if (maybePhaseGroups[phaseGroup].first.count(read) == 1 || maybePhaseGroups[phaseGroup].second.count(read) == 1) continue;
 				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+				assert(!NonexistantChunk(std::get<2>(t)));
 				phmap::flat_hash_set<size_t> kmersHere;
 				iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersHere](const size_t kmer, const size_t pos)
 				{
@@ -1521,6 +1566,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 				assert(maybePhaseGroups[phaseGroup].first.count(read) == 0);
 				assert(maybePhaseGroups[phaseGroup].second.count(read) == 0);
 				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+				assert(!NonexistantChunk(std::get<2>(t)));
 				phmap::flat_hash_set<size_t> kmersHere;
 				iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersHere](const size_t kmer, const size_t pos)
 				{
@@ -1626,6 +1672,7 @@ void splitPerMinHashes(const std::vector<TwobitString>& readSequences, std::vect
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t) + 1);
 			occurrencesPerChunk[std::get<2>(t)].emplace_back(i, j);
 		}
@@ -1639,6 +1686,7 @@ void splitPerMinHashes(const std::vector<TwobitString>& readSequences, std::vect
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
 			std::vector<uint64_t> minHashes;
 			assert(std::get<0>(t) < std::get<1>(t));
 			assert(std::get<1>(t) < readSequences[occurrencesPerChunk[i][j].first].size());
@@ -1686,6 +1734,7 @@ void removeSingleCopyChunks(std::vector<std::vector<std::tuple<size_t, size_t, u
 	{
 		for (auto t : chunksPerRead[i])
 		{
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			coverage[std::get<2>(t) & maskUint64_t] += 1;
 		}
 	}
@@ -1693,6 +1742,7 @@ void removeSingleCopyChunks(std::vector<std::vector<std::tuple<size_t, size_t, u
 	{
 		for (size_t j = chunksPerRead[i].size()-1; j < chunksPerRead[i].size(); j--)
 		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			if (coverage.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) > 1) continue;
 			chunksPerRead[i].erase(chunksPerRead[i].begin()+j);
 		}
@@ -1706,6 +1756,7 @@ void removeHighCoverageChunks(std::vector<std::vector<std::tuple<size_t, size_t,
 	{
 		for (auto t : chunksPerRead[i])
 		{
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			coverage[std::get<2>(t) & maskUint64_t] += 1;
 		}
 	}
@@ -1713,6 +1764,7 @@ void removeHighCoverageChunks(std::vector<std::vector<std::tuple<size_t, size_t,
 	{
 		for (size_t j = chunksPerRead[i].size()-1; j < chunksPerRead[i].size(); j--)
 		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			if (coverage.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) < maxCoverage) continue;
 			chunksPerRead[i].erase(chunksPerRead[i].begin()+j);
 		}
@@ -1739,6 +1791,7 @@ void writeGraph(const std::string& graphFile, const std::string& pathsFile, cons
 		{
 			if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
 			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
 			uint64_t rawnode = std::get<2>(t);
 			pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
 		}
@@ -1747,6 +1800,7 @@ void writeGraph(const std::string& graphFile, const std::string& pathsFile, cons
 
 std::vector<uint64_t> getUnitig(const uint64_t startNode, const std::vector<bool>& allowedNode, const SparseEdgeContainer& allowedEdges)
 {
+	assert(!NonexistantChunk(startNode));
 	assert(allowedNode[startNode & maskUint64_t]);
 	uint64_t pos = startNode;
 	while (true)
@@ -1759,6 +1813,7 @@ std::vector<uint64_t> getUnitig(const uint64_t startNode, const std::vector<bool
 		if (next.first == pairpos.first) break;
 		if (next.first == (startNode & maskUint64_t)) break;
 		pos = next.first + (next.second ? firstBitUint64_t : 0);
+		assert(!NonexistantChunk(pos));
 		assert(allowedNode[pos & maskUint64_t]);
 	}
 	pos = pos ^ firstBitUint64_t;
@@ -1766,6 +1821,7 @@ std::vector<uint64_t> getUnitig(const uint64_t startNode, const std::vector<bool
 	std::vector<uint64_t> result;
 	while (true)
 	{
+		assert(!NonexistantChunk(pos));
 		result.emplace_back(pos);
 		std::pair<size_t, bool> pairpos { pos & maskUint64_t, pos & firstBitUint64_t };
 		if (allowedEdges.getEdges(pairpos).size() != 1) break;
@@ -1802,6 +1858,7 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 		for (size_t j = 0; j < unitig.size(); j++)
 		{
 			uint64_t node = unitig[j];
+			assert(!NonexistantChunk(node));
 			assert(!checked[node & maskUint64_t]);
 			assert(std::get<0>(chunkLocationInUnitig[node & maskUint64_t]) == std::numeric_limits<size_t>::max());
 			chunkLocationInUnitig[node & maskUint64_t] = std::make_tuple(unitigs.size()-1 + (node & firstBitUint64_t), j, 0, 0);
@@ -1871,7 +1928,7 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 		size_t currentReadEnd;
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (!allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || !allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
 			{
 				if (path.size() > 0)
 				{
