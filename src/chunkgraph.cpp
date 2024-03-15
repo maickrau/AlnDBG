@@ -1880,7 +1880,7 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 		{
 			assert(lengths[unitigs[i][j] & maskUint64_t].size() >= 1);
 			size_t length = lengths[unitigs[i][j] & maskUint64_t][lengths[unitigs[i][j] & maskUint64_t].size()/2];
-			assert(length >= 0);
+			assert(length >= 1);
 			assert(length <= 1000000);
 			assert(std::get<0>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) != std::numeric_limits<size_t>::max());
 			assert((std::get<0>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) & maskUint64_t) == i);
@@ -1893,6 +1893,8 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 				auto pairkey = MBG::canon(fromnode, tonode);
 				std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 				size_t overlap = edgeOverlaps.at(key);
+				size_t prevLength = lengths[unitigs[i][j-1] & maskUint64_t][lengths[unitigs[i][j-1] & maskUint64_t].size()/2];
+				if (overlap >= prevLength) overlap = prevLength-1; // wrong but do it anyway to prevent crash later
 				if (overlap >= length) overlap = length-1; // wrong but do it anyway to prevent crash later
 				assert(unitigLengths.back() > overlap);
 				unitigLengths.back() -= overlap;
@@ -1933,10 +1935,10 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 	{
 		std::vector<uint64_t> path;
 		std::vector<std::pair<size_t, size_t>> readPartInPathnode;
-		uint64_t currentUnitig;
-		size_t currentUnitigIndex;
-		size_t currentPathLeftClip;
-		size_t currentPathRightClip;
+		uint64_t currentUnitig = std::numeric_limits<uint64_t>::max();
+		size_t currentUnitigIndex = std::numeric_limits<size_t>::max();
+		size_t currentPathLeftClip = std::numeric_limits<size_t>::max();
+		size_t currentPathRightClip = std::numeric_limits<size_t>::max();
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || !allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
@@ -2359,7 +2361,6 @@ void cleanTips(const std::vector<TwobitString>& readSequences, std::vector<std::
 	}
 	phmap::flat_hash_set<size_t> removeChunks;
 	size_t removeUnitigCount = 0;
-	size_t removeChunkCount = 0;
 	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
 	{
 		if (graph.coverages[i] >= approxOneHapCoverage*0.5) continue;
@@ -2404,6 +2405,259 @@ void cleanTips(const std::vector<TwobitString>& readSequences, std::vector<std::
 		}
 	}
 	std::cerr << "removed " << removeUnitigCount << " unitigs, " << removeChunks.size() << " chunks" << std::endl;
+}
+
+void resolveSemiAmbiguousUnitigs(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+{
+	std::cerr << "resolving semiambiguous resolvable unitigs" << std::endl;
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead);
+	std::vector<phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> tripletsPerUnitig;
+	tripletsPerUnitig.resize(graph.unitigLengths.size());
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 1; k+1 < readPaths[i][j].path.size(); k++)
+			{
+				uint64_t mid = readPaths[i][j].path[k];
+				uint64_t prev, after;
+				if (mid & firstBitUint64_t)
+				{
+					prev = readPaths[i][j].path[k-1];
+					after = readPaths[i][j].path[k+1];
+				}
+				else
+				{
+					prev = readPaths[i][j].path[k+1] ^ firstBitUint64_t;
+					after = readPaths[i][j].path[k-1] ^ firstBitUint64_t;
+				}
+				tripletsPerUnitig[mid & maskUint64_t][std::make_pair(prev, after)] += 1;
+			}
+		}
+	}
+	std::vector<bool> canResolveUnitig;
+	canResolveUnitig.resize(graph.unitigLengths.size(), false);
+	std::vector<phmap::flat_hash_map<uint64_t, size_t>> prevToAllele;
+	std::vector<phmap::flat_hash_map<uint64_t, size_t>> afterToAllele;
+	prevToAllele.resize(graph.unitigLengths.size());
+	afterToAllele.resize(graph.unitigLengths.size());
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (tripletsPerUnitig[i].size() < 2) continue;
+		phmap::flat_hash_set<uint64_t> coveredPrev;
+		phmap::flat_hash_set<uint64_t> coveredAfter;
+		phmap::flat_hash_map<uint64_t, uint64_t> parent;
+		bool valid = true;
+		for (auto triplet : tripletsPerUnitig[i])
+		{
+			if (triplet.second < 2)
+			{
+				valid = false;
+				break;
+			}
+			coveredPrev.insert(triplet.first.first);
+			coveredAfter.insert(triplet.first.second);
+			assert((triplet.first.first & (firstBitUint64_t >> 1)) == 0);
+			uint64_t prev = triplet.first.first + (firstBitUint64_t >> 1);
+			uint64_t after = triplet.first.second;
+			if (parent.count(prev) == 0) parent[prev] = prev;
+			if (parent.count(after) == 0) parent[after] = after;
+			merge(parent, prev, after);
+		}
+		if (!valid) continue;
+		assert(coveredPrev.size() <= graph.edges.getEdges(std::make_pair(i, false)).size());
+		assert(coveredAfter.size() <= graph.edges.getEdges(std::make_pair(i, true)).size());
+		if (coveredPrev.size() < graph.edges.getEdges(std::make_pair(i, false)).size()) continue;
+		if (coveredAfter.size() < graph.edges.getEdges(std::make_pair(i, true)).size()) continue;
+		phmap::flat_hash_map<uint64_t, size_t> clusterToAllele;
+		size_t alleleNum = 0;
+		for (auto triplet : tripletsPerUnitig[i])
+		{
+			uint64_t after = triplet.first.second;
+			uint64_t cluster = find(parent, after);
+			if (clusterToAllele.count(cluster) == 0)
+			{
+				clusterToAllele[cluster] = alleleNum;
+				alleleNum += 1;
+			}
+		}
+		assert(clusterToAllele.size() == alleleNum);
+		assert(clusterToAllele.size() >= 1);
+		if (clusterToAllele.size() == 1) continue;
+		for (auto triplet : tripletsPerUnitig[i])
+		{
+			uint64_t prev = triplet.first.first;
+			uint64_t after = triplet.first.second;
+			prevToAllele[i][prev] = clusterToAllele.at(find(parent, after));
+			afterToAllele[i][prev] = clusterToAllele.at(find(parent, after));
+		}
+		canResolveUnitig[i] = true;
+	}
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				uint64_t mid = readPaths[i][j].path[k];
+				if (!canResolveUnitig[mid & maskUint64_t]) continue;
+				uint64_t prev = std::numeric_limits<size_t>::max();
+				uint64_t after = std::numeric_limits<size_t>::max();
+				if (k > 0)
+				{
+					prev = readPaths[i][j].path[k-1];
+				}
+				else if (j > 0)
+				{
+					prev = readPaths[i][j-1].path.back();
+				}
+				if (k+1 < readPaths[i][j].path.size())
+				{
+					after = readPaths[i][j].path[k+1];
+				}
+				else if (j+1 < readPaths[i].size())
+				{
+					after = readPaths[i][j+1].path[0];
+				}
+				if ((mid ^ firstBitUint64_t) & firstBitUint64_t)
+				{
+					std::swap(prev, after);
+					if (prev != std::numeric_limits<size_t>::max()) prev ^= firstBitUint64_t;
+					if (after != std::numeric_limits<size_t>::max()) after ^= firstBitUint64_t;
+				}
+				if (prev == std::numeric_limits<size_t>::max() && after == std::numeric_limits<size_t>::max())
+				{
+					canResolveUnitig[mid & maskUint64_t] = false;
+					continue;
+				}
+				size_t prevAllele = std::numeric_limits<size_t>::max();
+				size_t afterAllele = std::numeric_limits<size_t>::max();
+				if (prev != std::numeric_limits<size_t>::max() && prevToAllele[mid & maskUint64_t].count(prev) == 1)
+				{
+					prevAllele = prevToAllele[mid & maskUint64_t].at(prev);
+				}
+				if (after != std::numeric_limits<size_t>::max() && afterToAllele[mid & maskUint64_t].count(after) == 1)
+				{
+					afterAllele = afterToAllele[mid & maskUint64_t].at(after);
+				}
+				if (prevAllele == std::numeric_limits<size_t>::max() && afterAllele == std::numeric_limits<size_t>::max())
+				{
+					canResolveUnitig[mid & maskUint64_t] = false;
+					continue;
+				}
+				if (prevAllele != std::numeric_limits<size_t>::max() && afterAllele != std::numeric_limits<size_t>::max() && prevAllele != afterAllele)
+				{
+					canResolveUnitig[mid & maskUint64_t] = false;
+					continue;
+				}
+			}
+		}
+	}
+	assert(readPaths.size() == chunksPerRead.size());
+	std::vector<size_t> chunkBelongsToUnitig;
+	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
+	{
+		for (uint64_t node : graph.chunksInUnitig[i])
+		{
+			size_t chunk = node & maskUint64_t;
+			if (chunk >= chunkBelongsToUnitig.size()) chunkBelongsToUnitig.resize(chunk+1, std::numeric_limits<size_t>::max());
+			assert(chunkBelongsToUnitig[chunk] == std::numeric_limits<size_t>::max());
+			chunkBelongsToUnitig[chunk] = i;
+		}
+	}
+	phmap::flat_hash_map<size_t, phmap::flat_hash_map<size_t, size_t>> chunkAlleleReplacement;
+	size_t nextNum = 0;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		std::vector<std::tuple<size_t, size_t, size_t, size_t>> unitigAllelesInThisRead;
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				if (!canResolveUnitig[readPaths[i][j].path[k] & maskUint64_t]) continue;
+				uint64_t prev = std::numeric_limits<size_t>::max();
+				uint64_t after = std::numeric_limits<size_t>::max();
+				if (k > 0)
+				{
+					prev = readPaths[i][j].path[k-1];
+				}
+				else if (j > 0)
+				{
+					prev = readPaths[i][j-1].path.back();
+				}
+				if (k+1 < readPaths[i][j].path.size())
+				{
+					after = readPaths[i][j].path[k+1];
+				}
+				else if (j+1 < readPaths[i].size())
+				{
+					after = readPaths[i][j+1].path[0];
+				}
+				if ((readPaths[i][j].path[k] ^ firstBitUint64_t) & firstBitUint64_t)
+				{
+					std::swap(prev, after);
+					if (prev != std::numeric_limits<size_t>::max()) prev ^= firstBitUint64_t;
+					if (after != std::numeric_limits<size_t>::max()) after ^= firstBitUint64_t;
+				}
+				assert(prev != std::numeric_limits<size_t>::max() || after != std::numeric_limits<size_t>::max());
+				size_t alleleBefore = std::numeric_limits<size_t>::max();
+				size_t alleleAfter = std::numeric_limits<size_t>::max();
+				if (prev != std::numeric_limits<size_t>::max() && prevToAllele[readPaths[i][j].path[k] & maskUint64_t].count(prev) == 1) alleleBefore = prevToAllele[readPaths[i][j].path[k] & maskUint64_t].at(prev);
+				if (after != std::numeric_limits<size_t>::max() && afterToAllele[readPaths[i][j].path[k] & maskUint64_t].count(after) == 1) alleleAfter = afterToAllele[readPaths[i][j].path[k] & maskUint64_t].at(after);
+				assert(alleleBefore != std::numeric_limits<size_t>::max() || alleleAfter != std::numeric_limits<size_t>::max());
+				assert(alleleBefore == alleleAfter || alleleBefore == std::numeric_limits<size_t>::max() || alleleAfter == std::numeric_limits<size_t>::max());
+				size_t allele = alleleBefore;
+				if (alleleBefore == std::numeric_limits<size_t>::max()) allele = alleleAfter;
+				unitigAllelesInThisRead.emplace_back(readPaths[i][j].readPartInPathnode[k].first, readPaths[i][j].readPartInPathnode[k].second, readPaths[i][j].path[k] & maskUint64_t, allele);
+			}
+		}
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			uint64_t node = std::get<2>(chunksPerRead[i][j]);
+			if (NonexistantChunk(node)) continue;
+			size_t allele = std::numeric_limits<size_t>::max();
+			if ((node & maskUint64_t) < chunkBelongsToUnitig.size() && chunkBelongsToUnitig[node & maskUint64_t] != std::numeric_limits<size_t>::max())
+			{
+				size_t unitig = chunkBelongsToUnitig[node & maskUint64_t];
+				if (canResolveUnitig[unitig])
+				{
+					for (auto t : unitigAllelesInThisRead)
+					{
+						if (std::get<2>(t) != unitig) continue;
+						if (std::get<0>(t) > std::get<0>(chunksPerRead[i][j])) continue;
+						if (std::get<1>(t) < std::get<1>(chunksPerRead[i][j])) continue;
+						assert(allele == std::numeric_limits<size_t>::max());
+						allele = std::get<3>(t);
+					}
+					assert(allele != std::numeric_limits<size_t>::max());
+				}
+			}
+			if (chunkAlleleReplacement.count(node & maskUint64_t) == 0)
+			{
+				chunkAlleleReplacement[node & maskUint64_t];
+			}
+			if (chunkAlleleReplacement.at(node & maskUint64_t).count(allele) == 0)
+			{
+				chunkAlleleReplacement[node & maskUint64_t][allele] = nextNum;
+				nextNum += 1;
+			}
+			uint64_t replacement = chunkAlleleReplacement.at(node & maskUint64_t).at(allele);
+			assert((replacement & firstBitUint64_t) == 0);
+			replacement += (node & firstBitUint64_t);
+			std::get<2>(chunksPerRead[i][j]) = replacement;
+		}
+	}
+	size_t countUnitigsReplaced = 0;
+	size_t countChunksReplaced = 0;
+	for (size_t i = 0; i < canResolveUnitig.size(); i++)
+	{
+		if (!canResolveUnitig[i]) continue;
+		countUnitigsReplaced += 1;
+		countChunksReplaced += graph.chunksInUnitig[i].size();
+	}
+	std::cerr << "semiambiguously resolvable unitig resolution resolved " << countUnitigsReplaced << " unitigs, " << countChunksReplaced << " chunks" << std::endl;
 }
 
 void resolveUnambiguouslyResolvableUnitigs(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
@@ -2608,19 +2862,23 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round5.gfa", "paths5.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round6.gfa", "paths6.gaf", chunksPerRead, readNames, rawReadLengths);
 //	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round7.gfa", "paths7.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 //	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
 //	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
@@ -2630,9 +2888,11 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	writeUnitigGraph("graph-round11.gfa", "paths11.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round12.gfa", "paths12.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
 }
