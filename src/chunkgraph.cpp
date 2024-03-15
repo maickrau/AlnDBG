@@ -2447,8 +2447,8 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round12.gfa", "paths12.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
-	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
+	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
 }
 
 int main(int argc, char** argv)
