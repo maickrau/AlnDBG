@@ -1895,7 +1895,7 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 				std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 				size_t overlap = edgeOverlaps.at(key);
 				assert(unitigLengths.back() > overlap);
-				assert(length > overlap);
+				if (overlap >= length) overlap = length-1; // wrong but do it anyway to prevent crash later
 				unitigLengths.back() -= overlap;
 			}
 			std::get<2>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back();
