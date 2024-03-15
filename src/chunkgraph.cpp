@@ -2495,6 +2495,7 @@ void resolveSemiAmbiguousUnitigs(const std::vector<TwobitString>& readSequences,
 		}
 		canResolveUnitig[i] = true;
 	}
+	phmap::flat_hash_set<size_t> readsAllowedToDiscard;
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
 		for (size_t j = 0; j < readPaths[i].size(); j++)
@@ -2529,8 +2530,16 @@ void resolveSemiAmbiguousUnitigs(const std::vector<TwobitString>& readSequences,
 				}
 				if (prev == std::numeric_limits<size_t>::max() && after == std::numeric_limits<size_t>::max())
 				{
-					canResolveUnitig[mid & maskUint64_t] = false;
-					continue;
+					if (readPaths[i].size() == 1 && readPaths[i][0].path.size() == 1)
+					{
+						readsAllowedToDiscard.insert(i);
+						continue;
+					}
+					else
+					{
+						canResolveUnitig[mid & maskUint64_t] = false;
+						continue;
+					}
 				}
 				size_t prevAllele = std::numeric_limits<size_t>::max();
 				size_t afterAllele = std::numeric_limits<size_t>::max();
@@ -2601,6 +2610,13 @@ void resolveSemiAmbiguousUnitigs(const std::vector<TwobitString>& readSequences,
 					if (prev != std::numeric_limits<size_t>::max()) prev ^= firstBitUint64_t;
 					if (after != std::numeric_limits<size_t>::max()) after ^= firstBitUint64_t;
 				}
+				if (prev == std::numeric_limits<size_t>::max() && after == std::numeric_limits<size_t>::max())
+				{
+					assert(readsAllowedToDiscard.count(i) == 1);
+					assert(readPaths[i].size() == 1);
+					assert(readPaths[i][0].path.size() == 1);
+					continue;
+				}
 				assert(prev != std::numeric_limits<size_t>::max() || after != std::numeric_limits<size_t>::max());
 				size_t alleleBefore = std::numeric_limits<size_t>::max();
 				size_t alleleAfter = std::numeric_limits<size_t>::max();
@@ -2620,6 +2636,13 @@ void resolveSemiAmbiguousUnitigs(const std::vector<TwobitString>& readSequences,
 			size_t allele = std::numeric_limits<size_t>::max();
 			if ((node & maskUint64_t) < chunkBelongsToUnitig.size() && chunkBelongsToUnitig[node & maskUint64_t] != std::numeric_limits<size_t>::max())
 			{
+				if (readsAllowedToDiscard.count(i) == 1)
+				{
+					assert(readPaths[i].size() == 1);
+					assert(readPaths[i][0].path.size() == 1);
+					std::get<2>(chunksPerRead[i][j]) = std::numeric_limits<size_t>::max();
+					continue;
+				}
 				size_t unitig = chunkBelongsToUnitig[node & maskUint64_t];
 				if (canResolveUnitig[unitig])
 				{
@@ -2862,21 +2885,25 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round5.gfa", "paths5.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round6.gfa", "paths6.gaf", chunksPerRead, readNames, rawReadLengths);
 //	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round7.gfa", "paths7.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, readNames, rawReadLengths);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
@@ -2888,9 +2915,11 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	writeUnitigGraph("graph-round11.gfa", "paths11.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round12.gfa", "paths12.gaf", chunksPerRead, readNames, rawReadLengths);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
