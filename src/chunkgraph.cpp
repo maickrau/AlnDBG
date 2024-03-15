@@ -1355,8 +1355,9 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 		}
 	}
 	size_t nextNum = 0;
+	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &repetitive, &maybePhaseGroups, k](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &repetitive, &maybePhaseGroups, &countSplitted, k](const size_t i)
 	{
 		std::vector<size_t> applicablePhasingGroups;
 		std::vector<size_t> readsHere;
@@ -1656,6 +1657,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 				clusterToNode[find(parent, j)] = nextNum;
 				nextNum += 1;
 			}
+			if (clusterToNode.size() >= 1) countSplitted += 1;
 //			std::cerr << "interchunk phasing kmers splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << clusterToNode.size() << " chunks" << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
@@ -1663,6 +1665,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 			}
 		}
 	});
+	std::cerr << "interchunk phasing kmers splitted " << countSplitted << " chunks" << std::endl;
 }
 
 void splitPerMinHashes(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
@@ -1887,7 +1890,10 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 				std::pair<size_t, bool> tonode { unitigs[i][j] & maskUint64_t, unitigs[i][j] & firstBitUint64_t };
 				auto pairkey = MBG::canon(fromnode, tonode);
 				std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
-				unitigLengths.back() -= edgeOverlaps.at(key);
+				size_t overlap = edgeOverlaps.at(key);
+				assert(unitigLengths.back() > overlap);
+				assert(length > overlap);
+				unitigLengths.back() -= overlap;
 			}
 			std::get<2>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back();
 			std::get<3>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back() + length;
@@ -2398,7 +2404,7 @@ void cleanTips(const std::vector<TwobitString>& readSequences, std::vector<std::
 	std::cerr << "removed " << removeUnitigCount << " unitigs, " << removeChunks.size() << " chunks" << std::endl;
 }
 
-void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads)
+void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads, const double approxOneHapCoverage)
 {
 	std::vector<bool> useTheseChunks;
 	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
@@ -2425,24 +2431,25 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 //	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
 //	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
 	writeUnitigGraph("graph-round9.gfa", "paths9.gaf", chunksPerRead, readNames, rawReadLengths);
-	cleanTips(readSequences, chunksPerRead, numThreads, 20);
+	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	writeUnitigGraph("graph-round10.gfa", "paths10.gaf", chunksPerRead, readNames, rawReadLengths);
-	cleanTips(readSequences, chunksPerRead, numThreads, 20);
+	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	writeUnitigGraph("graph-round11.gfa", "paths11.gaf", chunksPerRead, readNames, rawReadLengths);
-	removeSingleCopyChunks(chunksPerRead);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round12.gfa", "paths12.gaf", chunksPerRead, readNames, rawReadLengths);
-	removeHighCoverageChunks(chunksPerRead, 60);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
 }
 
 int main(int argc, char** argv)
 {
-	size_t numThreads = std::stoi(argv[1]);
-	size_t k = std::stoull(argv[2]);
-	size_t numWindows = std::stoull(argv[3]);
-	size_t windowSize = std::stoull(argv[4]);
+	const size_t numThreads = std::stoi(argv[1]);
+	const size_t k = std::stoull(argv[2]);
+	const size_t numWindows = std::stoull(argv[3]);
+	const size_t windowSize = std::stoull(argv[4]);
+	const double approxOneHapCoverage = std::stod(argv[5]);
 	std::vector<std::string> readFiles;
-	for (size_t i = 5; i < argc; i++)
+	for (size_t i = 6; i < argc; i++)
 	{
 		readFiles.emplace_back(argv[i]);
 	}
@@ -2469,5 +2476,5 @@ int main(int argc, char** argv)
 	matchIndex.clearConstructionVariablesAndCompact();
 	const std::vector<size_t>& readBasepairLengths = storage.getRawReadLengths();
 	const std::vector<std::string>& readNames = storage.getNames();
-	makeGraph(matchIndex, readNames, readBasepairLengths, readSequences, numThreads);
+	makeGraph(matchIndex, readNames, readBasepairLengths, readSequences, numThreads, approxOneHapCoverage);
 }
