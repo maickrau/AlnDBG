@@ -47,10 +47,9 @@ class UnitigPath
 {
 public:
 	std::vector<uint64_t> path;
+	std::vector<std::pair<size_t, size_t>> readPartInPathnode;
 	size_t pathLeftClip;
 	size_t pathRightClip;
-	size_t readStartPos;
-	size_t readEndPos;
 };
 
 void writeUnitigPaths(const std::string& filename, const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths)
@@ -75,7 +74,7 @@ void writeUnitigPaths(const std::string& filename, const ChunkUnitigGraph& uniti
 					pathLength -= unitigGraph.edgeOverlaps.at(key);
 				}
 			}
-			file << readNames[i] << "\t" << rawReadLengths[i] << "\t" << readPaths[i][j].readStartPos << "\t" << readPaths[i][j].readEndPos << "\t+\t" << pathstr << "\t" << pathLength << "\t" << readPaths[i][j].pathLeftClip << "\t" << (pathLength - readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t60" << std::endl;
+			file << readNames[i] << "\t" << rawReadLengths[i] << "\t" << readPaths[i][j].readPartInPathnode[0].first << "\t" << readPaths[i][j].readPartInPathnode.back().second << "\t+\t" << pathstr << "\t" << pathLength << "\t" << readPaths[i][j].pathLeftClip << "\t" << (pathLength - readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t60" << std::endl;
 		}
 	}
 }
@@ -1894,8 +1893,8 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 				auto pairkey = MBG::canon(fromnode, tonode);
 				std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 				size_t overlap = edgeOverlaps.at(key);
-				assert(unitigLengths.back() > overlap);
 				if (overlap >= length) overlap = length-1; // wrong but do it anyway to prevent crash later
+				assert(unitigLengths.back() > overlap);
 				unitigLengths.back() -= overlap;
 			}
 			std::get<2>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back();
@@ -1933,12 +1932,11 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		std::vector<uint64_t> path;
+		std::vector<std::pair<size_t, size_t>> readPartInPathnode;
 		uint64_t currentUnitig;
 		size_t currentUnitigIndex;
 		size_t currentPathLeftClip;
 		size_t currentPathRightClip;
-		size_t currentReadStart;
-		size_t currentReadEnd;
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || !allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
@@ -1949,16 +1947,14 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 					result[i].back().path = path;
 					result[i].back().pathLeftClip = currentPathLeftClip;
 					result[i].back().pathRightClip = currentPathRightClip;
-					result[i].back().readStartPos = currentReadStart;
-					result[i].back().readEndPos = currentReadEnd;
+					result[i].back().readPartInPathnode = readPartInPathnode;
 				}
 				path.clear();
+				readPartInPathnode.clear();
 				currentUnitig = std::numeric_limits<size_t>::max();
 				currentUnitigIndex = 0;
 				currentPathLeftClip= 0;
 				currentPathRightClip = 0;
-				currentReadStart = 0;
-				currentReadEnd = 0;
 				continue;
 			}
 			uint64_t chunk = std::get<2>(chunksPerRead[i][j]);
@@ -1988,16 +1984,15 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 				currentUnitigIndex = unitigIndex;
 				currentPathLeftClip = unitigStartPos;
 				currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
-				currentReadStart = readStart;
-				currentReadEnd = readEnd;
+				readPartInPathnode.emplace_back(readStart, readEnd);
 				continue;
 			}
 			if (currentUnitig == unitig && currentUnitigIndex+1 == unitigIndex)
 			{
-				assert(readEnd > currentReadEnd);
+				assert(readEnd > readPartInPathnode.back().second);
 				assert(graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos < currentPathRightClip);
 				currentUnitigIndex = unitigIndex;
-				currentReadEnd = readEnd;
+				readPartInPathnode.back().second = readEnd;
 				currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
 				continue;
 			}
@@ -2007,11 +2002,11 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 				std::pair<size_t, bool> thisUnitig { unitig & maskUint64_t, unitig & firstBitUint64_t };
 				if (graph.edges.hasEdge(fromUnitig, thisUnitig))
 				{
-					assert(readEnd > currentReadEnd);
+					assert(readEnd > readPartInPathnode.back().second);
 					path.emplace_back(unitig);
+					readPartInPathnode.emplace_back(readStart, readEnd);
 					currentUnitig = unitig;
 					currentUnitigIndex = unitigIndex;
-					currentReadEnd = readEnd;
 					currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
 					continue;
 				}
@@ -2020,16 +2015,15 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 			result[i].back().path = path;
 			result[i].back().pathLeftClip = currentPathLeftClip;
 			result[i].back().pathRightClip = currentPathRightClip;
-			result[i].back().readStartPos = currentReadStart;
-			result[i].back().readEndPos = currentReadEnd;
+			result[i].back().readPartInPathnode = readPartInPathnode;
 			path.clear();
+			readPartInPathnode.clear();
 			path.emplace_back(unitig);
 			currentUnitig = unitig;
 			currentUnitigIndex = unitigIndex;
 			currentPathLeftClip = unitigStartPos;
 			currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
-			currentReadStart = readStart;
-			currentReadEnd = readEnd;
+			readPartInPathnode.emplace_back(readStart, readEnd);
 		}
 		if (path.size() >= 1)
 		{
@@ -2037,8 +2031,7 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 			result[i].back().path = path;
 			result[i].back().pathLeftClip = currentPathLeftClip;
 			result[i].back().pathRightClip = currentPathRightClip;
-			result[i].back().readStartPos = currentReadStart;
-			result[i].back().readEndPos = currentReadEnd;
+			result[i].back().readPartInPathnode = readPartInPathnode;
 		}
 	}
 	return result;
@@ -2375,20 +2368,26 @@ void cleanTips(const std::vector<TwobitString>& readSequences, std::vector<std::
 		if (graph.edges.getEdges(std::make_pair(i, true)).size() == 1)
 		{
 			std::pair<size_t, bool> otherpair = graph.edges.getEdges(std::make_pair(i, true))[0];
-			uint64_t other = otherpair.first + (otherpair.second ? firstBitUint64_t : 0);
-			other ^= firstBitUint64_t;
-			if (solidFork.count(other) == 1) continue;
-			if (acceptableFork.count(other) == 1) continue;
-			if (!hasOtherHigherCoverageEdge(other, i, graph)) continue;
+			if (otherpair.first != i)
+			{
+				uint64_t other = otherpair.first + (otherpair.second ? firstBitUint64_t : 0);
+				other ^= firstBitUint64_t;
+				if (solidFork.count(other) == 1) continue;
+				if (acceptableFork.count(other) == 1) continue;
+				if (!hasOtherHigherCoverageEdge(other, i, graph)) continue;
+			}
 		}
 		if (graph.edges.getEdges(std::make_pair(i, false)).size() == 1)
 		{
 			std::pair<size_t, bool> otherpair = graph.edges.getEdges(std::make_pair(i, false))[0];
-			uint64_t other = otherpair.first + (otherpair.second ? firstBitUint64_t : 0);
-			other ^= firstBitUint64_t;
-			if (solidFork.count(other) == 1) continue;
-			if (acceptableFork.count(other) == 1) continue;
-			if (!hasOtherHigherCoverageEdge(other, i + firstBitUint64_t, graph)) continue;
+			if (otherpair.first != i)
+			{
+				uint64_t other = otherpair.first + (otherpair.second ? firstBitUint64_t : 0);
+				other ^= firstBitUint64_t;
+				if (solidFork.count(other) == 1) continue;
+				if (acceptableFork.count(other) == 1) continue;
+				if (!hasOtherHigherCoverageEdge(other, i + firstBitUint64_t, graph)) continue;
+			}
 		}
 		removeUnitigCount += 1;
 		for (uint64_t chunk : graph.chunksInUnitig[i])
@@ -2405,6 +2404,190 @@ void cleanTips(const std::vector<TwobitString>& readSequences, std::vector<std::
 		}
 	}
 	std::cerr << "removed " << removeUnitigCount << " unitigs, " << removeChunks.size() << " chunks" << std::endl;
+}
+
+void resolveUnambiguouslyResolvableUnitigs(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+{
+	std::cerr << "resolving unambiguously resolvable unitigs" << std::endl;
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead);
+	std::vector<bool> edgesBalanced;
+	std::vector<bool> unitigHasContainedPath;
+	std::vector<phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> tripletsPerUnitig;
+	edgesBalanced.resize(graph.unitigLengths.size(), false);
+	unitigHasContainedPath.resize(graph.unitigLengths.size(), false);
+	tripletsPerUnitig.resize(graph.unitigLengths.size());
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (graph.edges.getEdges(std::make_pair(i, true)).size() == graph.edges.getEdges(std::make_pair(i, false)).size())
+		{
+			if (graph.edges.getEdges(std::make_pair(i, true)).size() >= 2)
+			{
+				edgesBalanced[i] = true;
+			}
+		}
+	}
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			if (readPaths[i][j].path.size() == 1)
+			{
+				unitigHasContainedPath[readPaths[i][j].path[0] & maskUint64_t] = true;
+				continue;
+			}
+			assert(readPaths[i][j].path.size() >= 2);
+			for (size_t k = 1; k+1 < readPaths[i][j].path.size(); k++)
+			{
+				uint64_t mid = readPaths[i][j].path[k];
+				if (!edgesBalanced[mid & maskUint64_t]) continue;
+				if (unitigHasContainedPath[mid & maskUint64_t]) continue;
+				uint64_t prev, after;
+				if (mid & firstBitUint64_t)
+				{
+					prev = readPaths[i][j].path[k-1];
+					after = readPaths[i][j].path[k+1];
+				}
+				else
+				{
+					prev = readPaths[i][j].path[k+1] ^ firstBitUint64_t;
+					after = readPaths[i][j].path[k-1] ^ firstBitUint64_t;
+				}
+				tripletsPerUnitig[mid & maskUint64_t][std::make_pair(prev, after)] += 1;
+			}
+		}
+	}
+	std::vector<bool> canResolveUnitig;
+	canResolveUnitig.resize(graph.unitigLengths.size(), false);
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (!edgesBalanced[i]) continue;
+		if (unitigHasContainedPath[i]) continue;
+		if (tripletsPerUnitig[i].size() != graph.edges.getEdges(std::make_pair(i, true)).size()) continue;
+		phmap::flat_hash_set<uint64_t> nodesPrev;
+		phmap::flat_hash_set<uint64_t> nodesAfter;
+		bool valid = true;
+		for (auto triplet : tripletsPerUnitig[i])
+		{
+			if (triplet.second < 2)
+			{
+				valid = false;
+				break;
+			}
+			nodesPrev.insert(triplet.first.first);
+			nodesAfter.insert(triplet.first.second);
+		}
+		if (!valid) continue;
+		if (nodesPrev.size() != nodesAfter.size()) continue;
+		if (nodesPrev.size() != graph.edges.getEdges(std::make_pair(i, true)).size()) continue;
+		canResolveUnitig[i] = true;
+	}
+	std::vector<phmap::flat_hash_map<uint64_t, size_t>> prevToAllele;
+	std::vector<phmap::flat_hash_map<uint64_t, size_t>> afterToAllele;
+	prevToAllele.resize(graph.unitigLengths.size());
+	afterToAllele.resize(graph.unitigLengths.size());
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (!canResolveUnitig[i]) continue;
+		size_t alleleNum = 0;
+		for (auto triplet : tripletsPerUnitig[i])
+		{
+			uint64_t prev = triplet.first.first;
+			uint64_t after = triplet.first.second;
+			assert(prevToAllele[i].count(prev) == 0);
+			assert(afterToAllele[i].count(after) == 0);
+			prevToAllele[i][prev] = alleleNum;
+			afterToAllele[i][after] = alleleNum;
+			alleleNum += 1;
+		}
+	}
+	assert(readPaths.size() == chunksPerRead.size());
+	std::vector<size_t> chunkBelongsToUnitig;
+	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
+	{
+		for (uint64_t node : graph.chunksInUnitig[i])
+		{
+			size_t chunk = node & maskUint64_t;
+			if (chunk >= chunkBelongsToUnitig.size()) chunkBelongsToUnitig.resize(chunk+1, std::numeric_limits<size_t>::max());
+			assert(chunkBelongsToUnitig[chunk] == std::numeric_limits<size_t>::max());
+			chunkBelongsToUnitig[chunk] = i;
+		}
+	}
+	phmap::flat_hash_map<size_t, phmap::flat_hash_map<size_t, size_t>> chunkAlleleReplacement;
+	size_t nextNum = 0;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		std::vector<std::tuple<size_t, size_t, size_t, size_t>> unitigAllelesInThisRead;
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				if (!canResolveUnitig[readPaths[i][j].path[k] & maskUint64_t]) continue;
+				size_t alleleBefore = std::numeric_limits<size_t>::max();
+				size_t alleleAfter = std::numeric_limits<size_t>::max();
+				if (readPaths[i][j].path[k] & firstBitUint64_t)
+				{
+					if (k > 0) alleleBefore = prevToAllele[readPaths[i][j].path[k] & maskUint64_t].at(readPaths[i][j].path[k-1]);
+					if (k+1 < readPaths[i][j].path.size()) alleleAfter = afterToAllele[readPaths[i][j].path[k] & maskUint64_t].at(readPaths[i][j].path[k+1]);
+				}
+				else
+				{
+					if (k > 0) alleleAfter = afterToAllele[readPaths[i][j].path[k] & maskUint64_t].at(readPaths[i][j].path[k-1] ^ firstBitUint64_t);
+					if (k+1 < readPaths[i][j].path.size()) alleleBefore = prevToAllele[readPaths[i][j].path[k] & maskUint64_t].at(readPaths[i][j].path[k+1] ^ firstBitUint64_t);
+				}
+				assert(alleleBefore != std::numeric_limits<size_t>::max() || alleleAfter != std::numeric_limits<size_t>::max());
+				assert(alleleBefore == alleleAfter || alleleBefore == std::numeric_limits<size_t>::max() || alleleAfter == std::numeric_limits<size_t>::max());
+				size_t allele = alleleBefore;
+				if (alleleBefore == std::numeric_limits<size_t>::max()) allele = alleleAfter;
+				unitigAllelesInThisRead.emplace_back(readPaths[i][j].readPartInPathnode[k].first, readPaths[i][j].readPartInPathnode[k].second, readPaths[i][j].path[k] & maskUint64_t, allele);
+			}
+		}
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			uint64_t node = std::get<2>(chunksPerRead[i][j]);
+			if (NonexistantChunk(node)) continue;
+			size_t allele = std::numeric_limits<size_t>::max();
+			if ((node & maskUint64_t) < chunkBelongsToUnitig.size() && chunkBelongsToUnitig[node & maskUint64_t] != std::numeric_limits<size_t>::max())
+			{
+				size_t unitig = chunkBelongsToUnitig[node & maskUint64_t];
+				if (canResolveUnitig[unitig])
+				{
+					for (auto t : unitigAllelesInThisRead)
+					{
+						if (std::get<2>(t) != unitig) continue;
+						if (std::get<0>(t) > std::get<0>(chunksPerRead[i][j])) continue;
+						if (std::get<1>(t) < std::get<1>(chunksPerRead[i][j])) continue;
+						assert(allele == std::numeric_limits<size_t>::max());
+						allele = std::get<3>(t);
+					}
+					assert(allele != std::numeric_limits<size_t>::max());
+				}
+			}
+			if (chunkAlleleReplacement.count(node & maskUint64_t) == 0)
+			{
+				chunkAlleleReplacement[node & maskUint64_t];
+			}
+			if (chunkAlleleReplacement.at(node & maskUint64_t).count(allele) == 0)
+			{
+				chunkAlleleReplacement[node & maskUint64_t][allele] = nextNum;
+				nextNum += 1;
+			}
+			uint64_t replacement = chunkAlleleReplacement.at(node & maskUint64_t).at(allele);
+			assert((replacement & firstBitUint64_t) == 0);
+			replacement += (node & firstBitUint64_t);
+			std::get<2>(chunksPerRead[i][j]) = replacement;
+		}
+	}
+	size_t countUnitigsReplaced = 0;
+	size_t countChunksReplaced = 0;
+	for (size_t i = 0; i < canResolveUnitig.size(); i++)
+	{
+		if (!canResolveUnitig[i]) continue;
+		countUnitigsReplaced += 1;
+		countChunksReplaced += graph.chunksInUnitig[i].size();
+	}
+	std::cerr << "unambiguously resolvable unitig resolution resolved " << countUnitigsReplaced << " unitigs, " << countChunksReplaced << " chunks" << std::endl;
 }
 
 void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads, const double approxOneHapCoverage)
@@ -2424,18 +2607,21 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	writeUnitigGraph("graph-round4.gfa", "paths4.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round5.gfa", "paths5.gaf", chunksPerRead, readNames, rawReadLengths);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round6.gfa", "paths6.gaf", chunksPerRead, readNames, rawReadLengths);
 //	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round7.gfa", "paths7.gaf", chunksPerRead, readNames, rawReadLengths);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, readNames, rawReadLengths);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
-	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 //	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
 //	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
 	writeUnitigGraph("graph-round9.gfa", "paths9.gaf", chunksPerRead, readNames, rawReadLengths);
@@ -2443,11 +2629,11 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	writeUnitigGraph("graph-round10.gfa", "paths10.gaf", chunksPerRead, readNames, rawReadLengths);
 	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	writeUnitigGraph("graph-round11.gfa", "paths11.gaf", chunksPerRead, readNames, rawReadLengths);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
-	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round12.gfa", "paths12.gaf", chunksPerRead, readNames, rawReadLengths);
+	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
-	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
 }
 
