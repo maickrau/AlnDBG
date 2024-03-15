@@ -192,6 +192,7 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 					for (size_t k = lastTipIndex; k < j; k++)
 					{
 						if (NonexistantChunk(std::get<2>(chunksPerRead[i][k]))) continue;
+						if (NonexistantChunk(std::get<2>(chunksPerRead[i][k+1]))) continue;
 						newlyAllowedNodes.insert(std::get<2>(chunksPerRead[i][k]) & maskUint64_t);
 						std::pair<size_t, bool> fromnode { std::get<2>(chunksPerRead[i][k]) & maskUint64_t, std::get<2>(chunksPerRead[i][k]) & firstBitUint64_t };
 						std::pair<size_t, bool> tonode { std::get<2>(chunksPerRead[i][k+1]) & maskUint64_t, std::get<2>(chunksPerRead[i][k+1]) & firstBitUint64_t };
@@ -1876,6 +1877,8 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 			size_t length = lengths[unitigs[i][j] & maskUint64_t][lengths[unitigs[i][j] & maskUint64_t].size()/2];
 			assert(length >= 0);
 			assert(length <= 1000000);
+			assert(std::get<0>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) != std::numeric_limits<size_t>::max());
+			assert((std::get<0>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) & maskUint64_t) == i);
 			assert(std::get<2>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) == 0);
 			assert(std::get<3>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) == 0);
 			if (j > 0)
