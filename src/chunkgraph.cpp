@@ -517,8 +517,9 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 		}
 	}
 	size_t nextNum = 0;
+	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, k](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, k](const size_t i)
 	{
 		phmap::flat_hash_set<size_t> kmersEverywhere;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
@@ -622,6 +623,7 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 				keyToNode[key] = nextNum;
 				nextNum += 1;
 			}
+			if (keyToNode.size() >= 2) countSplitted += 1;
 //			std::cerr << "phasable kmer splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
@@ -629,6 +631,7 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 			}
 		}
 	});
+	std::cerr << "phasing kmers splitted " << countSplitted << " chunks" << std::endl;
 }
 
 bool sequenceAndDistanceApproxMatch(const std::vector<size_t>& leftKmers, const std::vector<size_t>& rightKmers, const std::vector<size_t>& leftDistances, const std::vector<size_t>& rightDistances, const size_t maxDistanceDifference)
@@ -1657,7 +1660,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 				clusterToNode[find(parent, j)] = nextNum;
 				nextNum += 1;
 			}
-			if (clusterToNode.size() >= 1) countSplitted += 1;
+			if (clusterToNode.size() >= 2) countSplitted += 1;
 //			std::cerr << "interchunk phasing kmers splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << clusterToNode.size() << " chunks" << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
@@ -2417,17 +2420,22 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	splitPerMinHashes(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round3.gfa", "paths3.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round4.gfa", "paths4.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round5.gfa", "paths5.gaf", chunksPerRead, readNames, rawReadLengths);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round6.gfa", "paths6.gaf", chunksPerRead, readNames, rawReadLengths);
 //	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round7.gfa", "paths7.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 //	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
 //	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
 	writeUnitigGraph("graph-round9.gfa", "paths9.gaf", chunksPerRead, readNames, rawReadLengths);
@@ -2436,9 +2444,11 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	writeUnitigGraph("graph-round11.gfa", "paths11.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round12.gfa", "paths12.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
+	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 }
 
 int main(int argc, char** argv)
