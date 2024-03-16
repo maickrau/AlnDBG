@@ -127,6 +127,8 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 	for (auto pair : edgeCoverage)
 	{
 		if (pair.second < 2) continue;
+		assert(!NonexistantChunk(pair.first.first));
+		assert(!NonexistantChunk(pair.first.second));
 		allowedEdges.addEdge(std::make_pair(pair.first.first & maskUint64_t, pair.first.first & firstBitUint64_t), std::make_pair(pair.first.second & maskUint64_t, pair.first.second & firstBitUint64_t));
 		allowedEdges.addEdge(std::make_pair(pair.first.second & maskUint64_t, (pair.first.second ^ firstBitUint64_t) & firstBitUint64_t), std::make_pair(pair.first.first & maskUint64_t, (pair.first.first ^ firstBitUint64_t) & firstBitUint64_t));
 	}
@@ -143,7 +145,11 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 		size_t lastTip = std::numeric_limits<size_t>::max();
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
+			{
+				lastTip = std::numeric_limits<size_t>::max();
+				continue;
+			}
 			if (!allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			if (lastTip != std::numeric_limits<size_t>::max() && tip.count(std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t) == 1)
 			{
@@ -180,7 +186,12 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 		size_t lastTipIndex = std::numeric_limits<size_t>::max();
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
+			{
+				lastTip = std::numeric_limits<size_t>::max();
+				lastTipIndex = std::numeric_limits<size_t>::max();
+				continue;
+			}
 			if (!allowedNode[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			if (lastTip != std::numeric_limits<size_t>::max() && tip.count(std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t) == 1)
 			{
@@ -190,8 +201,8 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 				{
 					for (size_t k = lastTipIndex; k < j; k++)
 					{
-						if (NonexistantChunk(std::get<2>(chunksPerRead[i][k]))) continue;
-						if (NonexistantChunk(std::get<2>(chunksPerRead[i][k+1]))) continue;
+						assert(!NonexistantChunk(std::get<2>(chunksPerRead[i][k])));
+						assert(!NonexistantChunk(std::get<2>(chunksPerRead[i][k+1])));
 						newlyAllowedNodes.insert(std::get<2>(chunksPerRead[i][k]) & maskUint64_t);
 						std::pair<size_t, bool> fromnode { std::get<2>(chunksPerRead[i][k]) & maskUint64_t, std::get<2>(chunksPerRead[i][k]) & firstBitUint64_t };
 						std::pair<size_t, bool> tonode { std::get<2>(chunksPerRead[i][k+1]) & maskUint64_t, std::get<2>(chunksPerRead[i][k+1]) & firstBitUint64_t };
@@ -212,6 +223,7 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 	for (auto node : newlyAllowedNodes)
 	{
 		assert(!NonexistantChunk(node));
+		assert(node < allowedNode.size());
 		allowedNode[node] = true;
 	}
 	return std::make_pair(allowedNode, allowedEdges);
@@ -2064,6 +2076,7 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUniti
 		assert(!NonexistantChunk(unitigs[i][0]));
 		for (auto edge : allowedEdges.getEdges(lastNode))
 		{
+			assert(!NonexistantChunk(edge.first + (edge.second ? firstBitUint64_t : 0)));
 			uint64_t targetUnitig = std::get<0>(chunkLocationInUnitig[edge.first]);
 			if (!edge.second) targetUnitig ^= firstBitUint64_t;
 			auto nodepairkey = MBG::canon(lastNode, edge);
@@ -2077,6 +2090,7 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUniti
 		}
 		for (auto edge : allowedEdges.getEdges(firstNode))
 		{
+			assert(!NonexistantChunk(edge.first + (edge.second ? firstBitUint64_t : 0)));
 			uint64_t targetUnitig = std::get<0>(chunkLocationInUnitig[edge.first]);
 			if (!edge.second) targetUnitig ^= firstBitUint64_t;
 			auto nodepairkey = MBG::canon(firstNode, edge);
