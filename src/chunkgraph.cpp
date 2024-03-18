@@ -347,6 +347,38 @@ void removeContainedChunks(std::vector<std::vector<std::tuple<size_t, size_t, ui
 	}
 }
 
+void removeContainingChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = chunksPerRead[i].size()-1; j < chunksPerRead[i].size(); j--)
+		{
+			if (j > 0)
+			{
+				assert(std::get<1>(chunksPerRead[i][j-1]) <= std::get<1>(chunksPerRead[i][j]));
+				assert(std::get<0>(chunksPerRead[i][j-1]) <= std::get<0>(chunksPerRead[i][j]));
+				if (std::get<1>(chunksPerRead[i][j-1]) == std::get<1>(chunksPerRead[i][j]))
+				{
+					assert(std::get<0>(chunksPerRead[i][j-1]) < std::get<0>(chunksPerRead[i][j]));
+					chunksPerRead[i].erase(chunksPerRead[i].begin()+j-1);
+					continue;
+				}
+			}
+			if (j+1 < chunksPerRead[i].size())
+			{
+				assert(std::get<1>(chunksPerRead[i][j]) <= std::get<1>(chunksPerRead[i][j+1]));
+				assert(std::get<0>(chunksPerRead[i][j]) <= std::get<0>(chunksPerRead[i][j+1]));
+				if (std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j+1]))
+				{
+					assert(std::get<1>(chunksPerRead[i][j]) < std::get<1>(chunksPerRead[i][j+1]));
+					chunksPerRead[i].erase(chunksPerRead[i].begin()+j+1);
+					continue;
+				}
+			}
+		}
+	}
+}
+
 void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
 	std::cerr << "splitting by length" << std::endl;
@@ -2881,13 +2913,70 @@ void resolveUnambiguouslyResolvableUnitigs(const std::vector<TwobitString>& read
 	std::cerr << "unambiguously resolvable unitig resolution resolved " << countUnitigsReplaced << " unitigs, " << countChunksReplaced << " chunks" << std::endl;
 }
 
+void countReadRepetitiveUnitigs(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	std::cerr << "counting read-repetitive unitigs" << std::endl;
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead);
+	std::vector<size_t> chunkBelongsToUnitig;
+	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
+	{
+		for (uint64_t node : graph.chunksInUnitig[i])
+		{
+			size_t chunk = node & maskUint64_t;
+			if (chunk >= chunkBelongsToUnitig.size()) chunkBelongsToUnitig.resize(chunk+1, std::numeric_limits<size_t>::max());
+			chunkBelongsToUnitig[chunk] = i;
+		}
+	}
+	std::vector<uint8_t> chunkRepeatCount;
+	chunkRepeatCount.resize(chunkBelongsToUnitig.size(), 0);
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		phmap::flat_hash_set<size_t> foundHere;
+		phmap::flat_hash_set<size_t> repetitiveHere;
+		for (auto t : chunksPerRead[i])
+		{
+			size_t chunk = std::get<2>(t) & maskUint64_t;
+			if (foundHere.count(chunk) == 1) repetitiveHere.insert(chunk);
+			foundHere.insert(chunk);
+		}
+		for (size_t chunk : repetitiveHere)
+		{
+			if (chunk >= chunkRepeatCount.size()) continue;
+			if (chunkRepeatCount[chunk] >= 2) continue;
+			chunkRepeatCount[chunk] += 1;
+		}
+	}
+	std::vector<bool> unitigRepetitive;
+	unitigRepetitive.resize(graph.unitigLengths.size(), false);
+	for (size_t i = 0; i < chunkRepeatCount.size(); i++)
+	{
+		if (chunkRepeatCount[i] < 2) continue;
+		if (chunkBelongsToUnitig[i] == std::numeric_limits<size_t>::max()) continue;
+		unitigRepetitive[chunkBelongsToUnitig[i]] = true;
+	}
+	size_t countRepetitive = 0;
+	std::ofstream file { "repetitive.txt" };
+	for (size_t i = 0; i < unitigRepetitive.size(); i++)
+	{
+		if (!unitigRepetitive[i]) continue;
+		countRepetitive += 1;
+		file << i << std::endl;
+	}
+	std::cerr << countRepetitive << " read-repetitive unitigs" << std::endl;
+}
+
 void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads, const double approxOneHapCoverage)
 {
 	std::vector<bool> useTheseChunks;
 	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
-	removeContainedChunks(chunksPerRead);
+//	writeGraph("fakegraph1.gfa", "fakepaths1.txt", chunksPerRead);
+	removeContainingChunks(chunksPerRead);
+	writeGraph("fakegraph2.gfa", "fakepaths2.txt", chunksPerRead);
 	splitPerLength(chunksPerRead);
+	writeGraph("fakegraph3.gfa", "fakepaths3.txt", chunksPerRead);
 	writeUnitigGraph("graph-round1.gfa", "paths1.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerBaseCounts(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round2.gfa", "paths2.gaf", chunksPerRead, readNames, rawReadLengths);
@@ -2937,6 +3026,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+	countReadRepetitiveUnitigs(chunksPerRead);
 	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
 }
 
