@@ -22,6 +22,19 @@
 
 const double mismatchFraction = 0.03; // try 2-3x avg error rate
 
+auto getTime()
+{
+	return std::chrono::steady_clock::now();
+}
+
+std::string formatTime(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end)
+{
+	size_t milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count();
+	return std::to_string(milliseconds / 1000) + "," + std::to_string(milliseconds % 1000) + " s";
+}
+
+auto programStartTime = getTime();
+
 bool NonexistantChunk(const uint64_t chunk)
 {
 	if (chunk == std::numeric_limits<uint64_t>::max()) return true;
@@ -3383,6 +3396,7 @@ void writeReadUnitigSequences(const std::string& filename, const std::vector<std
 
 void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads, const double approxOneHapCoverage)
 {
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::vector<bool> useTheseChunks;
 	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
@@ -3391,26 +3405,40 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	writeGraph("fakegraph2.gfa", "fakepaths2.txt", chunksPerRead);
 	splitPerLength(chunksPerRead);
 	writeGraph("fakegraph3.gfa", "fakepaths3.txt", chunksPerRead);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round1.gfa", "paths1.gaf", chunksPerRead, readNames, rawReadLengths);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerBaseCounts(readSequences, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round2.gfa", "paths2.gaf", chunksPerRead, readNames, rawReadLengths);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerMinHashes(readSequences, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round3.gfa", "paths3.gaf", chunksPerRead, readNames, rawReadLengths);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round4.gfa", "paths4.gaf", chunksPerRead, readNames, rawReadLengths);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round5.gfa", "paths5.gaf", chunksPerRead, readNames, rawReadLengths);
 //	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 //	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph5.gfa", "fakepaths5.txt", chunksPerRead);
 	writeReadChunkSequences("sequences-chunk5.txt", chunksPerRead, readSequences, readNames);
 	writeReadUnitigSequences("sequences-graph5.txt", chunksPerRead, readSequences, readNames);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	writeReadChunkSequences("sequences-chunk6.txt", chunksPerRead, readSequences, readNames);
 	writeGraph("fakegraph6.gfa", "fakepaths6.txt", chunksPerRead);
 //	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 //	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeUnitigGraph("graph-round6.gfa", "paths6.gaf", chunksPerRead, readNames, rawReadLengths);
 //	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
@@ -3425,6 +3453,7 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 //	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 //	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
@@ -3432,22 +3461,28 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 //	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 //	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
 //	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round9.gfa", "paths9.gaf", chunksPerRead, readNames, rawReadLengths);
 	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round10.gfa", "paths10.gaf", chunksPerRead, readNames, rawReadLengths);
 	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round11.gfa", "paths11.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 //	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round12.gfa", "paths12.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 //	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	countReadRepetitiveUnitigs(chunksPerRead);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 }
 
 int main(int argc, char** argv)
