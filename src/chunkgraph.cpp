@@ -137,9 +137,25 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 	{
 		allowedNode[i] = (coverages[i] >= 2);
 	}
+	phmap::flat_hash_map<uint64_t, size_t> maxCoverageEdge;
+	for (auto pair : edgeCoverage)
+	{
+		maxCoverageEdge[pair.first.first] = std::max(maxCoverageEdge[pair.first.first], pair.second);
+		maxCoverageEdge[pair.first.second ^ firstBitUint64_t] = std::max(maxCoverageEdge[pair.first.second ^ firstBitUint64_t], pair.second);
+	}
 	for (auto pair : edgeCoverage)
 	{
 		if (pair.second < 2) continue;
+		if (pair.second <= 3)
+		{
+			if (maxCoverageEdge.at(pair.first.first) > pair.second*3)
+			{
+				if (maxCoverageEdge.at(pair.first.second ^ firstBitUint64_t) > pair.second*3)
+				{
+					continue;
+				}
+			}
+		}
 		assert(!NonexistantChunk(pair.first.first));
 		assert(!NonexistantChunk(pair.first.second));
 		allowedEdges.addEdge(std::make_pair(pair.first.first & maskUint64_t, pair.first.first & firstBitUint64_t), std::make_pair(pair.first.second & maskUint64_t, pair.first.second & firstBitUint64_t));
@@ -2795,31 +2811,52 @@ void cleanTips(const std::vector<TwobitString>& readSequences, std::vector<std::
 	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
 	{
 		if (graph.coverages[i] >= approxOneHapCoverage*0.5) continue;
-		if (graph.edges.getEdges(std::make_pair(i, true)).size() >= 2) continue;
-		if (graph.edges.getEdges(std::make_pair(i, false)).size() >= 2) continue;
-		if (graph.edges.getEdges(std::make_pair(i, true)).size() == 1)
+		if (graph.unitigLengths[i] >= 50000) continue;
+		if (graph.edges.getEdges(std::make_pair(i, true)).size() >= 1)
 		{
-			std::pair<size_t, bool> otherpair = graph.edges.getEdges(std::make_pair(i, true))[0];
-			if (otherpair.first != i)
+			bool allGood = true;
+			for (auto otherpair : graph.edges.getEdges(std::make_pair(i, true)))
 			{
+				if (otherpair.first == i) continue;
 				uint64_t other = otherpair.first + (otherpair.second ? firstBitUint64_t : 0);
 				other ^= firstBitUint64_t;
-				if (solidFork.count(other) == 1) continue;
-				if (acceptableFork.count(other) == 1) continue;
-				if (!hasOtherHigherCoverageEdge(other, i, graph)) continue;
+				if (solidFork.count(other) == 0)
+				{
+					if (acceptableFork.count(other) == 0)
+					{
+						if (hasOtherHigherCoverageEdge(other, i, graph))
+						{
+							continue;
+						}
+					}
+				}
+				allGood = false;
+				break;
 			}
+			if (!allGood) continue;
 		}
-		if (graph.edges.getEdges(std::make_pair(i, false)).size() == 1)
+		if (graph.edges.getEdges(std::make_pair(i, false)).size() >= 1)
 		{
-			std::pair<size_t, bool> otherpair = graph.edges.getEdges(std::make_pair(i, false))[0];
-			if (otherpair.first != i)
+			bool allGood = true;
+			for (auto otherpair : graph.edges.getEdges(std::make_pair(i, false)))
 			{
+				if (otherpair.first == i) continue;
 				uint64_t other = otherpair.first + (otherpair.second ? firstBitUint64_t : 0);
 				other ^= firstBitUint64_t;
-				if (solidFork.count(other) == 1) continue;
-				if (acceptableFork.count(other) == 1) continue;
-				if (!hasOtherHigherCoverageEdge(other, i + firstBitUint64_t, graph)) continue;
+				if (solidFork.count(other) == 0)
+				{
+					if (acceptableFork.count(other) == 0)
+					{
+						if (hasOtherHigherCoverageEdge(other, i + firstBitUint64_t, graph))
+						{
+							continue;
+						}
+					}
+				}
+				allGood = false;
+				break;
 			}
+			if (!allGood) continue;
 		}
 		removeUnitigCount += 1;
 		for (uint64_t chunk : graph.chunksInUnitig[i])
