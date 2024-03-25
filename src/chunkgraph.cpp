@@ -2706,7 +2706,47 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 	return result;
 }
 
-std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUnitigGraph(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+std::vector<TwobitString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const std::vector<TwobitString>& readSequences, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& chunkLengths, const std::vector<size_t>& chunkCoverages, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps, const size_t numThreads)
+{
+	std::vector<TwobitString> result;
+	return result;
+	// todo
+/*	std::vector<std::vector<std::tuple<size_t, size_t, size_t, size_t, size_t, bool>>> readOccurrencesInUnitigs; // read, unitigstart, unitigend, readstart, readend, fw
+	readOccurrencesInUnitigs.resize(unitigGraph.unitigLengths.size());
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				uint64_t unitig = readPaths[i][j].path[k];
+				size_t unitigStart = 0;
+				size_t unitigEnd = unitigGraph.unitigLengths[unitig & maskUint64_t];
+				if (k == 0) unitigStart += readPaths[i][j].pathLeftClip;
+				if (k+1 == readPaths[i][j].path.size()) unitigEnd -= readPaths[i][j].pathRightClip;
+				assert(unitigEnd > unitigStart);
+				size_t readStart = readPaths[i][j].readPartInPathnode[k].first;
+				size_t readEnd = readPaths[i][j].readPartInPathnode[k].second;
+				bool fw = unitig & firstBitUint64_t;
+				if (!fw)
+				{
+					std::swap(unitigStart, unitigEnd);
+					unitigStart = unitigGraph.unitigLengths[unitig & maskUint64_t] - unitigStart;
+					unitigEnd = unitigGraph.unitigLengths[unitig & maskUint64_t] - unitigEnd;
+				}
+				readOccurrencesInUnitigs[unitig & maskUint64_t].emplace_back(i, unitigStart, unitigEnd, readStart, readEnd, fw);
+			}
+		}
+	}
+	std::vector<TwobitString> result;
+	result.resize(unitigGraph.unitigLengths.size());
+	iterateMultithreaded(0, readOccurrencesInUnitigs.size(), numThreads, [&result, &readOccurrencesInUnitigs, &readSequences](const size_t i)
+	{
+
+	});*/
+}
+
+std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<TwobitString>> getChunkUnitigGraphInner(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const bool alsoConsensuses, const size_t numThreads, const std::vector<TwobitString>& readSequences)
 {
 	ChunkUnitigGraph result;
 	std::vector<std::vector<size_t>> lengths;
@@ -2719,7 +2759,7 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUniti
 	std::tie(allowedNode, allowedEdges) = getAllowedNodesAndEdges(coverages, edgeCoverage, chunksPerRead);
 	std::vector<std::vector<uint64_t>> unitigs;
 	std::vector<size_t> unitigLengths;
-	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig;
+	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig; // unitig, index, startpos, endpos. reverse also reverses index and poses.
 	std::tie(unitigs, unitigLengths, chunkLocationInUnitig) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps);
 	result.unitigLengths = unitigLengths;
 	result.edges.resize(result.unitigLengths.size());
@@ -2777,7 +2817,24 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUniti
 		result.chunksInUnitig[i] = unitigs[i];
 	}
 	auto paths = getUnitigPaths(result, chunksPerRead, allowedNode, unitigs, chunkLocationInUnitig);
-	return std::make_tuple(result, paths);
+	std::vector<TwobitString> consensuses;
+	if (alsoConsensuses)
+	{
+		consensuses = getUnitigConsensuses(result, paths, readSequences, chunksPerRead, lengths, coverages, chunkLocationInUnitig, edgeOverlaps, numThreads);
+	}
+	return std::make_tuple(result, paths, consensuses);
+}
+
+std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<TwobitString>> getChunkUnitigGraphWithConsensuses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<TwobitString>& readSequences, const size_t numThreads)
+{
+	return getChunkUnitigGraphInner(chunksPerRead, true, numThreads, readSequences);
+}
+
+std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUnitigGraph(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	std::vector<TwobitString> fakeSequences;
+	auto result = getChunkUnitigGraphInner(chunksPerRead, false, 1, fakeSequences);
+	return std::make_tuple(std::get<0>(result), std::get<1>(result));
 }
 
 void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths)
@@ -3653,12 +3710,82 @@ void writeReadUnitigSequences(const std::string& filename, const std::vector<std
 	}
 }
 
-void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads, const double approxOneHapCoverage)
+std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPerRead(const std::vector<TwobitString>& rawReadSequences, const size_t numThreads, const size_t k, const size_t windowSize)
+{
+	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
+	result.resize(rawReadSequences.size());
+	std::vector<std::string> readFiles { };
+	MBG::ReadpartIterator partIterator { 31, 1, MBG::ErrorMasking::Microsatellite, 1, readFiles, false, "" };
+	phmap::flat_hash_map<uint64_t, size_t> hashToNode;
+	std::mutex resultMutex;
+	iterateMultithreaded(0, rawReadSequences.size(), numThreads, [&result, &rawReadSequences, &partIterator, &hashToNode, &resultMutex, k, windowSize](const size_t i)
+	{
+		std::string readSequence = rawReadSequences[i].toString();
+		partIterator.iteratePartsOfRead("", readSequence, [&hashToNode, &result, &resultMutex, i, k, windowSize](const MBG::ReadInfo& read, const MBG::SequenceCharType& seq, const MBG::SequenceLengthType& poses, const std::string& raw)
+		{
+			iterateWindowchunks(seq, k, 2, windowSize, [&hashToNode, &result, &resultMutex, &poses, &seq, i, k](const std::vector<uint64_t>& hashPositions)
+			{
+				assert(hashPositions.size() == 2);
+				size_t startPos = hashPositions[0];
+				size_t endPos = hashPositions.back() + k - 1;
+				MBG::SequenceCharType hashableSequence;
+				for (size_t i = 0; i < hashPositions.size()/2; i++)
+				{
+					size_t pos = hashPositions[i];
+					hashableSequence.insert(hashableSequence.end(), seq.begin() + pos, seq.begin() + pos + k);
+				}
+				hashableSequence.emplace_back(10);
+				for (size_t i = hashPositions.size()/2; i < hashPositions.size(); i++)
+				{
+					size_t pos = hashPositions[i];
+					MBG::SequenceCharType insertSubstr { seq.begin() + pos, seq.begin() + pos + k };
+					//insertSubstr = MBG::revCompRLE(insertSubstr);
+					hashableSequence.insert(hashableSequence.end(), insertSubstr.begin(), insertSubstr.end());
+				}
+				size_t realStartPos = poses[startPos];
+				size_t realEndPos = poses[endPos+1]-1;
+				MBG::HashType totalhashfw = MBG::hash(hashableSequence);
+				MBG::HashType totalhashbw = (totalhashfw << (MBG::HashType)64) + (totalhashfw >> (MBG::HashType)64);
+				if (totalhashfw == totalhashbw) return;
+				uint64_t hash;
+				bool fw;
+				if (totalhashfw < totalhashbw)
+				{
+					hash = totalhashfw + 3*(totalhashfw >> 64);
+					fw = true;
+				}
+				else
+				{
+					hash = totalhashbw + 3*(totalhashbw >> 64);
+					fw = false;
+				}
+				{
+					std::lock_guard<std::mutex> lock { resultMutex };
+					size_t node;
+					if (hashToNode.count(hash) == 0)
+					{
+						node = hashToNode.size();
+						hashToNode[hash] = node;
+					}
+					else
+					{
+						node = hashToNode.at(hash);
+					}
+					result[i].emplace_back(realStartPos, realEndPos, node + (fw ? firstBitUint64_t : 0));
+				}
+			});
+		});
+	});
+	return result;
+}
+
+void makeGraph(const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads, const double approxOneHapCoverage, const size_t k, const size_t windowSize)
 {
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	std::vector<bool> useTheseChunks;
-	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
-	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
+//	std::vector<bool> useTheseChunks;
+//	useTheseChunks.resize(matchIndex.numWindowChunks() - matchIndex.numUniqueChunks(), true);
+//	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getChunksPerRead(matchIndex, rawReadLengths, useTheseChunks);
+	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getBetterChunksPerRead(readSequences, numThreads, k, windowSize);
 //	writeGraph("fakegraph1.gfa", "fakepaths1.txt", chunksPerRead);
 	removeContainingChunks(chunksPerRead);
 	writeGraph("fakegraph2.gfa", "fakepaths2.txt", chunksPerRead);
@@ -3760,28 +3887,37 @@ int main(int argc, char** argv)
 	{
 		readFiles.emplace_back(argv[i]);
 	}
-	MatchIndex matchIndex { k, numWindows, windowSize };
-	ReadStorage storage;
 	std::vector<TwobitString> readSequences;
+	std::vector<size_t> readBasepairLengths;
+	std::vector<std::string> readNames;
+	for (auto file : readFiles)
+	{
+		FastQ::streamFastqFromFile(file, false, [&readNames, &readSequences, &readBasepairLengths](FastQ& read)
+		{
+			readNames.emplace_back(read.seq_id);
+			readBasepairLengths.emplace_back(read.sequence.size());
+			readSequences.emplace_back(read.sequence);
+		});
+	}
+/*	MatchIndex matchIndex { k, numWindows, windowSize };
+	ReadStorage storage;
 	for (auto file : readFiles)
 	{
 		std::mutex indexMutex;
 		std::mutex sequenceMutex;
 		storage.iterateReadsFromFile(file, numThreads, false, [&matchIndex, &indexMutex, &sequenceMutex, &readSequences](size_t readName, const std::string& sequence)
 		{
-			matchIndex.addMatchesFromRead(readName, indexMutex, sequence);
+//			matchIndex.addMatchesFromRead(readName, indexMutex, sequence);
 			{
 				std::lock_guard<std::mutex> lock { sequenceMutex };
 				while (readSequences.size() <= readName) readSequences.emplace_back();
 				readSequences[readName] = sequence;
 			}
 		});
-	}
+	}*/
 	std::cerr << readSequences.size() << " reads" << std::endl;
-	std::cerr << matchIndex.numWindowChunks() << " distinct windowchunks" << std::endl;
-	std::cerr << matchIndex.numUniqueChunks() << " windowchunks have only one read" << std::endl;
-	matchIndex.clearConstructionVariablesAndCompact();
-	const std::vector<size_t>& readBasepairLengths = storage.getRawReadLengths();
-	const std::vector<std::string>& readNames = storage.getNames();
-	makeGraph(matchIndex, readNames, readBasepairLengths, readSequences, numThreads, approxOneHapCoverage);
+//	std::cerr << matchIndex.numWindowChunks() << " distinct windowchunks" << std::endl;
+//	std::cerr << matchIndex.numUniqueChunks() << " windowchunks have only one read" << std::endl;
+//	matchIndex.clearConstructionVariablesAndCompact();
+	makeGraph(readNames, readBasepairLengths, readSequences, numThreads, approxOneHapCoverage, k, windowSize);
 }
