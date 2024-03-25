@@ -692,23 +692,9 @@ bool allelesMatchPerfectly(const std::vector<std::vector<size_t>>& left, const s
 	return true;
 }
 
-std::string getAlleleStr(const TwobitString& readSequence, const size_t readStart, const size_t readEnd, const bool fw)
+void countSolidBases(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
-	assert(readEnd > readStart);
-	std::string str = readSequence.substr(readStart, readEnd - readStart);
-	if (!fw) str = MBG::revCompRaw(str);
-	return str;
-}
-
-size_t getAllele(const TwobitString& readSequence, const size_t readStart, const size_t readEnd, const bool fw)
-{
-	return std::hash<std::string>{}(getAlleleStr(readSequence, readStart, readEnd, fw));
-}
-
-void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
-{
-	std::cerr << "splitting by allele phasing" << std::endl;
-	const size_t k = 11;
+	std::cerr << "counting solid bases" << std::endl;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -723,7 +709,237 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, k](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, kmerSize](const size_t i)
+	{
+		phmap::flat_hash_map<size_t, size_t> kmerOccurrenceCounts;
+		phmap::flat_hash_set<size_t> repetitiveKmers;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
+			phmap::flat_hash_map<size_t, size_t> kmersHere;
+			phmap::flat_hash_set<size_t> kmersRepeatingHere;
+			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&occurrencesPerChunk, &kmersHere, &kmersRepeatingHere, j, i](const size_t kmer, const size_t pos)
+			{
+				if (kmersHere.count(kmer) == 0)
+				{
+					kmersHere[kmer] = pos;
+					return;
+				}
+				if (kmersHere.at(kmer) + 100 < pos)
+				{
+					kmersHere[kmer] = pos;
+					return;
+				}
+				else
+				{
+					kmersRepeatingHere.insert(kmer);
+				}
+			});
+			for (auto pair : kmersHere)
+			{
+				if (kmersRepeatingHere.count(pair.first) == 1)
+				{
+					repetitiveKmers.insert(pair.first);
+					continue;
+				}
+				else
+				{
+					if (repetitiveKmers.count(pair.first) == 1) continue;
+					kmerOccurrenceCounts[pair.first] += 1;
+				}
+			}
+		}
+		phmap::flat_hash_set<size_t> kmersEverywhere;
+		for (auto pair : kmerOccurrenceCounts)
+		{
+			if (pair.second < 5) continue;
+			if (repetitiveKmers.count(pair.first) == 1) continue;
+			kmersEverywhere.insert(pair.first);
+		}
+		phmap::flat_hash_map<size_t, std::vector<std::pair<double, size_t>>> kmerPositionsInChunks;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
+			phmap::flat_hash_map<size_t, size_t> kmersHere;
+			phmap::flat_hash_set<size_t> kmersRepeatingHere;
+			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&occurrencesPerChunk, &kmersEverywhere, &kmerPositionsInChunks, t, j, i](const size_t kmer, const size_t pos)
+			{
+				if (kmersEverywhere.count(kmer) == 0) return;
+				kmerPositionsInChunks[kmer].emplace_back(100.0 * (double)(pos) / (double)(std::get<1>(t) - std::get<0>(t)), j);
+			});
+		}
+		phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> validClusters;
+		size_t numClusters = 0;
+		for (auto& pair : kmerPositionsInChunks)
+		{
+			phmap::flat_hash_set<size_t> occurrencesHere;
+			size_t clusterStart = 0;
+			bool currentlyValid = true;
+			std::sort(pair.second.begin(), pair.second.end());
+			occurrencesHere.insert(pair.second[0].second);
+			for (size_t j = 1; j <= pair.second.size(); j++)
+			{
+				if (j == pair.second.size() || pair.second[j].first > pair.second[j-1].first + 1.0)
+				{
+//					std::cerr << "check a count " << occurrencesHere.size() << std::endl;
+					if (currentlyValid)
+					{
+//						std::cerr << "check b" << std::endl;
+						if (occurrencesHere.size() >= 5)
+						{
+							assert(j == clusterStart + occurrencesHere.size());
+							double minPos = pair.second[clusterStart].first;
+							double maxPos = pair.second[j-1].first;
+//							std::cerr << "check c" << std::endl;
+							if (minPos + 1.0 > maxPos)
+							{
+								validClusters[pair.first].emplace_back(minPos-0.01, maxPos+0.01);
+								numClusters += 1;
+							}
+						}
+					}
+					clusterStart = j;
+					currentlyValid = true;
+					occurrencesHere.clear();
+				}
+				if (j < pair.second.size())
+				{
+//					std::cerr << "has " << pair.second[j].second << " (vs " << occurrencesPerChunk[i].size() << ")" << std::endl;
+					if (occurrencesHere.count(pair.second[j].second) == 1) currentlyValid = false;
+					occurrencesHere.insert(pair.second[j].second);
+				}
+			}
+		}
+		size_t totalSolidBases = 0;
+		size_t totalNonsolidBases = 0;
+		size_t countRepetitive = 0;
+		size_t countOthers = 0;
+		size_t countSolidKmers = 0;
+		size_t countNoClusters = 0;
+		size_t countClusterNotFound = 0;
+		size_t totalKmers = 0;
+		size_t countAmbiguousCluster = 0;
+		std::vector<double> solidFractions;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			size_t solidsHere = 0;
+			size_t nonsolidsHere = 0;
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert((std::get<2>(t) & maskUint64_t) == i);
+			assert(!NonexistantChunk(std::get<2>(t)));
+			std::vector<bool> solidKmerHere;
+			solidKmerHere.resize(std::get<1>(t) - std::get<0>(t), false);
+			phmap::flat_hash_map<size_t, size_t> kmersHere;
+			phmap::flat_hash_set<size_t> kmersRepeatingHere;
+			size_t lastKmer = std::numeric_limits<size_t>::max();
+			size_t lastCluster = std::numeric_limits<size_t>::max();
+			size_t lastKmerPos = std::numeric_limits<size_t>::max();
+			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&kmersEverywhere, &solidKmerHere, &lastKmer, &lastCluster, &lastKmerPos, &validClusters, &occurrencesPerChunk, &readSequences, &repetitiveKmers, &countRepetitive, &countOthers, &countSolidKmers, &countNoClusters, &countClusterNotFound, &totalKmers, &countAmbiguousCluster, kmerSize, t, j, i](const size_t kmer, const size_t pos)
+			{
+				totalKmers += 1;
+				if (repetitiveKmers.count(kmer) == 1)
+				{
+					countRepetitive += 1;
+					return;
+				}
+				if (kmersEverywhere.count(kmer) == 0)
+				{
+					countOthers += 1;
+					return;
+				}
+				double extrapolatedPos = 100.0 * (double)(pos) / (double)(std::get<1>(t) - std::get<0>(t));
+				if (validClusters.count(kmer) == 0)
+				{
+					countNoClusters += 1;
+					return;
+				}
+				size_t clusterIndex = std::numeric_limits<size_t>::max();
+				for (size_t cluster = 0; cluster < validClusters.at(kmer).size(); cluster++)
+				{
+					if (validClusters.at(kmer)[cluster].first > extrapolatedPos) continue;
+					if (validClusters.at(kmer)[cluster].second < extrapolatedPos) continue;
+					if (clusterIndex != std::numeric_limits<size_t>::max())
+					{
+						countAmbiguousCluster += 1;
+						return;
+					}
+					clusterIndex = cluster;
+				}
+				if (clusterIndex == std::numeric_limits<size_t>::max())
+				{
+					countClusterNotFound += 1;
+					return;
+				}
+				assert(pos < solidKmerHere.size());
+				solidKmerHere[pos] = true;
+				countSolidKmers += 1;
+			});
+			nonsolidsHere += kmerSize-1;
+			for (size_t m = kmerSize; m < solidKmerHere.size(); m++)
+			{
+				bool solid = true;
+				for (size_t n = 0; n < kmerSize; n++)
+				{
+					if (!solidKmerHere[m-n])
+					{
+						solid = false;
+						break;
+					}
+				}
+				if (solid)
+				{
+					solidsHere += 1;
+				}
+				else
+				{
+					nonsolidsHere += 1;
+				}
+			}
+			totalSolidBases += solidsHere;
+			totalNonsolidBases += nonsolidsHere;
+			solidFractions.emplace_back((double)solidsHere / (double)(solidsHere + nonsolidsHere));
+		}
+		std::sort(solidFractions.begin(), solidFractions.end());
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			std::cerr << "chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " total solid bases " << totalSolidBases << " nonsolids " << totalNonsolidBases << " median fraction " << solidFractions[solidFractions.size()/2] << " min " << solidFractions[0] << " max " << solidFractions.back() << " repetitive " << (double)countRepetitive / (double)totalKmers << " other " << (double)countOthers / (double)totalKmers << " solid kmers " << (double)countSolidKmers / (double)totalKmers << " no cluster " << (double)countNoClusters/(double)totalKmers << " cluster not found " << (double)countClusterNotFound/(double)totalKmers << " ambiguous cluster " << (double)countAmbiguousCluster/(double)totalKmers << std::endl;
+		}
+	});
+}
+
+std::string getAlleleStr(const TwobitString& readSequence, const size_t readStart, const size_t readEnd, const bool fw)
+{
+	assert(readEnd > readStart);
+	std::string str = readSequence.substr(readStart, readEnd - readStart);
+	if (!fw) str = MBG::revCompRaw(str);
+	return str;
+}
+
+size_t getAllele(const TwobitString& readSequence, const size_t readStart, const size_t readEnd, const bool fw)
+{
+	return std::hash<std::string>{}(getAlleleStr(readSequence, readStart, readEnd, fw));
+}
+
+void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+{
+	std::cerr << "splitting by allele phasing" << std::endl;
+	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
+			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
+			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
+		}
+	}
+	size_t nextNum = 0;
+	size_t countSplitted = 0;
+	std::mutex resultMutex;
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, kmerSize](const size_t i)
 	{
 		phmap::flat_hash_set<size_t> kmersEverywhere;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
@@ -732,14 +948,14 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 			assert(!NonexistantChunk(std::get<2>(t)));
 			phmap::flat_hash_map<size_t, size_t> kmersHere;
 			phmap::flat_hash_set<size_t> kmersRepeatingHere;
-			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&occurrencesPerChunk, &kmersHere, &kmersRepeatingHere, j, i](const size_t kmer, const size_t pos)
+			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&occurrencesPerChunk, &kmersHere, &kmersRepeatingHere, j, i](const size_t kmer, const size_t pos)
 			{
 				if (kmersHere.count(kmer) == 0)
 				{
 					kmersHere[kmer] = pos;
 					return;
 				}
-				if (kmersHere.at(kmer) + 100 > pos)
+				if (kmersHere.at(kmer) + 100 < pos)
 				{
 					kmersHere[kmer] = pos;
 					return;
@@ -775,13 +991,12 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 			assert(!NonexistantChunk(std::get<2>(t)));
 			phmap::flat_hash_map<size_t, size_t> kmersHere;
 			phmap::flat_hash_set<size_t> kmersRepeatingHere;
-			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&occurrencesPerChunk, &kmersEverywhere, &kmerPositionsInChunks, t, j, i](const size_t kmer, const size_t pos)
+			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&occurrencesPerChunk, &kmersEverywhere, &kmerPositionsInChunks, t, j, i](const size_t kmer, const size_t pos)
 			{
 				if (kmersEverywhere.count(kmer) == 0) return;
-				kmerPositionsInChunks[kmer].emplace_back((double)(pos) / (double)(std::get<1>(t) - std::get<0>(t)), j);
+				kmerPositionsInChunks[kmer].emplace_back(100.0 * (double)(pos) / (double)(std::get<1>(t) - std::get<0>(t)), j);
 			});
 		}
-//		std::cerr << "chunk " << i << " has " << kmerPositionsInChunks.size() << " potential kmers" << std::endl;
 		phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> validClusters;
 		size_t numClusters = 0;
 		for (auto& pair : kmerPositionsInChunks)
@@ -802,7 +1017,7 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 						if (occurrencesHere.size() == occurrencesPerChunk[i].size())
 						{
 							assert(j == clusterStart + occurrencesPerChunk[i].size());
-							double minPos = pair.second[j-clusterStart].first;
+							double minPos = pair.second[clusterStart].first;
 							double maxPos = pair.second[j-1].first;
 //							std::cerr << "check c" << std::endl;
 							if (minPos + 1.0 > maxPos)
@@ -824,7 +1039,6 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 				}
 			}
 		}
-//		std::cerr << "chunk " << i << " has " << numClusters << " clusters" << std::endl;
 		std::vector<std::tuple<size_t, size_t, size_t, size_t, size_t, size_t>> alleles; // startkmer, startcluster, endkmer, endcluster, occurrenceID, allele
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
@@ -836,10 +1050,10 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 			size_t lastKmer = std::numeric_limits<size_t>::max();
 			size_t lastCluster = std::numeric_limits<size_t>::max();
 			size_t lastKmerPos = std::numeric_limits<size_t>::max();
-			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersEverywhere, &lastKmer, &lastCluster, &lastKmerPos, &alleles, &validClusters, &occurrencesPerChunk, &readSequences, k, t, j, i](const size_t kmer, const size_t pos)
+			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&kmersEverywhere, &lastKmer, &lastCluster, &lastKmerPos, &alleles, &validClusters, &occurrencesPerChunk, &readSequences, kmerSize, t, j, i](const size_t kmer, const size_t pos)
 			{
 				if (kmersEverywhere.count(kmer) == 0) return;
-				double extrapolatedPos = (double)(pos) / (double)(std::get<1>(t) - std::get<0>(t));
+				double extrapolatedPos = 100.0 * (double)(pos) / (double)(std::get<1>(t) - std::get<0>(t));
 				if (validClusters.count(kmer) == 0) return;
 				size_t clusterIndex = std::numeric_limits<size_t>::max();
 				for (size_t cluster = 0; cluster < validClusters.at(kmer).size(); cluster++)
@@ -857,15 +1071,15 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 					lastKmerPos = pos;
 					return;
 				}
-				//size_t allele = getAllele(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t) + lastKmerPos, std::get<0>(t) + pos + k, std::get<2>(t) & firstBitUint64_t);
+				//size_t allele = getAllele(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t) + lastKmerPos, std::get<0>(t) + pos + kmerSize, std::get<2>(t) & firstBitUint64_t);
 				size_t allele;
 				if (std::get<2>(t) & firstBitUint64_t)
 				{
-					allele = getAllele(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t) + lastKmerPos, std::get<0>(t) + pos + k, std::get<2>(t) & firstBitUint64_t);
+					allele = getAllele(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t) + lastKmerPos, std::get<0>(t) + pos + kmerSize, std::get<2>(t) & firstBitUint64_t);
 				}
 				else
 				{
-					allele = getAllele(readSequences[occurrencesPerChunk[i][j].first], std::get<1>(t) - (pos + k)+1, std::get<1>(t) - lastKmerPos+1, std::get<2>(t) & firstBitUint64_t);
+					allele = getAllele(readSequences[occurrencesPerChunk[i][j].first], std::get<1>(t) - (pos + kmerSize)+1, std::get<1>(t) - lastKmerPos+1, std::get<2>(t) & firstBitUint64_t);
 				}
 //				std::cerr << "read " << occurrencesPerChunk[i][j].first << " allele from " << lastKmerPos << " to " << pos << " key " << lastKmer << "," << lastCluster << "," << kmer << "," << clusterIndex << " " << ((std::get<2>(t)) ? "fw" : "bw") << " is " << allele << std::endl;
 				alleles.emplace_back(lastKmer, lastCluster, kmer, clusterIndex, j, allele);
@@ -874,11 +1088,19 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 				lastKmerPos = pos;
 			});
 		}
-//		std::cerr << "chunk " << i << " has " << alleles.size() << " alleles" << std::endl;
 		std::sort(alleles.begin(), alleles.end());
 		std::vector<std::vector<std::vector<size_t>>> occurrencesPerAlleleSite;
 		occurrencesPerAlleleSite = getAlleleOccurrences(alleles, occurrencesPerChunk[i].size());
-//		std::cerr << "chunk " << i << " has " << occurrencesPerAlleleSite.size() << " allele occurrences" << std::endl;
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			auto t = chunksPerRead[occurrencesPerChunk[i][0].first][occurrencesPerChunk[i][0].second];
+			std::cerr << "chunk " << i << " has approx length " << std::get<1>(t) - std::get<0>(t) << std::endl;
+			std::cerr << "chunk " << i << " has coverage " << occurrencesPerChunk[i].size() << std::endl;
+			std::cerr << "chunk " << i << " has " << kmerPositionsInChunks.size() << " potential kmers" << std::endl;
+			std::cerr << "chunk " << i << " has " << numClusters << " clusters" << std::endl;
+			std::cerr << "chunk " << i << " has " << alleles.size() << " alleles" << std::endl;
+			std::cerr << "chunk " << i << " has " << occurrencesPerAlleleSite.size() << " allele occurrences" << std::endl;
+		}
 		std::vector<bool> informativeOccurrence;
 		informativeOccurrence.resize(occurrencesPerAlleleSite.size(), false);
 		for (size_t j = 1; j < occurrencesPerAlleleSite.size(); j++)
@@ -3467,7 +3689,9 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 	writeReadChunkSequences("sequences-chunk5.txt", chunksPerRead, readSequences, readNames);
 	writeReadUnitigSequences("sequences-graph5.txt", chunksPerRead, readSequences, readNames);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, numThreads);
+	countSolidBases(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 //	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
@@ -3479,9 +3703,11 @@ void makeGraph(const MatchIndex& matchIndex, const std::vector<std::string>& rea
 //	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 //	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 //	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
-	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+	countSolidBases(readSequences, chunksPerRead, 31, numThreads);
+	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 31, numThreads);
 //	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeGraph("fakegraph7.gfa", "fakepaths7.txt", chunksPerRead);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeReadChunkSequences("sequences-chunk7.txt", chunksPerRead, readSequences, readNames);
 	writeReadUnitigSequences("sequences-graph7.txt", chunksPerRead, readSequences, readNames);
 	writeUnitigGraph("graph-round7.gfa", "paths7.gaf", chunksPerRead, readNames, rawReadLengths);
