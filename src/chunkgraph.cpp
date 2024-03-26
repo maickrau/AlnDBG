@@ -1091,7 +1091,7 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 		std::sort(alleles.begin(), alleles.end());
 		std::vector<std::vector<std::vector<size_t>>> occurrencesPerAlleleSite;
 		occurrencesPerAlleleSite = getAlleleOccurrences(alleles, occurrencesPerChunk[i].size());
-		{
+/*		{
 			std::lock_guard<std::mutex> lock { resultMutex };
 			auto t = chunksPerRead[occurrencesPerChunk[i][0].first][occurrencesPerChunk[i][0].second];
 			std::cerr << "chunk " << i << " has approx length " << std::get<1>(t) - std::get<0>(t) << std::endl;
@@ -1100,7 +1100,7 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 			std::cerr << "chunk " << i << " has " << numClusters << " clusters" << std::endl;
 			std::cerr << "chunk " << i << " has " << alleles.size() << " alleles" << std::endl;
 			std::cerr << "chunk " << i << " has " << occurrencesPerAlleleSite.size() << " allele occurrences" << std::endl;
-		}
+		}*/
 		std::vector<bool> informativeOccurrence;
 		informativeOccurrence.resize(occurrencesPerAlleleSite.size(), false);
 		for (size_t j = 1; j < occurrencesPerAlleleSite.size(); j++)
@@ -1161,7 +1161,7 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 			}
 			last = nextNum;
 			nextNum += 1;
-			std::cerr << "chunk " << i << " split to range " << first << " - " << last << std::endl;
+//			std::cerr << "chunk " << i << " split to range " << first << " - " << last << std::endl;
 		}
 	});
 	std::cerr << "allele phasing splitted " << countSplitted << " chunks" << std::endl;
@@ -3993,16 +3993,16 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 //	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph5.gfa", "fakepaths5.txt", chunksPerRead);
-	writeReadChunkSequences("sequences-chunk5.txt", chunksPerRead, readSequences, readNames);
-	writeReadUnitigSequences("sequences-graph5.txt", chunksPerRead, readSequences, readNames);
+//	writeReadChunkSequences("sequences-chunk5.txt", chunksPerRead, readSequences, readNames);
+//	writeReadUnitigSequences("sequences-graph5.txt", chunksPerRead, readSequences, readNames);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	countSolidBases(readSequences, chunksPerRead, 11, numThreads);
+//	countSolidBases(readSequences, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 //	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
-	writeReadChunkSequences("sequences-chunk6.txt", chunksPerRead, readSequences, readNames);
+//	writeReadChunkSequences("sequences-chunk6.txt", chunksPerRead, readSequences, readNames);
 	writeGraph("fakegraph6.gfa", "fakepaths6.txt", chunksPerRead);
 	writeUnitigGraph("graph-round6.gfa", "paths6.gaf", chunksPerRead, readNames, rawReadLengths);
 //	splitPerAllUniqueKmerSVs(readSequences, chunksPerRead, numThreads);
@@ -4010,13 +4010,13 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 //	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 //	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 //	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
-	countSolidBases(readSequences, chunksPerRead, 31, numThreads);
+//	countSolidBases(readSequences, chunksPerRead, 31, numThreads);
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 31, numThreads);
 //	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, numThreads);
 	writeGraph("fakegraph7.gfa", "fakepaths7.txt", chunksPerRead);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
-	writeReadChunkSequences("sequences-chunk7.txt", chunksPerRead, readSequences, readNames);
-	writeReadUnitigSequences("sequences-graph7.txt", chunksPerRead, readSequences, readNames);
+//	writeReadChunkSequences("sequences-chunk7.txt", chunksPerRead, readSequences, readNames);
+//	writeReadUnitigSequences("sequences-graph7.txt", chunksPerRead, readSequences, readNames);
 	writeUnitigGraph("graph-round7.gfa", "paths7.gaf", chunksPerRead, readNames, rawReadLengths);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
