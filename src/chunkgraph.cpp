@@ -510,50 +510,29 @@ void iterateKmers(const TwobitString& baseSequence, const size_t start, const si
 	}
 }
 
-void checkPhasablePair(const std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>& bwForks, const std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>& fwForks, const size_t bwKmer, const size_t bwCluster, const size_t fwKmer, const size_t fwCluster, std::vector<std::vector<size_t>>& phaseIdentities)
+void checkPhasablePair(const phmap::flat_hash_map<size_t, size_t>& bwForks, const phmap::flat_hash_map<size_t, size_t>& fwForks, std::vector<std::vector<size_t>>& phaseIdentities)
 {
-	assert(bwForks.size() == fwForks.size());
 	std::vector<std::pair<size_t, size_t>> pairs;
 	phmap::flat_hash_set<size_t> foundOccurrences;
 	phmap::flat_hash_set<size_t> foundBw;
 	phmap::flat_hash_set<size_t> foundFw;
-	for (size_t i = 0; i < bwForks.size(); i++)
+	for (auto bwfork : bwForks)
 	{
-		size_t bw = std::numeric_limits<size_t>::max();
-		size_t fw = std::numeric_limits<size_t>::max();
-		for (auto t : bwForks[i])
-		{
-			if (std::get<0>(t) != bwKmer) continue;
-			if (std::get<1>(t) != bwCluster) continue;
-			assert(bw == std::numeric_limits<size_t>::max());
-			bw = std::get<2>(t);
-		}
-		for (auto t : fwForks[i])
-		{
-			if (std::get<0>(t) != fwKmer) continue;
-			if (std::get<1>(t) != fwCluster) continue;
-			assert(fw == std::numeric_limits<size_t>::max());
-			fw = std::get<2>(t);
-		}
-		if (bw != std::numeric_limits<size_t>::max() || fw != std::numeric_limits<size_t>::max())
-		{
-			foundOccurrences.insert(i);
-		}
-		if (bw != std::numeric_limits<size_t>::max())
-		{
-			foundBw.insert(bw);
-		}
-		if (fw != std::numeric_limits<size_t>::max())
-		{
-			foundFw.insert(fw);
-		}
-		if (bw == std::numeric_limits<size_t>::max()) continue;
-		if (fw == std::numeric_limits<size_t>::max()) continue;
+		foundBw.insert(bwfork.second);
+		foundOccurrences.insert(bwfork.first);
+		if (fwForks.count(bwfork.first) == 0) continue;
+		size_t bw = bwfork.second;
+		size_t fw = fwForks.at(bwfork.first);
 		pairs.emplace_back(bw, fw);
 	}
+	for (auto fwfork : fwForks)
+	{
+		foundFw.insert(fwfork.second);
+		foundOccurrences.insert(fwfork.first);
+	}
 	if (foundFw.size() != foundBw.size()) return;
-	if (foundOccurrences.size() < bwForks.size()) return;
-	if (pairs.size() < bwForks.size() * 0.95) return;
+	if (foundOccurrences.size() < phaseIdentities.size()) return;
+	if (pairs.size() < phaseIdentities.size() * 0.95) return;
 	std::sort(pairs.begin(), pairs.end());
 	phmap::flat_hash_map<size_t, size_t> parent;
 	for (auto pair : pairs)
@@ -562,8 +541,6 @@ void checkPhasablePair(const std::vector<std::vector<std::tuple<size_t, size_t, 
 		assert((pair.second & firstBitUint64_t) == 0);
 		if (parent.count(pair.first) == 0) parent[pair.first] = pair.first;
 		if (parent.count(pair.second + firstBitUint64_t) == 0) parent[pair.second + firstBitUint64_t] = pair.second + firstBitUint64_t;
-		foundBw.insert(pair.first);
-		foundFw.insert(pair.second);
 		merge(parent, pair.first, pair.second + firstBitUint64_t);
 	}
 	phmap::flat_hash_map<size_t, size_t> clusterCount;
@@ -587,39 +564,23 @@ void checkPhasablePair(const std::vector<std::vector<std::tuple<size_t, size_t, 
 	{
 		if (pair.second < 5) return;
 	}
-	for (size_t i = 0; i < bwForks.size(); i++)
+	size_t inserted = 0;
+	for (auto bwfork : bwForks)
 	{
-		size_t bw = std::numeric_limits<size_t>::max();
-		size_t fw = std::numeric_limits<size_t>::max();
-		for (auto t : bwForks[i])
+		if (fwForks.count(bwfork.first) == 1)
 		{
-			if (std::get<0>(t) != bwKmer) continue;
-			if (std::get<1>(t) != bwCluster) continue;
-			assert(bw == std::numeric_limits<size_t>::max());
-			bw = std::get<2>(t);
+			assert(find(parent, bwfork.second) == find(parent, fwForks.at(bwfork.first) + firstBitUint64_t));
 		}
-		for (auto t : fwForks[i])
-		{
-			if (std::get<0>(t) != fwKmer) continue;
-			if (std::get<1>(t) != fwCluster) continue;
-			assert(fw == std::numeric_limits<size_t>::max());
-			fw = std::get<2>(t);
-		}
-		assert(bw != std::numeric_limits<size_t>::max() || fw != std::numeric_limits<size_t>::max());
-		if (bw != std::numeric_limits<size_t>::max())
-		{
-			phaseIdentities[i].emplace_back(find(parent, bw));
-			if (fw != std::numeric_limits<size_t>::max())
-			{
-				assert(find(parent, bw) == find(parent, fw + firstBitUint64_t));
-			}
-		}
-		else
-		{
-			assert(fw != std::numeric_limits<size_t>::max());
-			phaseIdentities[i].emplace_back(find(parent, fw + firstBitUint64_t));
-		}
+		phaseIdentities[bwfork.first].emplace_back(find(parent, bwfork.second));
+		inserted += 1;
 	}
+	for (auto fwfork : fwForks)
+	{
+		if (bwForks.count(fwfork.first) == 1) continue;
+		phaseIdentities[fwfork.first].emplace_back(find(parent, fwfork.second + firstBitUint64_t));
+		inserted += 1;
+	}
+	assert(inserted == phaseIdentities.size());
 }
 
 std::vector<std::vector<std::vector<size_t>>> getAlleleOccurrences(const std::vector<std::tuple<size_t, size_t, size_t, size_t, size_t, size_t>>& alleles, const size_t numOccurrences)
@@ -1325,10 +1286,8 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 				}
 			}
 		}
-		std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> fwForks; // hom kmer, hom cluster, het kmer
-		std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> bwForks; // hom kmer, hom cluster, het kmer
-		fwForks.resize(occurrencesPerChunk[i].size());
-		bwForks.resize(occurrencesPerChunk[i].size());
+		phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<size_t, size_t>> fwForks; // (hom kmer, hom cluster) -> (occurrence ID -> het kmer)
+		phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<size_t, size_t>> bwForks; // (hom kmer, hom cluster) -> (occurrence ID -> het kmer)
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
@@ -1354,7 +1313,8 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 						}
 						if (clusterIndex < std::numeric_limits<size_t>::max()-1)
 						{
-							fwForks[j].emplace_back(lastKmer, clusterIndex, kmer);
+							assert(fwForks[std::make_pair(lastKmer, clusterIndex)].count(j) == 0);
+							fwForks[std::make_pair(lastKmer, clusterIndex)][j] = kmer;
 						}
 					}
 				}
@@ -1377,28 +1337,24 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 						}
 						if (clusterIndex < std::numeric_limits<size_t>::max()-1)
 						{
-							bwForks[j].emplace_back(kmer, clusterIndex, lastKmer);
+							assert(bwForks[std::make_pair(kmer, clusterIndex)].count(j) == 0);
+							bwForks[std::make_pair(kmer, clusterIndex)][j] = lastKmer;
 						}
 					}
 				}
 				lastKmer = kmer;
 			});
 		}
-		phmap::flat_hash_set<std::tuple<size_t, size_t, size_t, size_t>> checkedPairs;
+		size_t checkedPairs = 0;
 		std::vector<std::vector<size_t>> phaseIdentities;
 		phaseIdentities.resize(occurrencesPerChunk[i].size());
-		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		for (const auto& bwFork : bwForks)
 		{
-			for (size_t m = 0; m < fwForks[j].size(); m++)
+			for (const auto& fwFork : fwForks)
 			{
-				for (size_t n = 0; n < bwForks[j].size(); n++)
-				{
-					if (validClusters.at(std::get<0>(bwForks[j][n]))[std::get<1>(bwForks[j][n])].first < validClusters.at(std::get<0>(fwForks[j][m]))[std::get<1>(fwForks[j][m])].second) continue;
-					std::tuple<size_t, size_t, size_t, size_t> key { std::get<0>(bwForks[j][n]), std::get<1>(bwForks[j][n]), std::get<0>(fwForks[j][m]), std::get<1>(fwForks[j][m]) };
-					if (checkedPairs.count(key) == 1) continue;
-					checkPhasablePair(bwForks, fwForks, std::get<0>(key), std::get<1>(key), std::get<2>(key), std::get<3>(key), phaseIdentities);
-					checkedPairs.insert(key);
-				}
+				if (validClusters.at(bwFork.first.first)[bwFork.first.second].second < validClusters.at(fwFork.first.first)[fwFork.first.second].first) continue;
+				checkedPairs += 1;
+				checkPhasablePair(bwFork.second, fwFork.second, phaseIdentities);
 			}
 		}
 		std::vector<size_t> parent;
@@ -1427,7 +1383,7 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 			}
 			size_t last = nextNum-1;
 			if (keyToNode.size() >= 2) countSplitted += 1;
-			std::cerr << "phasable kmer splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs.size() << " to " << keyToNode.size() << " chunks range " << first << " - " << last << std::endl;
+			std::cerr << "phasable kmer splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs << " to " << keyToNode.size() << " chunks range " << first << " - " << last << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
 				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
@@ -2637,14 +2593,16 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
 			phmap::flat_hash_map<size_t, size_t> clusterToNode;
+			size_t first = nextNum;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
 				if (clusterToNode.count(find(parent, j)) == 1) continue;
 				clusterToNode[find(parent, j)] = nextNum;
 				nextNum += 1;
 			}
+			size_t last = nextNum-1;
 			if (clusterToNode.size() >= 2) countSplitted += 1;
-//			std::cerr << "interchunk phasing kmers splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << clusterToNode.size() << " chunks" << std::endl;
+			std::cerr << "interchunk phasing kmers splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << clusterToNode.size() << " chunks range " << first << " - " << last << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
 				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = clusterToNode.at(find(parent, j)) + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
@@ -4149,6 +4107,7 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 //	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 //	countSolidBases(readSequences, chunksPerRead, 31, numThreads);
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 31, numThreads);
+	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 11, numThreads);
 //	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 11, numThreads);
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeGraph("fakegraph7.gfa", "fakepaths7.txt", chunksPerRead);
@@ -4160,17 +4119,21 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 //	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 //	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 11, numThreads);
+	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 31, numThreads);
+	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 31, numThreads);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//	writeReadChunkSequences("sequences-chunk8.txt", chunksPerRead, readSequences, readNames);
 	writeGraph("fakegraph8.gfa", "fakepaths8.txt", chunksPerRead);
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, readNames, rawReadLengths);
-	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
-	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
-	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
-//	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+//	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+//	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
+//	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 //	countGoodKmersInChunks(readSequences, chunksPerRead, 1);
 //	countGoodishKmersInChunks(readSequences, chunksPerRead, 1);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	writeGraph("fakegraph9.gfa", "fakepaths9.txt", chunksPerRead);
 	writeUnitigGraph("graph-round9.gfa", "paths9.gaf", chunksPerRead, readNames, rawReadLengths);
 	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -4178,6 +4141,9 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round11.gfa", "paths11.gaf", chunksPerRead, readNames, rawReadLengths);
+	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 11, numThreads);
+	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 11, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
@@ -4191,6 +4157,7 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 	countReadRepetitiveUnitigs(chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
+	writeReadUnitigSequences("sequences-graph13.txt", chunksPerRead, readSequences, readNames);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 }
 
