@@ -512,7 +512,7 @@ void iterateKmers(const TwobitString& baseSequence, const size_t start, const si
 
 void checkPhasablePair(const phmap::flat_hash_map<size_t, size_t>& bwForks, const phmap::flat_hash_map<size_t, size_t>& fwForks, std::vector<std::vector<size_t>>& phaseIdentities)
 {
-	std::vector<std::pair<size_t, size_t>> pairs;
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> pairCoverage;
 	phmap::flat_hash_set<size_t> foundOccurrences;
 	phmap::flat_hash_set<size_t> foundBw;
 	phmap::flat_hash_set<size_t> foundFw;
@@ -523,7 +523,7 @@ void checkPhasablePair(const phmap::flat_hash_map<size_t, size_t>& bwForks, cons
 		if (fwForks.count(bwfork.first) == 0) continue;
 		size_t bw = bwfork.second;
 		size_t fw = fwForks.at(bwfork.first);
-		pairs.emplace_back(bw, fw);
+		pairCoverage[std::make_pair(bw, fw)] += 1;
 	}
 	for (auto fwfork : fwForks)
 	{
@@ -532,26 +532,29 @@ void checkPhasablePair(const phmap::flat_hash_map<size_t, size_t>& bwForks, cons
 	}
 	if (foundFw.size() != foundBw.size()) return;
 	if (foundOccurrences.size() < phaseIdentities.size()) return;
-	if (pairs.size() < phaseIdentities.size() * 0.95) return;
-	std::sort(pairs.begin(), pairs.end());
-	phmap::flat_hash_map<size_t, size_t> parent;
-	for (auto pair : pairs)
+	size_t coverageInPairs = 0;
+	for (auto pair : pairCoverage)
 	{
-		assert((pair.first & firstBitUint64_t) == 0);
-		assert((pair.second & firstBitUint64_t) == 0);
-		if (parent.count(pair.first) == 0) parent[pair.first] = pair.first;
-		if (parent.count(pair.second + firstBitUint64_t) == 0) parent[pair.second + firstBitUint64_t] = pair.second + firstBitUint64_t;
-		merge(parent, pair.first, pair.second + firstBitUint64_t);
+		coverageInPairs += pair.second;
+		if (pair.second < 5) return;
+	}
+	if (coverageInPairs < phaseIdentities.size() * 0.95) return;
+	phmap::flat_hash_map<size_t, size_t> parent;
+	for (auto pair : pairCoverage)
+	{
+		assert((pair.first.first & firstBitUint64_t) == 0);
+		assert((pair.first.second & firstBitUint64_t) == 0);
+		if (parent.count(pair.first.first) == 0) parent[pair.first.first] = pair.first.first;
+		if (parent.count(pair.first.second + firstBitUint64_t) == 0) parent[pair.first.second + firstBitUint64_t] = pair.first.second + firstBitUint64_t;
+		merge(parent, pair.first.first, pair.first.second + firstBitUint64_t);
 	}
 	phmap::flat_hash_map<size_t, size_t> clusterCount;
-	for (auto pair : pairs)
+	for (auto pair : pairCoverage)
 	{
-		auto cluster = find(parent, pair.first);
-		clusterCount[cluster] += 1;
+		auto cluster = find(parent, pair.first.first);
+		clusterCount[cluster] += pair.second;
 	}
 	if (clusterCount.size() < 2) return;
-	if (clusterCount.size() != foundBw.size()) return;
-	if (clusterCount.size() != foundFw.size()) return;
 	for (auto kmer : foundBw)
 	{
 		if (parent.count(kmer) == 0) return;
@@ -559,10 +562,6 @@ void checkPhasablePair(const phmap::flat_hash_map<size_t, size_t>& bwForks, cons
 	for (auto kmer : foundFw)
 	{
 		if (parent.count(kmer + firstBitUint64_t) == 0) return;
-	}
-	for (auto pair : clusterCount)
-	{
-		if (pair.second < 5) return;
 	}
 	size_t inserted = 0;
 	for (auto bwfork : bwForks)
