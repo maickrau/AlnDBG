@@ -4589,6 +4589,7 @@ int main(int argc, char** argv)
 	std::vector<std::string> readNames;
 	for (auto file : readFiles)
 	{
+		std::cerr << "reading from file " << file << std::endl;
 		FastQ::streamFastqFromFile(file, false, [&readNames, &readSequences, &readBasepairLengths](FastQ& read)
 		{
 			readNames.emplace_back(read.seq_id);
