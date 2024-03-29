@@ -1158,6 +1158,7 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 	std::mutex resultMutex;
 	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, &iterationOrder, kmerSize](const size_t iterationIndex)
 	{
+		auto startTime = getTime();
 		const size_t i = iterationOrder[iterationIndex];
 		if (occurrencesPerChunk[i].size() < 10)
 		{
@@ -1309,6 +1310,7 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 				}
 			}
 		}
+		auto endTime = getTime();
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
 			size_t first = nextNum;
@@ -1320,8 +1322,9 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 				keyToNode[key] = nextNum;
 				nextNum += 1;
 			}
+			if (keyToNode.size() >= 2) countSplitted += 1;
 			size_t last = nextNum-1;
-			std::cerr << "nearest neighbor splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " informative " << columnsInInformative << " to " << keyToNode.size() << " chunks range " << first << " - " << last << std::endl;
+			std::cerr << "nearest neighbor splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " informative " << columnsInInformative << " to " << keyToNode.size() << " chunks range " << first << " - " << last << " time " << formatTime(startTime, endTime) << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
 				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
@@ -1484,11 +1487,19 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
 	}
+	std::vector<size_t> iterationOrder;
+	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	{
+		iterationOrder.emplace_back(i);
+	}
+	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, kmerSize](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, &iterationOrder, kmerSize](const size_t iterationIndex)
 	{
+		const size_t i = iterationOrder[iterationIndex];
+		// auto startTime = getTime();
 		if (occurrencesPerChunk[i].size() < 10)
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
@@ -1696,6 +1707,7 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 				merge(parent, k, j);
 			}
 		}
+		// auto endTime = getTime();
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
 			phmap::flat_hash_map<size_t, size_t> keyToNode;
@@ -1709,7 +1721,7 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 			}
 			// size_t last = nextNum-1;
 			if (keyToNode.size() >= 2) countSplitted += 1;
-//			std::cerr << "phasable kmer splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs << " to " << keyToNode.size() << " chunks range " << first << " - " << last << std::endl;
+			// std::cerr << "phasable kmer splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs << " to " << keyToNode.size() << " chunks range " << first << " - " << last << " time " << formatTime(startTime, endTime) << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
 				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
