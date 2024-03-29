@@ -932,9 +932,10 @@ size_t getAllele(const TwobitString& readSequence, const size_t readStart, const
 }
 
 template <typename F>
-void iterateSolidKmers(const std::vector<TwobitString>& readSequences, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::pair<size_t, size_t>>& occurrences, const size_t kmerSize, F callback)
+phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSolidKmers(const std::vector<TwobitString>& readSequences, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::pair<size_t, size_t>>& occurrences, const size_t kmerSize, const size_t minSolidThreshold, F callback)
 {
-	phmap::flat_hash_set<size_t> kmersEverywhere;
+	phmap::flat_hash_map<size_t, size_t> kmerCounts;
+	phmap::flat_hash_set<size_t> kmersRepeating;
 	for (size_t j = 0; j < occurrences.size(); j++)
 	{
 		auto t = chunksPerRead[occurrences[j].first][occurrences[j].second];
@@ -958,24 +959,19 @@ void iterateSolidKmers(const std::vector<TwobitString>& readSequences, const std
 				kmersRepeatingHere.insert(kmer);
 			}
 		});
-		if (j == 0)
+		kmersRepeating.insert(kmersRepeatingHere.begin(), kmersRepeatingHere.end());
+		for (auto pair : kmersHere)
 		{
-			for (auto pair : kmersHere)
-			{
-				if (kmersRepeatingHere.count(pair.first) == 1) continue;
-				kmersEverywhere.insert(pair.first);
-			}
+			if (kmersRepeating.count(pair.first) == 1) continue;
+			kmerCounts[pair.first] += 1;
 		}
-		else
-		{
-			phmap::flat_hash_set<size_t> removeKmers;
-			for (size_t kmer : kmersEverywhere)
-			{
-				if (kmersHere.count(kmer) == 0) removeKmers.insert(kmer);
-				if (kmersRepeatingHere.count(kmer) == 1) removeKmers.insert(kmer);
-			}
-			for (size_t kmer : removeKmers) kmersEverywhere.erase(kmer);
-		}
+	}
+	phmap::flat_hash_set<size_t> kmersEverywhere;
+	for (auto pair : kmerCounts)
+	{
+		if (kmersRepeating.count(pair.first) == 1) continue;
+		if (pair.second < minSolidThreshold) continue;
+		kmersEverywhere.insert(pair.first);
 	}
 	phmap::flat_hash_map<size_t, std::vector<std::pair<double, size_t>>> kmerPositionsInChunks;
 	for (size_t j = 0; j < occurrences.size(); j++)
@@ -1005,9 +1001,8 @@ void iterateSolidKmers(const std::vector<TwobitString>& readSequences, const std
 			{
 				if (currentlyValid)
 				{
-					if (occurrencesHere.size() == occurrences.size())
+					if (occurrencesHere.size() >= minSolidThreshold)
 					{
-						assert(j == clusterStart + occurrences.size());
 						double minPos = pair.second[clusterStart].first;
 						double maxPos = pair.second[j-1].first;
 						if (minPos + 1.0 > maxPos)
@@ -1054,6 +1049,412 @@ void iterateSolidKmers(const std::vector<TwobitString>& readSequences, const std
 			callback(j, std::get<0>(t), std::get<1>(t), std::get<2>(t), kmer, clusterIndex, pos);
 		});
 	}
+	return validClusters;
+}
+
+size_t getHammingdistance(const std::vector<bool>& left, const std::vector<bool>& right)
+{
+	assert(left.size() == right.size());
+	size_t result = 0;
+	for (size_t i = 0; i < left.size(); i++)
+	{
+		if (left[i] != right[i]) result += 1;
+	}
+	return result;
+}
+
+double getBinomialCumulativeProbability(const size_t success, const size_t trials, const double probability)
+{
+	static std::vector<std::vector<size_t>> pascalTriangles { { 1 } };
+	static std::mutex triangleMutex;
+	std::lock_guard<std::mutex> lock { triangleMutex };
+	while (pascalTriangles.size() <= trials)
+	{
+		pascalTriangles.emplace_back();
+	}
+	if (pascalTriangles[trials].size() <= success)
+	{
+		for (size_t i = 0; i <= trials; i++)
+		{
+			for (size_t j = pascalTriangles[i].size(); j <= i && j <= success; j++)
+			{
+				pascalTriangles[i].push_back(0);
+				if (j > 0)
+				{
+					assert(pascalTriangles[i-1].size() >= 1);
+					pascalTriangles[i].back() += pascalTriangles[i-1][j-1];
+				}
+				if (j < i)
+				{
+					assert(pascalTriangles[i-1].size() > j);
+					pascalTriangles[i].back() += pascalTriangles[i-1][j];
+				}
+			}
+		}
+	}
+	assert(pascalTriangles.size() > trials);
+	assert(pascalTriangles[trials].size() > success);
+	double cumulativeProbability = 0;
+	assert(probability > 0);
+	assert(probability < 1);
+	for (size_t i = 0; i <= success; i++)
+	{
+		cumulativeProbability += exp(log(pascalTriangles[trials][i]) + i * log(probability) + (trials-i) * log(1.0 - probability));
+	}
+	return cumulativeProbability;
+}
+/*
+bool siteIsInformative(const std::vector<std::vector<bool>>& matrix, const size_t left, const size_t right)
+{
+	const double requiredPValue = 1.0/1000000.0;
+	size_t zerozero = 0;
+	size_t zeroone = 0;
+	size_t onezero = 0;
+	size_t oneone = 0;
+	for (size_t i = 0; i < matrix.size(); i++)
+	{
+		if (matrix[i][left] && matrix[i][right]) oneone += 1;
+		if (!matrix[i][left] && matrix[i][right]) zeroone += 1;
+		if (!matrix[i][left] && !matrix[i][right]) zerozero += 1;
+		if (matrix[i][left] && !matrix[i][right]) onezero += 1;
+	}
+	if (zerozero + zeroone < 5) return false;
+	if (onezero + oneone < 5) return false;
+	if (zerozero + onezero < 5) return false;
+	if (zeroone + oneone < 5) return false;
+	double leftOneProbability = (double)(onezero+oneone)/(double)(zerozero+zeroone+onezero+oneone);
+	size_t rightZeros = zerozero + onezero;
+	size_t rightOnes = zeroone + oneone;
+	if (onezero > 0 && zerozero > 0)
+	{
+		if ((double)onezero/(double)(zerozero+onezero) < leftOneProbability)
+		{
+			double PValue = getBinomialCumulativeProbability(onezero, zerozero+onezero, leftOneProbability);
+			std::cerr << "P " << PValue << std::endl;
+			assert(PValue <= 1);
+			if (PValue >= requiredPValue) return false;
+			std::cerr << "!!!" << std::endl;
+		}
+		else
+		{
+			double PValue = getBinomialCumulativeProbability((zerozero+onezero)-onezero, zerozero+onezero, 1.0-leftOneProbability);
+			std::cerr << "P " << PValue << std::endl;
+			assert(PValue <= 1);
+			if (PValue >= requiredPValue) return false;
+			std::cerr << "!!!" << std::endl;
+		}
+	}
+	if (oneone > 0 && zeroone > 0)
+	{
+		if ((double)oneone/(double)(zeroone+oneone) < leftOneProbability)
+		{
+			double PValue = getBinomialCumulativeProbability(oneone, zeroone+oneone, leftOneProbability);
+			std::cerr << "P " << PValue << std::endl;
+			assert(PValue <= 1);
+			if (PValue >= requiredPValue) return false;
+			std::cerr << "!!!" << std::endl;
+		}
+		else
+		{
+			double PValue = getBinomialCumulativeProbability((zeroone+oneone)-oneone, zeroone+oneone, 1.0-leftOneProbability);
+			std::cerr << "P " << PValue << std::endl;
+			assert(PValue <= 1);
+			if (PValue >= requiredPValue) return false;
+			std::cerr << "!!!" << std::endl;
+		}
+	}
+	return true;
+}
+*/
+bool siteIsInformative(const std::vector<std::vector<bool>>& matrix, const size_t left, const size_t right)
+{
+	const double requiredPValue = 1.0/1000000.0;
+	size_t zerozero = 0;
+	size_t zeroone = 0;
+	size_t onezero = 0;
+	size_t oneone = 0;
+	for (size_t i = 0; i < matrix.size(); i++)
+	{
+		assert(left < matrix[i].size());
+		assert(right < matrix[i].size());
+		if (matrix[i][left] && matrix[i][right]) oneone += 1;
+		if (!matrix[i][left] && matrix[i][right]) zeroone += 1;
+		if (!matrix[i][left] && !matrix[i][right]) zerozero += 1;
+		if (matrix[i][left] && !matrix[i][right]) onezero += 1;
+	}
+	if (zerozero + zeroone < 5) return false;
+	if (onezero + oneone < 5) return false;
+	if (zerozero + onezero < 5) return false;
+	if (zeroone + oneone < 5) return false;
+	if (zerozero > 0 && zerozero < 5) return false;
+	if (zeroone > 0 && zeroone < 5) return false;
+	if (onezero > 0 && onezero < 5) return false;
+	if (oneone > 0 && oneone < 5) return false;
+	if (zerozero > 0 && zeroone > 0 && onezero > 0 && oneone > 0) return false;
+	return true;
+	double leftOneProbability = (double)(onezero+oneone)/(double)(zerozero+zeroone+onezero+oneone);
+	size_t rightZeros = zerozero + onezero;
+	size_t rightOnes = zeroone + oneone;
+	if (onezero > 0 && zerozero > 0)
+	{
+		if ((double)onezero/(double)(zerozero+onezero) < leftOneProbability)
+		{
+			double PValue = getBinomialCumulativeProbability(onezero, zerozero+onezero, leftOneProbability);
+			std::cerr << "P " << PValue << std::endl;
+			assert(PValue <= 1);
+			if (PValue >= requiredPValue) return false;
+			std::cerr << "!!!" << std::endl;
+		}
+		else
+		{
+			double PValue = getBinomialCumulativeProbability((zerozero+onezero)-onezero, zerozero+onezero, 1.0-leftOneProbability);
+			std::cerr << "P " << PValue << std::endl;
+			assert(PValue <= 1);
+			if (PValue >= requiredPValue) return false;
+			std::cerr << "!!!" << std::endl;
+		}
+	}
+	if (oneone > 0 && zeroone > 0)
+	{
+		if ((double)oneone/(double)(zeroone+oneone) < leftOneProbability)
+		{
+			double PValue = getBinomialCumulativeProbability(oneone, zeroone+oneone, leftOneProbability);
+			std::cerr << "P " << PValue << std::endl;
+			assert(PValue <= 1);
+			if (PValue >= requiredPValue) return false;
+			std::cerr << "!!!" << std::endl;
+		}
+		else
+		{
+			double PValue = getBinomialCumulativeProbability((zeroone+oneone)-oneone, zeroone+oneone, 1.0-leftOneProbability);
+			std::cerr << "P " << PValue << std::endl;
+			assert(PValue <= 1);
+			if (PValue >= requiredPValue) return false;
+			std::cerr << "!!!" << std::endl;
+		}
+	}
+	return true;
+}
+
+void filterMatrix(std::vector<std::vector<bool>>& matrix, const std::vector<bool>& keep)
+{
+	std::vector<size_t> getIndexFrom;
+	for (size_t i = 0; i < keep.size(); i++)
+	{
+		if (!keep[i]) continue;
+		getIndexFrom.emplace_back(i);
+	}
+	assert(getIndexFrom.size() <= keep.size());
+	assert(getIndexFrom.size() == 0 || getIndexFrom.back() < keep.size());
+	for (size_t i = 0; i < matrix.size(); i++)
+	{
+		assert(matrix[i].size() == keep.size());
+		for (size_t k = 0; k < getIndexFrom.size(); k++)
+		{
+			matrix[i][k] = matrix[i][getIndexFrom[k]];
+		}
+		matrix[i].resize(getIndexFrom.size());
+	}
+}
+
+void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+{
+	std::cerr << "splitting by nearest neighbor phasing" << std::endl;
+	const size_t countNeighbors = 5;
+	const size_t countDifferences = 50;
+	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
+			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
+			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
+		}
+	}
+	size_t nextNum = 0;
+	size_t countSplitted = 0;
+	std::mutex resultMutex;
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, kmerSize](const size_t i)
+	{
+		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToColumn;
+		std::vector<std::vector<bool>> matrix;
+		std::vector<std::pair<size_t, size_t>> clusters;
+		matrix.resize(occurrencesPerChunk[i].size());
+		auto validClusters = iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, 5, [&kmerClusterToColumn, &clusters, &matrix](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+		{
+			assert(occurrenceID < matrix.size());
+			size_t column = std::numeric_limits<size_t>::max();
+			if (kmerClusterToColumn.count(std::make_pair(kmer, clusterIndex)) == 1)
+			{
+				column = kmerClusterToColumn.at(std::make_pair(kmer, clusterIndex));
+			}
+			else
+			{
+				column = kmerClusterToColumn.size();
+				kmerClusterToColumn[std::make_pair(kmer, clusterIndex)] = column;
+				clusters.emplace_back(std::make_pair(kmer, clusterIndex));
+			}
+			if (matrix[occurrenceID].size() <= column)
+			{
+				assert(column < kmerClusterToColumn.size());
+				matrix[occurrenceID].resize(kmerClusterToColumn.size(), false);
+			}
+			assert(!matrix[occurrenceID][column]);
+			matrix[occurrenceID][column] = true;
+		});
+		for (size_t j = 0; j < matrix.size(); j++)
+		{
+			if (matrix[j].size() == kmerClusterToColumn.size()) continue;
+			assert(matrix[j].size() < kmerClusterToColumn.size());
+			matrix[j].resize(kmerClusterToColumn.size(), false);
+		}
+		size_t columnsInUnfiltered = matrix[0].size();
+		std::vector<bool> covered;
+		covered.resize(matrix[0].size(), false);
+		size_t columnsInCovered = 0;
+		for (size_t j = 0; j < matrix[0].size(); j++)
+		{
+			size_t zeros = 0;
+			size_t ones = 0;
+			for (size_t k = 0; k < matrix.size(); k++)
+			{
+				assert(matrix[k].size() == matrix[0].size());
+				if (matrix[k][j])
+				{
+					ones += 1;
+				}
+				else
+				{
+					zeros += 1;
+				}
+			}
+			if (zeros >= 5 && ones >= 5)
+			{
+				covered[j] = true;
+				columnsInCovered += 1;
+			}
+		}
+		std::vector<bool> informativeSite;
+		informativeSite.resize(matrix[0].size(), false);
+		assert(clusters.size() == informativeSite.size());
+		assert(clusters.size() == kmerClusterToColumn.size());
+		for (size_t j = 0; j < informativeSite.size(); j++)
+		{
+			if (!covered[j]) continue;
+			for (size_t k = 0; k < j; k++)
+			{
+				if (!covered[k]) continue;
+				assert(validClusters.at(clusters[j].first).size() > clusters[j].second);
+				assert(validClusters.at(clusters[k].first).size() > clusters[k].second);
+				if (validClusters.at(clusters[j].first)[clusters[j].second].first < validClusters.at(clusters[k].first)[clusters[k].second].second + 1)
+				{
+					if (validClusters.at(clusters[j].first)[clusters[j].second].second + 1 > validClusters.at(clusters[k].first)[clusters[k].second].first)
+					{
+						continue;
+					}
+				}
+				assert(j != k);
+				if (informativeSite[j] && informativeSite[k]) continue;
+				if (siteIsInformative(matrix, j, k) || siteIsInformative(matrix, k, j))
+				{
+					std::cerr << "informative " << j << " and " << k << std::endl;
+					informativeSite[j] = true;
+					informativeSite[k] = true;
+				}
+			}
+		}
+		filterMatrix(matrix, informativeSite);
+		size_t columnsInInformative = matrix[0].size();
+		std::vector<std::vector<bool>> correctedMatrix;
+		for (size_t j = 0; j < matrix.size(); j++)
+		{
+			std::vector<size_t> closestNeighbors;
+			std::vector<size_t> closestNeighborMismatches;
+			for (size_t k = 0; k < matrix.size(); k++)
+			{
+				if (j == k) continue;
+				size_t mismatches = getHammingdistance(matrix[k], matrix[j]);
+				assert(closestNeighbors.size() == closestNeighborMismatches.size());
+				if (closestNeighbors.size() == countNeighbors)
+				{
+					assert(closestNeighborMismatches.size() >= 1);
+					if (closestNeighborMismatches.back() > mismatches)
+					{
+						closestNeighborMismatches.pop_back();
+						closestNeighbors.pop_back();
+					}
+				}
+				if (closestNeighbors.size() < countNeighbors)
+				{
+					closestNeighbors.emplace_back(k);
+					closestNeighborMismatches.emplace_back(mismatches);
+					assert(closestNeighbors.size() == closestNeighborMismatches.size());
+					assert(closestNeighbors.size() >= 1);
+					if (closestNeighbors.size() >= 2)
+					{
+						for (size_t m = closestNeighbors.size()-1; m > 0; m--)
+						{
+							assert(m < closestNeighborMismatches.size());
+							assert(m-1 < closestNeighborMismatches.size());
+							if (closestNeighborMismatches[m] >= closestNeighborMismatches[m-1]) break;
+							std::swap(closestNeighbors[m], closestNeighbors[m-1]);
+							std::swap(closestNeighborMismatches[k], closestNeighborMismatches[m-1]);
+						}
+					}
+				}
+			}
+			correctedMatrix.emplace_back();
+			for (size_t k = 0; k < matrix[j].size(); k++)
+			{
+				size_t ones = 0;
+				for (size_t m = 0; m < closestNeighbors.size(); m++)
+				{
+					if (matrix[closestNeighbors[m]][k]) ones += 1;
+				}
+				correctedMatrix.back().emplace_back(ones >= closestNeighbors.size()/2);
+			}
+		}
+		assert(correctedMatrix.size() == matrix.size());
+		assert(correctedMatrix.size() == occurrencesPerChunk[i].size());
+		std::vector<size_t> parent;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			parent.emplace_back(j);
+		}
+		for (size_t j = 1; j < correctedMatrix.size(); j++)
+		{
+			assert(correctedMatrix[j].size() == matrix[0].size());
+			for (size_t k = 0; k < j; k++)
+			{
+				size_t mismatches = getHammingdistance(correctedMatrix[j], correctedMatrix[k]);
+				if (mismatches <= countDifferences)
+				{
+					merge(parent, j, k);
+				}
+			}
+		}
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			size_t first = nextNum;
+			phmap::flat_hash_map<size_t, size_t> keyToNode;
+			for (size_t j = 0; j < parent.size(); j++)
+			{
+				size_t key = find(parent, j);
+				if (keyToNode.count(key) == 1) continue;
+				keyToNode[key] = nextNum;
+				nextNum += 1;
+			}
+			size_t last = nextNum-1;
+			std::cerr << "nearest neighbor splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " informative " << columnsInInformative << " to " << keyToNode.size() << " chunks range " << first << " - " << last << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
+			}
+		}
+	});
+	std::cerr << "nearest neighbor phasing splitted " << countSplitted << " chunks" << std::endl;
 }
 
 void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
@@ -1080,7 +1481,7 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 		size_t lastKmer = std::numeric_limits<size_t>::max();
 		size_t lastCluster = std::numeric_limits<size_t>::max();
 		size_t lastKmerPos = std::numeric_limits<size_t>::max();
-		iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, [&occurrencesPerChunk, &readSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+		iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size(), [&occurrencesPerChunk, &readSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 		{
 			if (occurrenceID != lastOccurrence || lastKmer == std::numeric_limits<size_t>::max())
 			{
@@ -4163,9 +4564,17 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 //	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	countReadRepetitiveUnitigs(chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	writeGraph("fakegraph13.gfa", "fakepaths13.txt", chunksPerRead);
+	writeReadChunkSequences("sequences-chunk13.txt", chunksPerRead, readSequences, readNames);
 	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
 	writeReadUnitigSequences("sequences-graph13.txt", chunksPerRead, readSequences, readNames);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	writeGraph("fakegraph14.gfa", "fakepaths14.txt", chunksPerRead);
+	writeReadChunkSequences("sequences-chunk14.txt", chunksPerRead, readSequences, readNames);
+	writeUnitigGraph("graph-round14.gfa", "paths14.gaf", chunksPerRead, readNames, rawReadLengths);
+	writeReadUnitigSequences("sequences-graph14.txt", chunksPerRead, readSequences, readNames);
 }
 
 int main(int argc, char** argv)
