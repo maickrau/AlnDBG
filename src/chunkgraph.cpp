@@ -1359,7 +1359,6 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 				if (informativeSite[j] && informativeSite[k]) continue;
 				if (siteIsInformative(matrix, j, k) || siteIsInformative(matrix, k, j))
 				{
-					std::cerr << "informative " << j << " and " << k << std::endl;
 					informativeSite[j] = true;
 					informativeSite[k] = true;
 				}
@@ -1392,15 +1391,15 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 					closestNeighborMismatches.emplace_back(mismatches);
 					assert(closestNeighbors.size() == closestNeighborMismatches.size());
 					assert(closestNeighbors.size() >= 1);
-					if (closestNeighbors.size() >= 2)
+					if (closestNeighborMismatches.size() >= 2)
 					{
-						for (size_t m = closestNeighbors.size()-1; m > 0; m--)
+						for (size_t m = closestNeighborMismatches.size()-1; m > 0; m--)
 						{
 							assert(m < closestNeighborMismatches.size());
 							assert(m-1 < closestNeighborMismatches.size());
 							if (closestNeighborMismatches[m] >= closestNeighborMismatches[m-1]) break;
 							std::swap(closestNeighbors[m], closestNeighbors[m-1]);
-							std::swap(closestNeighborMismatches[k], closestNeighborMismatches[m-1]);
+							std::swap(closestNeighborMismatches[m], closestNeighborMismatches[m-1]);
 						}
 					}
 				}
@@ -4543,9 +4542,11 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph9.gfa", "fakepaths9.txt", chunksPerRead);
 	writeUnitigGraph("graph-round9.gfa", "paths9.gaf", chunksPerRead, readNames, rawReadLengths);
-	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
+	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	writeGraph("fakegraph10.gfa", "fakepaths10.txt", chunksPerRead);
 	writeUnitigGraph("graph-round10.gfa", "paths10.gaf", chunksPerRead, readNames, rawReadLengths);
+	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round11.gfa", "paths11.gaf", chunksPerRead, readNames, rawReadLengths);
@@ -4569,12 +4570,6 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, readNames, rawReadLengths);
 	writeReadUnitigSequences("sequences-graph13.txt", chunksPerRead, readSequences, readNames);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
-	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	writeGraph("fakegraph14.gfa", "fakepaths14.txt", chunksPerRead);
-	writeReadChunkSequences("sequences-chunk14.txt", chunksPerRead, readSequences, readNames);
-	writeUnitigGraph("graph-round14.gfa", "paths14.gaf", chunksPerRead, readNames, rawReadLengths);
-	writeReadUnitigSequences("sequences-graph14.txt", chunksPerRead, readSequences, readNames);
 }
 
 int main(int argc, char** argv)
