@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include "RankBitvector.h"
 #include "UnionFind.h"
 #include "CommonUtils.h"
 #include "ReadStorage.h"
@@ -21,6 +22,8 @@
 #include "edlib.h"
 
 const double mismatchFraction = 0.03; // try 2-3x avg error rate
+
+size_t popcount(uint64_t x);
 
 auto getTime()
 {
@@ -1052,136 +1055,48 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 	return validClusters;
 }
 
-size_t getHammingdistance(const std::vector<bool>& left, const std::vector<bool>& right)
+size_t getHammingdistance(const RankBitvector& left, const RankBitvector& right)
 {
 	assert(left.size() == right.size());
+	const std::vector<uint64_t>& leftbits = left.getBits();
+	const std::vector<uint64_t>& rightbits = right.getBits();
+	assert(leftbits.size() == rightbits.size());
 	size_t result = 0;
-	for (size_t i = 0; i < left.size(); i++)
+	for (size_t i = 0; i < leftbits.size(); i++)
 	{
-		if (left[i] != right[i]) result += 1;
+		uint64_t notEqual = leftbits[i] ^ rightbits[i];
+		result += popcount(notEqual);
 	}
 	return result;
 }
 
-double getBinomialCumulativeProbability(const size_t success, const size_t trials, const double probability)
+bool siteIsInformative(const std::vector<RankBitvector>& columns, const size_t left, const size_t right)
 {
-	static std::vector<std::vector<size_t>> pascalTriangles { { 1 } };
-	static std::mutex triangleMutex;
-	std::lock_guard<std::mutex> lock { triangleMutex };
-	while (pascalTriangles.size() <= trials)
-	{
-		pascalTriangles.emplace_back();
-	}
-	if (pascalTriangles[trials].size() <= success)
-	{
-		for (size_t i = 0; i <= trials; i++)
-		{
-			for (size_t j = pascalTriangles[i].size(); j <= i && j <= success; j++)
-			{
-				pascalTriangles[i].push_back(0);
-				if (j > 0)
-				{
-					assert(pascalTriangles[i-1].size() >= 1);
-					pascalTriangles[i].back() += pascalTriangles[i-1][j-1];
-				}
-				if (j < i)
-				{
-					assert(pascalTriangles[i-1].size() > j);
-					pascalTriangles[i].back() += pascalTriangles[i-1][j];
-				}
-			}
-		}
-	}
-	assert(pascalTriangles.size() > trials);
-	assert(pascalTriangles[trials].size() > success);
-	double cumulativeProbability = 0;
-	assert(probability > 0);
-	assert(probability < 1);
-	for (size_t i = 0; i <= success; i++)
-	{
-		cumulativeProbability += exp(log(pascalTriangles[trials][i]) + i * log(probability) + (trials-i) * log(1.0 - probability));
-	}
-	return cumulativeProbability;
-}
-/*
-bool siteIsInformative(const std::vector<std::vector<bool>>& matrix, const size_t left, const size_t right)
-{
-	const double requiredPValue = 1.0/1000000.0;
 	size_t zerozero = 0;
 	size_t zeroone = 0;
 	size_t onezero = 0;
 	size_t oneone = 0;
-	for (size_t i = 0; i < matrix.size(); i++)
+	assert(columns[left].size() == columns[right].size());
+	const std::vector<uint64_t>& leftbits = columns[left].getBits();
+	const std::vector<uint64_t>& rightbits = columns[right].getBits();
+	assert(leftbits.size() == rightbits.size());
+	for (size_t i = 0; i < leftbits.size()-1; i++)
 	{
-		if (matrix[i][left] && matrix[i][right]) oneone += 1;
-		if (!matrix[i][left] && matrix[i][right]) zeroone += 1;
-		if (!matrix[i][left] && !matrix[i][right]) zerozero += 1;
-		if (matrix[i][left] && !matrix[i][right]) onezero += 1;
+		oneone += popcount(leftbits[i] & rightbits[i]);
+		zeroone += popcount(~leftbits[i] & rightbits[i]);
+		zerozero += popcount(~leftbits[i] & ~rightbits[i]);
+		onezero += popcount(leftbits[i] & ~rightbits[i]);
 	}
-	if (zerozero + zeroone < 5) return false;
-	if (onezero + oneone < 5) return false;
-	if (zerozero + onezero < 5) return false;
-	if (zeroone + oneone < 5) return false;
-	double leftOneProbability = (double)(onezero+oneone)/(double)(zerozero+zeroone+onezero+oneone);
-	size_t rightZeros = zerozero + onezero;
-	size_t rightOnes = zeroone + oneone;
-	if (onezero > 0 && zerozero > 0)
+	size_t remainingBits = columns[left].size() % 64;
+	uint64_t mask = 0xFFFFFFFFFFFFFFFFull;
+	if (remainingBits > 0) // remainingbits 0 means the whole block is valid
 	{
-		if ((double)onezero/(double)(zerozero+onezero) < leftOneProbability)
-		{
-			double PValue = getBinomialCumulativeProbability(onezero, zerozero+onezero, leftOneProbability);
-			std::cerr << "P " << PValue << std::endl;
-			assert(PValue <= 1);
-			if (PValue >= requiredPValue) return false;
-			std::cerr << "!!!" << std::endl;
-		}
-		else
-		{
-			double PValue = getBinomialCumulativeProbability((zerozero+onezero)-onezero, zerozero+onezero, 1.0-leftOneProbability);
-			std::cerr << "P " << PValue << std::endl;
-			assert(PValue <= 1);
-			if (PValue >= requiredPValue) return false;
-			std::cerr << "!!!" << std::endl;
-		}
+		mask >>= (64-remainingBits);
 	}
-	if (oneone > 0 && zeroone > 0)
-	{
-		if ((double)oneone/(double)(zeroone+oneone) < leftOneProbability)
-		{
-			double PValue = getBinomialCumulativeProbability(oneone, zeroone+oneone, leftOneProbability);
-			std::cerr << "P " << PValue << std::endl;
-			assert(PValue <= 1);
-			if (PValue >= requiredPValue) return false;
-			std::cerr << "!!!" << std::endl;
-		}
-		else
-		{
-			double PValue = getBinomialCumulativeProbability((zeroone+oneone)-oneone, zeroone+oneone, 1.0-leftOneProbability);
-			std::cerr << "P " << PValue << std::endl;
-			assert(PValue <= 1);
-			if (PValue >= requiredPValue) return false;
-			std::cerr << "!!!" << std::endl;
-		}
-	}
-	return true;
-}
-*/
-bool siteIsInformative(const std::vector<std::vector<bool>>& matrix, const size_t left, const size_t right)
-{
-	const double requiredPValue = 1.0/1000000.0;
-	size_t zerozero = 0;
-	size_t zeroone = 0;
-	size_t onezero = 0;
-	size_t oneone = 0;
-	for (size_t i = 0; i < matrix.size(); i++)
-	{
-		assert(left < matrix[i].size());
-		assert(right < matrix[i].size());
-		if (matrix[i][left] && matrix[i][right]) oneone += 1;
-		if (!matrix[i][left] && matrix[i][right]) zeroone += 1;
-		if (!matrix[i][left] && !matrix[i][right]) zerozero += 1;
-		if (matrix[i][left] && !matrix[i][right]) onezero += 1;
-	}
+	oneone += popcount((leftbits.back() & rightbits.back()) & mask);
+	zeroone += popcount((~leftbits.back() & rightbits.back()) & mask);
+	zerozero += popcount((~leftbits.back() & ~rightbits.back()) & mask);
+	onezero += popcount((leftbits.back() & ~rightbits.back()) & mask);
 	if (zerozero + zeroone < 5) return false;
 	if (onezero + oneone < 5) return false;
 	if (zerozero + onezero < 5) return false;
@@ -1192,51 +1107,9 @@ bool siteIsInformative(const std::vector<std::vector<bool>>& matrix, const size_
 	if (oneone > 0 && oneone < 5) return false;
 	if (zerozero > 0 && zeroone > 0 && onezero > 0 && oneone > 0) return false;
 	return true;
-	double leftOneProbability = (double)(onezero+oneone)/(double)(zerozero+zeroone+onezero+oneone);
-	size_t rightZeros = zerozero + onezero;
-	size_t rightOnes = zeroone + oneone;
-	if (onezero > 0 && zerozero > 0)
-	{
-		if ((double)onezero/(double)(zerozero+onezero) < leftOneProbability)
-		{
-			double PValue = getBinomialCumulativeProbability(onezero, zerozero+onezero, leftOneProbability);
-			std::cerr << "P " << PValue << std::endl;
-			assert(PValue <= 1);
-			if (PValue >= requiredPValue) return false;
-			std::cerr << "!!!" << std::endl;
-		}
-		else
-		{
-			double PValue = getBinomialCumulativeProbability((zerozero+onezero)-onezero, zerozero+onezero, 1.0-leftOneProbability);
-			std::cerr << "P " << PValue << std::endl;
-			assert(PValue <= 1);
-			if (PValue >= requiredPValue) return false;
-			std::cerr << "!!!" << std::endl;
-		}
-	}
-	if (oneone > 0 && zeroone > 0)
-	{
-		if ((double)oneone/(double)(zeroone+oneone) < leftOneProbability)
-		{
-			double PValue = getBinomialCumulativeProbability(oneone, zeroone+oneone, leftOneProbability);
-			std::cerr << "P " << PValue << std::endl;
-			assert(PValue <= 1);
-			if (PValue >= requiredPValue) return false;
-			std::cerr << "!!!" << std::endl;
-		}
-		else
-		{
-			double PValue = getBinomialCumulativeProbability((zeroone+oneone)-oneone, zeroone+oneone, 1.0-leftOneProbability);
-			std::cerr << "P " << PValue << std::endl;
-			assert(PValue <= 1);
-			if (PValue >= requiredPValue) return false;
-			std::cerr << "!!!" << std::endl;
-		}
-	}
-	return true;
 }
 
-void filterMatrix(std::vector<std::vector<bool>>& matrix, const std::vector<bool>& keep)
+void filterMatrix(std::vector<RankBitvector>& matrix, const std::vector<bool>& keep)
 {
 	std::vector<size_t> getIndexFrom;
 	for (size_t i = 0; i < keep.size(); i++)
@@ -1251,7 +1124,7 @@ void filterMatrix(std::vector<std::vector<bool>>& matrix, const std::vector<bool
 		assert(matrix[i].size() == keep.size());
 		for (size_t k = 0; k < getIndexFrom.size(); k++)
 		{
-			matrix[i][k] = matrix[i][getIndexFrom[k]];
+			matrix[i].set(k, matrix[i].get(getIndexFrom[k]));
 		}
 		matrix[i].resize(getIndexFrom.size());
 	}
@@ -1299,7 +1172,7 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 			return;
 		}
 		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToColumn;
-		std::vector<std::vector<bool>> matrix;
+		std::vector<RankBitvector> matrix; // doesn't actually use rank in any way, but exposes uint64 for bitparallel hamming distance calculation
 		std::vector<std::pair<size_t, size_t>> clusters;
 		matrix.resize(occurrencesPerChunk[i].size());
 		auto validClusters = iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, 5, [&kmerClusterToColumn, &clusters, &matrix](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
@@ -1319,29 +1192,32 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 			if (matrix[occurrenceID].size() <= column)
 			{
 				assert(column < kmerClusterToColumn.size());
-				matrix[occurrenceID].resize(kmerClusterToColumn.size(), false);
+				matrix[occurrenceID].resize(kmerClusterToColumn.size());
 			}
-			assert(!matrix[occurrenceID][column]);
-			matrix[occurrenceID][column] = true;
+			assert(!matrix[occurrenceID].get(column));
+			matrix[occurrenceID].set(column, true);
 		});
 		for (size_t j = 0; j < matrix.size(); j++)
 		{
 			if (matrix[j].size() == kmerClusterToColumn.size()) continue;
 			assert(matrix[j].size() < kmerClusterToColumn.size());
-			matrix[j].resize(kmerClusterToColumn.size(), false);
+			matrix[j].resize(kmerClusterToColumn.size());
 		}
 		size_t columnsInUnfiltered = matrix[0].size();
 		std::vector<bool> covered;
 		covered.resize(matrix[0].size(), false);
 		size_t columnsInCovered = 0;
+		std::vector<RankBitvector> columns;
 		for (size_t j = 0; j < matrix[0].size(); j++)
 		{
+			columns.emplace_back();
 			size_t zeros = 0;
 			size_t ones = 0;
 			for (size_t k = 0; k < matrix.size(); k++)
 			{
 				assert(matrix[k].size() == matrix[0].size());
-				if (matrix[k][j])
+				columns.back().push_back(matrix[k].get(j));
+				if (matrix[k].get(j))
 				{
 					ones += 1;
 				}
@@ -1377,7 +1253,7 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 				}
 				assert(j != k);
 				if (informativeSite[j] && informativeSite[k]) continue;
-				if (siteIsInformative(matrix, j, k) || siteIsInformative(matrix, k, j))
+				if (siteIsInformative(columns, j, k) || siteIsInformative(columns, k, j))
 				{
 					informativeSite[j] = true;
 					informativeSite[k] = true;
@@ -1386,7 +1262,7 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 		}
 		filterMatrix(matrix, informativeSite);
 		size_t columnsInInformative = matrix[0].size();
-		std::vector<std::vector<bool>> correctedMatrix;
+		std::vector<RankBitvector> correctedMatrix;
 		for (size_t j = 0; j < matrix.size(); j++)
 		{
 			std::vector<std::pair<size_t, size_t>> closestNeighborAndMismatches;
@@ -1409,9 +1285,9 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 				size_t ones = 0;
 				for (size_t m = 0; m <= endIndex; m++)
 				{
-					if (matrix[closestNeighborAndMismatches[m].second][k]) ones += 1;
+					if (matrix[closestNeighborAndMismatches[m].second].get(k)) ones += 1;
 				}
-				correctedMatrix.back().emplace_back(ones >= (endIndex+1)/2);
+				correctedMatrix.back().push_back(ones >= (endIndex+1)/2);
 			}
 		}
 		assert(correctedMatrix.size() == matrix.size());
