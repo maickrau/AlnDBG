@@ -1350,6 +1350,17 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 	std::mutex resultMutex;
 	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, kmerSize](const size_t i)
 	{
+		if (occurrencesPerChunk[i].size() < 10)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			size_t newID = nextNum;
+			nextNum += 1;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
+			}
+			return;
+		}
 		std::vector<std::tuple<size_t, size_t, size_t, size_t, size_t, size_t>> alleles; // startkmer, startcluster, endkmer, endcluster, occurrenceID, allele
 		size_t lastOccurrence = std::numeric_limits<size_t>::max();
 		size_t lastKmer = std::numeric_limits<size_t>::max();
@@ -1478,6 +1489,17 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 	std::mutex resultMutex;
 	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, kmerSize](const size_t i)
 	{
+		if (occurrencesPerChunk[i].size() < 10)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			size_t newID = nextNum;
+			nextNum += 1;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
+			}
+			return;
+		}
 		phmap::flat_hash_map<size_t, size_t> kmerOccurrenceCounts;
 		phmap::flat_hash_set<size_t> kmersRepeating;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
@@ -4389,8 +4411,10 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 //	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
 //	countSolidBases(readSequences, chunksPerRead, 31, numThreads);
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 31, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 11, numThreads);
 //	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	writeGraph("fakegraph7.gfa", "fakepaths7.txt", chunksPerRead);
 //	writeReadChunkSequences("sequences-chunk7.txt", chunksPerRead, readSequences, readNames);
@@ -4402,7 +4426,9 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 //	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 31, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 31, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //	writeReadChunkSequences("sequences-chunk8.txt", chunksPerRead, readSequences, readNames);
@@ -4417,6 +4443,7 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph9.gfa", "fakepaths9.txt", chunksPerRead);
 	writeUnitigGraph("graph-round9.gfa", "paths9.gaf", chunksPerRead, readNames, rawReadLengths);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph10.gfa", "fakepaths10.txt", chunksPerRead);
@@ -4425,9 +4452,13 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 	cleanTips(readSequences, chunksPerRead, numThreads, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round11.gfa", "paths11.gaf", chunksPerRead, readNames, rawReadLengths);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerInterchunkPhasedKmers(readSequences, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveUnambiguouslyResolvableUnitigs(readSequences, chunksPerRead, numThreads);
 	resolveSemiAmbiguousUnitigs(readSequences, chunksPerRead, numThreads);
