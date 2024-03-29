@@ -1369,50 +1369,29 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 		std::vector<std::vector<bool>> correctedMatrix;
 		for (size_t j = 0; j < matrix.size(); j++)
 		{
-			std::vector<size_t> closestNeighbors;
-			std::vector<size_t> closestNeighborMismatches;
+			std::vector<std::pair<size_t, size_t>> closestNeighborAndMismatches;
 			for (size_t k = 0; k < matrix.size(); k++)
 			{
 				if (j == k) continue;
 				size_t mismatches = getHammingdistance(matrix[k], matrix[j]);
-				assert(closestNeighbors.size() == closestNeighborMismatches.size());
-				if (closestNeighbors.size() == countNeighbors)
-				{
-					assert(closestNeighborMismatches.size() >= 1);
-					if (closestNeighborMismatches.back() > mismatches)
-					{
-						closestNeighborMismatches.pop_back();
-						closestNeighbors.pop_back();
-					}
-				}
-				if (closestNeighbors.size() < countNeighbors)
-				{
-					closestNeighbors.emplace_back(k);
-					closestNeighborMismatches.emplace_back(mismatches);
-					assert(closestNeighbors.size() == closestNeighborMismatches.size());
-					assert(closestNeighbors.size() >= 1);
-					if (closestNeighborMismatches.size() >= 2)
-					{
-						for (size_t m = closestNeighborMismatches.size()-1; m > 0; m--)
-						{
-							assert(m < closestNeighborMismatches.size());
-							assert(m-1 < closestNeighborMismatches.size());
-							if (closestNeighborMismatches[m] >= closestNeighborMismatches[m-1]) break;
-							std::swap(closestNeighbors[m], closestNeighbors[m-1]);
-							std::swap(closestNeighborMismatches[m], closestNeighborMismatches[m-1]);
-						}
-					}
-				}
+				closestNeighborAndMismatches.emplace_back(mismatches, k);
+			}
+			std::sort(closestNeighborAndMismatches.begin(), closestNeighborAndMismatches.end());
+			closestNeighborAndMismatches.emplace_back(0, j);
+			size_t endIndex = countNeighbors;
+			while (endIndex+1 < closestNeighborAndMismatches.size() && closestNeighborAndMismatches[endIndex+1].first == closestNeighborAndMismatches[countNeighbors].first)
+			{
+				endIndex += 1;
 			}
 			correctedMatrix.emplace_back();
 			for (size_t k = 0; k < matrix[j].size(); k++)
 			{
 				size_t ones = 0;
-				for (size_t m = 0; m < closestNeighbors.size(); m++)
+				for (size_t m = 0; m <= endIndex; m++)
 				{
-					if (matrix[closestNeighbors[m]][k]) ones += 1;
+					if (matrix[closestNeighborAndMismatches[m].second][k]) ones += 1;
 				}
-				correctedMatrix.back().emplace_back(ones >= closestNeighbors.size()/2);
+				correctedMatrix.back().emplace_back(ones >= (endIndex+1)/2);
 			}
 		}
 		assert(correctedMatrix.size() == matrix.size());
