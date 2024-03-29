@@ -1261,7 +1261,7 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 {
 	std::cerr << "splitting by nearest neighbor phasing" << std::endl;
 	const size_t countNeighbors = 5;
-	const size_t countDifferences = 50;
+	const size_t countDifferences = 200;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -1273,11 +1273,31 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
 	}
+	std::vector<size_t> iterationOrder;
+	iterationOrder.reserve(occurrencesPerChunk.size());
+	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	{
+		iterationOrder.emplace_back(i);
+	}
+	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, kmerSize](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, &iterationOrder, kmerSize](const size_t iterationIndex)
 	{
+		const size_t i = iterationOrder[iterationIndex];
+		if (occurrencesPerChunk[i].size() < 10)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			size_t newID = nextNum;
+			nextNum += 1;
+			std::cerr << "nearest neighbor skipped chunk " << i << " coverage " << occurrencesPerChunk[i].size() << ", chunk index " << newID << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
+			}
+			return;
+		}
 		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToColumn;
 		std::vector<std::vector<bool>> matrix;
 		std::vector<std::pair<size_t, size_t>> clusters;
