@@ -4426,6 +4426,7 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 {
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getBetterChunksPerRead(readSequences, numThreads, k, windowSize);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	removeContainingChunks(chunksPerRead);
 	writeGraph("fakegraph2.gfa", "fakepaths2.txt", chunksPerRead);
 	splitPerLength(chunksPerRead);
