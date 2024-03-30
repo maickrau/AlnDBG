@@ -1134,7 +1134,7 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 {
 	std::cerr << "splitting by nearest neighbor phasing" << std::endl;
 	const size_t countNeighbors = 5;
-	const size_t countDifferences = 200;
+	const size_t countDifferences = 100;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -1233,6 +1233,19 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 				columnsInCovered += 1;
 			}
 		}
+		if (columnsInCovered < countDifferences)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			size_t newID = nextNum;
+			nextNum += 1;
+			auto endTime = getTime();
+			std::cerr << "nearest neighbor skipped chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " due to covered " << columnsInCovered << ", chunk index " << newID << " time " << formatTime(startTime, endTime) << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
+			}
+			return;
+		}
 		std::vector<bool> informativeSite;
 		informativeSite.resize(matrix[0].size(), false);
 		assert(clusters.size() == informativeSite.size());
@@ -1261,8 +1274,25 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 				}
 			}
 		}
+		size_t columnsInInformative = 0;
+		for (size_t i = 0; i < informativeSite.size(); i++)
+		{
+			if (informativeSite[i]) columnsInInformative += 1;
+		}
+		if (columnsInInformative < countDifferences)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			size_t newID = nextNum;
+			nextNum += 1;
+			auto endTime = getTime();
+			std::cerr << "nearest neighbor skipped chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " covered " << columnsInCovered << " due to informative " << columnsInInformative << ", chunk index " << newID << " time " << formatTime(startTime, endTime) << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
+			}
+			return;
+		}
 		filterMatrix(matrix, informativeSite);
-		size_t columnsInInformative = matrix[0].size();
 		std::vector<RankBitvector> correctedMatrix;
 		for (size_t j = 0; j < matrix.size(); j++)
 		{
