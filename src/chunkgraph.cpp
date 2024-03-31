@@ -4353,7 +4353,7 @@ void writeReadUnitigSequences(const std::string& filename, const std::vector<std
 	}
 }
 
-std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPerRead(const std::vector<TwobitString>& rawReadSequences, const size_t numThreads, const size_t k, const size_t windowSize)
+std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPerRead(const std::vector<TwobitString>& rawReadSequences, const size_t numThreads, const size_t k, const size_t windowSize, const size_t middleSkip)
 {
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
 	result.resize(rawReadSequences.size());
@@ -4361,13 +4361,13 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 	MBG::ReadpartIterator partIterator { 31, 1, MBG::ErrorMasking::Microsatellite, 1, readFiles, false, "" };
 	phmap::flat_hash_map<uint64_t, size_t> hashToNode;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, rawReadSequences.size(), numThreads, [&result, &rawReadSequences, &partIterator, &hashToNode, &resultMutex, k, windowSize](const size_t i)
+	iterateMultithreaded(0, rawReadSequences.size(), numThreads, [&result, &rawReadSequences, &partIterator, &hashToNode, &resultMutex, k, windowSize, middleSkip](const size_t i)
 	{
 		std::string readSequence = rawReadSequences[i].toString();
 		std::vector<std::tuple<size_t, size_t, MBG::HashType>> hashes;
-		partIterator.iteratePartsOfRead("", readSequence, [&hashToNode, &hashes, &resultMutex, i, k, windowSize](const MBG::ReadInfo& read, const MBG::SequenceCharType& seq, const MBG::SequenceLengthType& poses, const std::string& raw)
+		partIterator.iteratePartsOfRead("", readSequence, [&hashToNode, &hashes, &resultMutex, i, k, windowSize, middleSkip](const MBG::ReadInfo& read, const MBG::SequenceCharType& seq, const MBG::SequenceLengthType& poses, const std::string& raw)
 		{
-			iterateWindowchunks(seq, k, 2, windowSize, [&hashToNode, &hashes, &resultMutex, &poses, &seq, i, k](const std::vector<uint64_t>& hashPositions)
+			iterateWindowchunks(seq, k, windowSize, middleSkip, [&hashToNode, &hashes, &resultMutex, &poses, &seq, i, k](const std::vector<uint64_t>& hashPositions)
 			{
 				assert(hashPositions.size() == 2);
 				size_t startPos = hashPositions[0];
@@ -4458,10 +4458,10 @@ void countSolidChunks(const std::vector<std::vector<std::tuple<size_t, size_t, u
 	std::cerr << seenTwice.size() << " distinct chunks seen more" << std::endl;
 }
 
-void makeGraph(const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads, const double approxOneHapCoverage, const size_t k, const size_t windowSize)
+void makeGraph(const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads, const double approxOneHapCoverage, const size_t k, const size_t windowSize, const size_t middleSkip)
 {
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getBetterChunksPerRead(readSequences, numThreads, k, windowSize);
+	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getBetterChunksPerRead(readSequences, numThreads, k, windowSize, middleSkip);
 	size_t numChunks = 0;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -4567,10 +4567,11 @@ int main(int argc, char** argv)
 	const size_t numThreads = std::stoi(argv[1]);
 	const size_t k = std::stoull(argv[2]);
 	const size_t windowSize = std::stoull(argv[3]);
-	const double approxOneHapCoverage = std::stod(argv[4]);
-	mismatchFraction = std::stod(argv[5]); // try 2-3x average error rate
+	const size_t middleSkip = std::stoull(argv[4]);
+	const double approxOneHapCoverage = std::stod(argv[5]);
+	mismatchFraction = std::stod(argv[6]); // try 2-3x average error rate
 	std::vector<std::string> readFiles;
-	for (size_t i = 6; i < argc; i++)
+	for (size_t i = 7; i < argc; i++)
 	{
 		readFiles.emplace_back(argv[i]);
 	}
@@ -4588,5 +4589,5 @@ int main(int argc, char** argv)
 		});
 	}
 	std::cerr << readSequences.size() << " reads" << std::endl;
-	makeGraph(readNames, readBasepairLengths, readSequences, numThreads, approxOneHapCoverage, k, windowSize);
+	makeGraph(readNames, readBasepairLengths, readSequences, numThreads, approxOneHapCoverage, k, windowSize, middleSkip);
 }
