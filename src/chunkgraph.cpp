@@ -4371,6 +4371,24 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 				assert(hashPositions.size() == 2);
 				size_t startPos = hashPositions[0];
 				size_t endPos = hashPositions.back() + k - 1;
+				size_t realStartPos = poses[startPos];
+				size_t realEndPos = poses[endPos+1]-1;
+				if (result[i].size() >= 1)
+				{
+					assert(realStartPos >= std::get<0>(result[i].back()));
+					assert(realEndPos >= std::get<1>(result[i].back()));
+					assert(realStartPos > std::get<0>(result[i].back()) || realEndPos >= std::get<1>(result[i].back()));
+					if (realStartPos == std::get<0>(result[i].back()))
+					{
+						assert(realEndPos > std::get<1>(result[i].back()));
+						return;
+					}
+					if (realEndPos == std::get<1>(result[i].back()))
+					{
+						assert(realStartPos > std::get<0>(result[i].back()));
+						result[i].pop_back();
+					}
+				}
 				MBG::SequenceCharType hashableSequence;
 				for (size_t i = 0; i < hashPositions.size()/2; i++)
 				{
@@ -4385,8 +4403,6 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 					//insertSubstr = MBG::revCompRLE(insertSubstr);
 					hashableSequence.insert(hashableSequence.end(), insertSubstr.begin(), insertSubstr.end());
 				}
-				size_t realStartPos = poses[startPos];
-				size_t realEndPos = poses[endPos+1]-1;
 				MBG::HashType totalhashfw = MBG::hash(hashableSequence);
 				MBG::HashType totalhashbw = (totalhashfw << (MBG::HashType)64) + (totalhashfw >> (MBG::HashType)64);
 				if (totalhashfw == totalhashbw) return;
@@ -4426,8 +4442,20 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 {
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getBetterChunksPerRead(readSequences, numThreads, k, windowSize);
+	size_t numChunks = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		numChunks += chunksPerRead[i].size();
+	}
+	std::cerr << numChunks << " chunks" << std::endl;
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	removeContainingChunks(chunksPerRead);
+	numChunks = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		numChunks += chunksPerRead[i].size();
+	}
+	std::cerr << numChunks << " chunks" << std::endl;
 	writeGraph("fakegraph2.gfa", "fakepaths2.txt", chunksPerRead);
 	splitPerLength(chunksPerRead);
 	writeGraph("fakegraph3.gfa", "fakepaths3.txt", chunksPerRead);
@@ -4449,25 +4477,31 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 	splitPerSequenceIdentity(readSequences, chunksPerRead, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph5.gfa", "fakepaths5.txt", chunksPerRead);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round5.gfa", "paths5.gaf", chunksPerRead, readNames, rawReadLengths);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph6.gfa", "fakepaths6.txt", chunksPerRead);
 	writeUnitigGraph("graph-round6.gfa", "paths6.gaf", chunksPerRead, readNames, rawReadLengths);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph7.gfa", "fakepaths7.txt", chunksPerRead);
 	writeUnitigGraph("graph-round7.gfa", "paths7.gaf", chunksPerRead, readNames, rawReadLengths);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph8.gfa", "fakepaths8.txt", chunksPerRead);
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, readNames, rawReadLengths);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph9.gfa", "fakepaths9.txt", chunksPerRead);
 	writeUnitigGraph("graph-round9.gfa", "paths9.gaf", chunksPerRead, readNames, rawReadLengths);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerPhasingKmersWithinChunk(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph10.gfa", "fakepaths10.txt", chunksPerRead);
 	writeUnitigGraph("graph-round10.gfa", "paths10.gaf", chunksPerRead, readNames, rawReadLengths);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
