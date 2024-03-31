@@ -4364,29 +4364,30 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 	iterateMultithreaded(0, rawReadSequences.size(), numThreads, [&result, &rawReadSequences, &partIterator, &hashToNode, &resultMutex, k, windowSize](const size_t i)
 	{
 		std::string readSequence = rawReadSequences[i].toString();
-		partIterator.iteratePartsOfRead("", readSequence, [&hashToNode, &result, &resultMutex, i, k, windowSize](const MBG::ReadInfo& read, const MBG::SequenceCharType& seq, const MBG::SequenceLengthType& poses, const std::string& raw)
+		std::vector<std::tuple<size_t, size_t, MBG::HashType>> hashes;
+		partIterator.iteratePartsOfRead("", readSequence, [&hashToNode, &hashes, &resultMutex, i, k, windowSize](const MBG::ReadInfo& read, const MBG::SequenceCharType& seq, const MBG::SequenceLengthType& poses, const std::string& raw)
 		{
-			iterateWindowchunks(seq, k, 2, windowSize, [&hashToNode, &result, &resultMutex, &poses, &seq, i, k](const std::vector<uint64_t>& hashPositions)
+			iterateWindowchunks(seq, k, 2, windowSize, [&hashToNode, &hashes, &resultMutex, &poses, &seq, i, k](const std::vector<uint64_t>& hashPositions)
 			{
 				assert(hashPositions.size() == 2);
 				size_t startPos = hashPositions[0];
 				size_t endPos = hashPositions.back() + k - 1;
 				size_t realStartPos = poses[startPos];
 				size_t realEndPos = poses[endPos+1]-1;
-				if (result[i].size() >= 1)
+				if (hashes.size() >= 1)
 				{
-					assert(realStartPos >= std::get<0>(result[i].back()));
-					assert(realEndPos >= std::get<1>(result[i].back()));
-					assert(realStartPos > std::get<0>(result[i].back()) || realEndPos >= std::get<1>(result[i].back()));
-					if (realStartPos == std::get<0>(result[i].back()))
+					assert(realStartPos >= std::get<0>(hashes.back()));
+					assert(realEndPos >= std::get<1>(hashes.back()));
+					assert(realStartPos > std::get<0>(hashes.back()) || realEndPos >= std::get<1>(hashes.back()));
+					if (realStartPos == std::get<0>(hashes.back()))
 					{
-						assert(realEndPos > std::get<1>(result[i].back()));
+						assert(realEndPos > std::get<1>(hashes.back()));
 						return;
 					}
-					if (realEndPos == std::get<1>(result[i].back()))
+					if (realEndPos == std::get<1>(hashes.back()))
 					{
-						assert(realStartPos > std::get<0>(result[i].back()));
-						result[i].pop_back();
+						assert(realStartPos > std::get<0>(hashes.back()));
+						hashes.pop_back();
 					}
 				}
 				MBG::SequenceCharType hashableSequence;
@@ -4404,38 +4405,57 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 					hashableSequence.insert(hashableSequence.end(), insertSubstr.begin(), insertSubstr.end());
 				}
 				MBG::HashType totalhashfw = MBG::hash(hashableSequence);
-				MBG::HashType totalhashbw = (totalhashfw << (MBG::HashType)64) + (totalhashfw >> (MBG::HashType)64);
-				if (totalhashfw == totalhashbw) return;
-				uint64_t hash;
-				bool fw;
-				if (totalhashfw < totalhashbw)
-				{
-					hash = totalhashfw + 3*(totalhashfw >> 64);
-					fw = true;
-				}
-				else
-				{
-					hash = totalhashbw + 3*(totalhashbw >> 64);
-					fw = false;
-				}
-				{
-					std::lock_guard<std::mutex> lock { resultMutex };
-					size_t node;
-					if (hashToNode.count(hash) == 0)
-					{
-						node = hashToNode.size();
-						hashToNode[hash] = node;
-					}
-					else
-					{
-						node = hashToNode.at(hash);
-					}
-					result[i].emplace_back(realStartPos, realEndPos, node + (fw ? firstBitUint64_t : 0));
-				}
+				hashes.emplace_back(realStartPos, realEndPos, totalhashfw);
 			});
 		});
+		std::lock_guard<std::mutex> lock { resultMutex };
+		for (size_t j = 0; j < hashes.size(); j++)
+		{
+			MBG::HashType totalhashfw = std::get<2>(hashes[j]);
+			MBG::HashType totalhashbw = (totalhashfw << (MBG::HashType)64) + (totalhashfw >> (MBG::HashType)64);
+			if (totalhashfw == totalhashbw) continue;
+			uint64_t hash;
+			bool fw;
+			if (totalhashfw < totalhashbw)
+			{
+				hash = totalhashfw + 3*(totalhashfw >> 64);
+				fw = true;
+			}
+			else
+			{
+				hash = totalhashbw + 3*(totalhashbw >> 64);
+				fw = false;
+			}
+			size_t node;
+			if (hashToNode.count(hash) == 0)
+			{
+				node = hashToNode.size();
+				hashToNode[hash] = node;
+			}
+			else
+			{
+				node = hashToNode.at(hash);
+			}
+			result[i].emplace_back(std::get<0>(hashes[j]), std::get<1>(hashes[j]), node + (fw ? firstBitUint64_t : 0));
+		}
 	});
 	return result;
+}
+
+void countSolidChunks(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	phmap::flat_hash_set<uint64_t> seenOnce;
+	phmap::flat_hash_set<uint64_t> seenTwice;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (auto t : chunksPerRead[i])
+		{
+			if (seenOnce.count(std::get<2>(t) & maskUint64_t) == 1) seenTwice.insert(std::get<2>(t) & maskUint64_t);
+			seenOnce.insert(std::get<2>(t) & maskUint64_t);
+		}
+	}
+	std::cerr << seenOnce.size() << " distinct chunks seen once" << std::endl;
+	std::cerr << seenTwice.size() << " distinct chunks seen more" << std::endl;
 }
 
 void makeGraph(const std::vector<std::string>& readNames, const std::vector<size_t>& rawReadLengths, const std::vector<TwobitString>& readSequences, const size_t numThreads, const double approxOneHapCoverage, const size_t k, const size_t windowSize)
@@ -4448,6 +4468,7 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 		numChunks += chunksPerRead[i].size();
 	}
 	std::cerr << numChunks << " chunks" << std::endl;
+	countSolidChunks(chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	removeContainingChunks(chunksPerRead);
 	numChunks = 0;
