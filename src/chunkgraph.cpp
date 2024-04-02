@@ -2662,22 +2662,47 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 		size_t nextGroupNum = 0;
 		std::vector<phmap::flat_hash_set<size_t>> solidKmersPerOccurrence;
 		solidKmersPerOccurrence.resize(occurrencesPerChunk[i].size());
-		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToKmer;
-		iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size(), [&solidKmersPerOccurrence, &kmerClusterToKmer](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToNumber;
+		iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size(), [&solidKmersPerOccurrence, &kmerClusterToNumber](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 		{
 			size_t kmerkey = 0;
 			std::pair<size_t, size_t> key { kmer, clusterIndex };
-			if (kmerClusterToKmer.count(key) == 0)
+			if (kmerClusterToNumber.count(key) == 0)
 			{
-				kmerkey = kmerClusterToKmer.size();
-				kmerClusterToKmer[key] = kmerkey;
+				kmerkey = kmerClusterToNumber.size();
+				kmerClusterToNumber[key] = kmerkey;
 			}
 			else
 			{
-				kmerkey = kmerClusterToKmer.at(key);
+				kmerkey = kmerClusterToNumber.at(key);
 			}
 			solidKmersPerOccurrence[occurrenceID].emplace(kmerkey);
 		});
+		phmap::flat_hash_map<size_t, size_t> kmerToNumber;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
+			phmap::flat_hash_set<size_t> kmersHere;
+			iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&kmersHere](const size_t kmer, const size_t pos)
+			{
+				kmersHere.insert(kmer);
+			});
+			for (auto kmer : kmersHere)
+			{
+				size_t kmerkey = 0;
+				if (kmerToNumber.count(kmer) == 0)
+				{
+					kmerkey = kmerToNumber.size() + kmerClusterToNumber.size();
+					kmerToNumber[kmer] = kmerkey;
+				}
+				else
+				{
+					kmerkey = kmerToNumber.at(kmer);
+				}
+				solidKmersPerOccurrence[j].emplace(kmerkey);
+			}
+		}
 		for (const size_t phaseGroup : applicablePhasingGroups)
 		{
 			phmap::flat_hash_set<size_t> kmersInFirst;
