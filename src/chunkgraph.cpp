@@ -1689,6 +1689,24 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 				checkPhasablePair(bwFork.second, fwFork.second, phaseIdentities);
 			}
 		}
+		for (const auto& bwFork : bwForks)
+		{
+			for (const auto& bwFork2 : bwForks)
+			{
+				if (validClusters.at(bwFork.first.first)[bwFork.first.second].second+1 > validClusters.at(bwFork2.first.first)[bwFork2.first.second].first) continue;
+				checkedPairs += 1;
+				checkPhasablePair(bwFork.second, bwFork2.second, phaseIdentities);
+			}
+		}
+		for (const auto& fwFork : fwForks)
+		{
+			for (const auto& fwFork2 : fwForks)
+			{
+				if (validClusters.at(fwFork.first.first)[fwFork.first.second].second+1 > validClusters.at(fwFork2.first.first)[fwFork2.first.second].first) continue;
+				checkedPairs += 1;
+				checkPhasablePair(fwFork.second, fwFork2.second, phaseIdentities);
+			}
+		}
 		std::vector<size_t> parent;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
