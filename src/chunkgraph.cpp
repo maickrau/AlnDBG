@@ -2673,7 +2673,8 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 			}
 			if (firsts < 3) continue;
 			if (seconds < 3) continue;
-			if (firsts+seconds < readsHere.size() * 0.75) continue;
+			if (firsts+seconds < readsHere.size() * 0.75 && (firsts < 5 || seconds < 5)) continue;
+			if (firsts+seconds < readsHere.size() * 0.25) continue;
 			applicablePhasingGroups.push_back(j);
 		}
 		phmap::flat_hash_map<size_t, std::vector<size_t>> phaseGroupsPerRead;
