@@ -1204,7 +1204,7 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 			size_t newID = nextNum;
 			nextNum += 1;
 			auto endTime = getTime();
-			std::cerr << "nearest neighbor skipped chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " due to covered " << columnsInCovered << ", chunk index " << newID << " time " << formatTime(startTime, endTime) << std::endl;
+			std::cerr << "nearest neighbor skipped chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " columns " << columnsInUnfiltered << " due to covered " << columnsInCovered << ", chunk index " << newID << " time " << formatTime(startTime, endTime) << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
 				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
@@ -1250,7 +1250,7 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 			size_t newID = nextNum;
 			nextNum += 1;
 			auto endTime = getTime();
-			std::cerr << "nearest neighbor skipped chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " covered " << columnsInCovered << " due to informative " << columnsInInformative << ", chunk index " << newID << " time " << formatTime(startTime, endTime) << std::endl;
+			std::cerr << "nearest neighbor skipped chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " due to informative " << columnsInInformative << ", chunk index " << newID << " time " << formatTime(startTime, endTime) << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
 				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
@@ -1684,7 +1684,7 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 		{
 			for (const auto& fwFork : fwForks)
 			{
-				if (validClusters.at(bwFork.first.first)[bwFork.first.second].second < validClusters.at(fwFork.first.first)[fwFork.first.second].first) continue;
+				if (validClusters.at(bwFork.first.first)[bwFork.first.second].second > validClusters.at(fwFork.first.first)[fwFork.first.second].first) continue;
 				checkedPairs += 1;
 				checkPhasablePair(bwFork.second, fwFork.second, phaseIdentities);
 			}
