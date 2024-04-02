@@ -2487,7 +2487,7 @@ void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vec
 void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting by interchunk phasing kmers" << std::endl;
-	const size_t k = 11;
+	const size_t kmerSize = 11;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -2632,7 +2632,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &repetitive, &maybePhaseGroups, &countSplitted, k](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &repetitive, &maybePhaseGroups, &countSplitted, kmerSize](const size_t i)
 	{
 		std::vector<size_t> applicablePhasingGroups;
 		std::vector<size_t> readsHere;
@@ -2660,6 +2660,24 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 		}
 		phmap::flat_hash_map<size_t, std::vector<size_t>> phaseGroupsPerRead;
 		size_t nextGroupNum = 0;
+		std::vector<phmap::flat_hash_set<size_t>> solidKmersPerOccurrence;
+		solidKmersPerOccurrence.resize(occurrencesPerChunk[i].size());
+		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToKmer;
+		iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size(), [&solidKmersPerOccurrence, &kmerClusterToKmer](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+		{
+			size_t kmerkey = 0;
+			std::pair<size_t, size_t> key { kmer, clusterIndex };
+			if (kmerClusterToKmer.count(key) == 0)
+			{
+				kmerkey = kmerClusterToKmer.size();
+				kmerClusterToKmer[key] = kmerkey;
+			}
+			else
+			{
+				kmerkey = kmerClusterToKmer.at(key);
+			}
+			solidKmersPerOccurrence[occurrenceID].emplace(kmerkey);
+		});
 		for (const size_t phaseGroup : applicablePhasingGroups)
 		{
 			phmap::flat_hash_set<size_t> kmersInFirst;
@@ -2674,11 +2692,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 				if (maybePhaseGroups[phaseGroup].first.count(read) == 0 && maybePhaseGroups[phaseGroup].second.count(read) == 0) continue;
 				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 				assert(!NonexistantChunk(std::get<2>(t)));
-				phmap::flat_hash_set<size_t> kmersHere;
-				iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersHere](const size_t kmer, const size_t pos)
-				{
-					kmersHere.insert(kmer);
-				});
+				const phmap::flat_hash_set<size_t> kmersHere = solidKmersPerOccurrence[j];
 				if (maybePhaseGroups[phaseGroup].first.count(read) == 1)
 				{
 					kmersInEvenOneFirst.insert(kmersHere.begin(), kmersHere.end());
@@ -2758,11 +2772,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 				if (maybePhaseGroups[phaseGroup].first.count(read) == 1 || maybePhaseGroups[phaseGroup].second.count(read) == 1) continue;
 				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 				assert(!NonexistantChunk(std::get<2>(t)));
-				phmap::flat_hash_set<size_t> kmersHere;
-				iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersHere](const size_t kmer, const size_t pos)
-				{
-					kmersHere.insert(kmer);
-				});
+				const phmap::flat_hash_set<size_t>& kmersHere = solidKmersPerOccurrence[j];
 				size_t firstMatches = 0;
 				size_t secondMatches = 0;
 				for (size_t kmer : kmersHere)
@@ -2845,11 +2855,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 				assert(maybePhaseGroups[phaseGroup].second.count(read) == 0);
 				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 				assert(!NonexistantChunk(std::get<2>(t)));
-				phmap::flat_hash_set<size_t> kmersHere;
-				iterateKmers(readSequences[occurrencesPerChunk[i][j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, k, [&kmersHere](const size_t kmer, const size_t pos)
-				{
-					kmersHere.insert(kmer);
-				});
+				const phmap::flat_hash_set<size_t>& kmersHere = solidKmersPerOccurrence[j];
 				size_t firstMatches = 0;
 				size_t secondMatches = 0;
 				for (size_t kmer : kmersHere)
