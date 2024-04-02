@@ -939,7 +939,7 @@ size_t getAllele(const TwobitString& readSequence, const size_t readStart, const
 }
 
 template <typename F>
-phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSolidKmers(const std::vector<TwobitString>& readSequences, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::pair<size_t, size_t>>& occurrences, const size_t kmerSize, const size_t minSolidThreshold, F callback)
+phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSolidKmers(const std::vector<TwobitString>& readSequences, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::pair<size_t, size_t>>& occurrences, const size_t kmerSize, const size_t minSolidThreshold, const bool allowTwoAlleleRepeats, F callback)
 {
 	std::vector<std::tuple<size_t, double, size_t, size_t>> kmers; // kmer, extrapolated-pos, occurrence, occurrence-pos
 	for (size_t j = 0; j < occurrences.size(); j++)
@@ -967,38 +967,76 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 		}
 		size_t clusterStart = kmerStart;
 		phmap::flat_hash_set<size_t> occurrencesHere;
-		bool currentlyValid = true;
+		bool currentlyNonrepetitive = true;
 		occurrencesHere.insert(std::get<2>(kmers[kmerStart]));
 		size_t clusterNum = 0;
 		for (size_t j = kmerStart+1; j <= i; j++)
 		{
 			if (j < i && std::get<1>(kmers[j]) < std::get<1>(kmers[j-1])+1)
 			{
-				if (currentlyValid)
+				if (occurrencesHere.count(std::get<2>(kmers[j])) == 1)
 				{
-					if (occurrencesHere.count(std::get<2>(kmers[j])) == 1)
-					{
-						currentlyValid = false;
-					}
-					occurrencesHere.insert(std::get<2>(kmers[j]));
+					currentlyNonrepetitive = false;
 				}
+				occurrencesHere.insert(std::get<2>(kmers[j]));
 				continue;
 			}
-			if (occurrencesHere.size() >= minSolidThreshold && currentlyValid)
+			if (occurrencesHere.size() >= minSolidThreshold && (currentlyNonrepetitive || allowTwoAlleleRepeats))
 			{
 				double minPos = std::get<1>(kmers[clusterStart]);
 				double maxPos = std::get<1>(kmers[j-1]);
+				assert(!currentlyNonrepetitive || j-clusterStart == occurrencesHere.size());
 				if (minPos + 1.0 > maxPos)
 				{
-					for (size_t k = clusterStart; k < j; k++)
+					if (!currentlyNonrepetitive && allowTwoAlleleRepeats)
 					{
-						solidKmers[std::get<2>(kmers[k])].emplace_back(std::get<3>(kmers[k]), std::get<0>(kmers[k]), clusterNum);
+						phmap::flat_hash_map<size_t, size_t> kmerCountPerOccurrence;
+						for (size_t k = clusterStart; k < j; k++)
+						{
+							kmerCountPerOccurrence[std::get<2>(kmers[k])] += 1;
+						}
+						phmap::flat_hash_set<size_t> foundCounts;
+						for (auto pair : kmerCountPerOccurrence)
+						{
+							foundCounts.insert(pair.second);
+						}
+						if (foundCounts.size() == 2)
+						{
+							size_t firstCount = *foundCounts.begin();
+							size_t secondCount = *(++foundCounts.begin());
+							assert(firstCount != secondCount);
+							for (auto pair : kmerCountPerOccurrence)
+							{
+								if (pair.second == firstCount)
+								{
+									// todo pos should be something reasonable not this. but nothing uses poses of repetitive kmers as of comment time
+									solidKmers[pair.first].emplace_back(std::numeric_limits<size_t>::max(), std::get<0>(kmers[kmerStart]), clusterNum);
+								}
+								else
+								{
+									assert(pair.second == secondCount);
+									// todo pos should be something reasonable not this. but nothing uses poses of repetitive kmers as of comment time
+									solidKmers[pair.first].emplace_back(std::numeric_limits<size_t>::max(), std::get<0>(kmers[kmerStart]), clusterNum+1);
+								}
+							}
+							clusterNum += 2;
+							validClusters[std::get<0>(kmers[clusterStart])].emplace_back(minPos-0.01, maxPos+0.01);
+							validClusters[std::get<0>(kmers[clusterStart])].emplace_back(minPos-0.01, maxPos+0.01);
+						}
 					}
-					clusterNum += 1;
-					validClusters[std::get<0>(kmers[clusterStart])].emplace_back(minPos-0.01, maxPos+0.01);
+					else
+					{
+						assert(j - clusterStart == occurrencesHere.size());
+						for (size_t k = clusterStart; k < j; k++)
+						{
+							solidKmers[std::get<2>(kmers[k])].emplace_back(std::get<3>(kmers[k]), std::get<0>(kmers[k]), clusterNum);
+						}
+						clusterNum += 1;
+						validClusters[std::get<0>(kmers[clusterStart])].emplace_back(minPos-0.01, maxPos+0.01);
+					}
 				}
 			}
-			currentlyValid = true;
+			currentlyNonrepetitive = true;
 			occurrencesHere.clear();
 			if (j < i)
 			{
@@ -1141,7 +1179,7 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 		std::vector<RankBitvector> matrix; // doesn't actually use rank in any way, but exposes uint64 for bitparallel hamming distance calculation
 		std::vector<std::pair<size_t, size_t>> clusters;
 		matrix.resize(occurrencesPerChunk[i].size());
-		auto validClusters = iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, 5, [&kmerClusterToColumn, &clusters, &matrix](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+		auto validClusters = iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, 5, true, [&kmerClusterToColumn, &clusters, &matrix](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 		{
 			assert(occurrenceID < matrix.size());
 			size_t column = std::numeric_limits<size_t>::max();
@@ -1364,7 +1402,7 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 		size_t lastKmer = std::numeric_limits<size_t>::max();
 		size_t lastCluster = std::numeric_limits<size_t>::max();
 		size_t lastKmerPos = std::numeric_limits<size_t>::max();
-		iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size(), [&occurrencesPerChunk, &readSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+		iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size(), false, [&occurrencesPerChunk, &readSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 		{
 			if (occurrenceID != lastOccurrence || lastKmer == std::numeric_limits<size_t>::max())
 			{
@@ -2682,7 +2720,7 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 		std::vector<phmap::flat_hash_set<size_t>> solidKmersPerOccurrence;
 		solidKmersPerOccurrence.resize(occurrencesPerChunk[i].size());
 		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToNumber;
-		iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size(), [&solidKmersPerOccurrence, &kmerClusterToNumber](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+		iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size(), true, [&solidKmersPerOccurrence, &kmerClusterToNumber](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 		{
 			size_t kmerkey = 0;
 			std::pair<size_t, size_t> key { kmer, clusterIndex };
