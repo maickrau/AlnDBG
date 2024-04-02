@@ -941,120 +941,81 @@ size_t getAllele(const TwobitString& readSequence, const size_t readStart, const
 template <typename F>
 phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSolidKmers(const std::vector<TwobitString>& readSequences, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::pair<size_t, size_t>>& occurrences, const size_t kmerSize, const size_t minSolidThreshold, F callback)
 {
-	phmap::flat_hash_map<size_t, size_t> kmerCounts;
-	phmap::flat_hash_set<size_t> kmersRepeating;
+	std::vector<std::tuple<size_t, double, size_t, size_t>> kmers; // kmer, extrapolated-pos, occurrence, occurrence-pos
 	for (size_t j = 0; j < occurrences.size(); j++)
 	{
 		auto t = chunksPerRead[occurrences[j].first][occurrences[j].second];
 		assert(!NonexistantChunk(std::get<2>(t)));
-		phmap::flat_hash_map<size_t, size_t> kmersHere;
-		phmap::flat_hash_set<size_t> kmersRepeatingHere;
-		iterateKmers(readSequences[occurrences[j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&kmersHere, &kmersRepeatingHere, j](const size_t kmer, const size_t pos)
+		iterateKmers(readSequences[occurrences[j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&kmers, t, j](const size_t kmer, const size_t pos)
 		{
-			if (kmersHere.count(kmer) == 0)
-			{
-				kmersHere[kmer] = pos;
-				return;
-			}
-			if (kmersHere.at(kmer) + 100 < pos)
-			{
-				kmersHere[kmer] = pos;
-				return;
-			}
-			else
-			{
-				kmersRepeatingHere.insert(kmer);
-			}
-		});
-		kmersRepeating.insert(kmersRepeatingHere.begin(), kmersRepeatingHere.end());
-		for (auto pair : kmersHere)
-		{
-			if (kmersRepeating.count(pair.first) == 1) continue;
-			kmerCounts[pair.first] += 1;
-		}
-	}
-	phmap::flat_hash_set<size_t> kmersEverywhere;
-	for (auto pair : kmerCounts)
-	{
-		if (kmersRepeating.count(pair.first) == 1) continue;
-		if (pair.second < minSolidThreshold) continue;
-		kmersEverywhere.insert(pair.first);
-	}
-	phmap::flat_hash_map<size_t, std::vector<std::pair<double, size_t>>> kmerPositionsInChunks;
-	for (size_t j = 0; j < occurrences.size(); j++)
-	{
-		auto t = chunksPerRead[occurrences[j].first][occurrences[j].second];
-		assert(!NonexistantChunk(std::get<2>(t)));
-		phmap::flat_hash_map<size_t, size_t> kmersHere;
-		phmap::flat_hash_set<size_t> kmersRepeatingHere;
-		iterateKmers(readSequences[occurrences[j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&kmersEverywhere, &kmerPositionsInChunks, t, j](const size_t kmer, const size_t pos)
-		{
-			if (kmersEverywhere.count(kmer) == 0) return;
-			kmerPositionsInChunks[kmer].emplace_back(100.0 * (double)(pos) / (double)(std::get<1>(t) - std::get<0>(t)), j);
+			double extrapolatedPos = 100.0 * (double)(pos) / (double)(std::get<1>(t) - std::get<0>(t));
+			kmers.emplace_back(kmer, extrapolatedPos, j, pos);
 		});
 	}
+	std::sort(kmers.begin(), kmers.end());
+	size_t kmerStart = 0;
 	phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> validClusters;
-	size_t numClusters = 0;
-	for (auto& pair : kmerPositionsInChunks)
+	std::vector<std::vector<std::tuple<size_t, size_t, size_t>>> solidKmers; // pos, kmer, cluster
+	solidKmers.resize(occurrences.size());
+	for (size_t i = 1; i <= kmers.size(); i++)
 	{
-		phmap::flat_hash_set<size_t> occurrencesHere;
-		size_t clusterStart = 0;
-		bool currentlyValid = true;
-		std::sort(pair.second.begin(), pair.second.end());
-		occurrencesHere.insert(pair.second[0].second);
-		for (size_t j = 1; j <= pair.second.size(); j++)
+		if (i < kmers.size() && std::get<0>(kmers[i]) == std::get<0>(kmers[i-1])) continue;
+		if (i - kmerStart < minSolidThreshold)
 		{
-			if (j == pair.second.size() || pair.second[j].first > pair.second[j-1].first + 1.0)
+			kmerStart = i;
+			continue;
+		}
+		size_t clusterStart = kmerStart;
+		phmap::flat_hash_set<size_t> occurrencesHere;
+		bool currentlyValid = true;
+		occurrencesHere.insert(std::get<2>(kmers[kmerStart]));
+		size_t clusterNum = 0;
+		for (size_t j = kmerStart+1; j <= i; j++)
+		{
+			if (j < i && std::get<1>(kmers[i]) < std::get<1>(kmers[i-1])+1)
 			{
 				if (currentlyValid)
 				{
-					if (occurrencesHere.size() >= minSolidThreshold)
+					if (occurrencesHere.count(std::get<2>(kmers[j])) == 1)
 					{
-						double minPos = pair.second[clusterStart].first;
-						double maxPos = pair.second[j-1].first;
-						if (minPos + 1.0 > maxPos)
-						{
-							validClusters[pair.first].emplace_back(minPos-0.01, maxPos+0.01);
-							numClusters += 1;
-						}
+						currentlyValid = false;
 					}
+					occurrencesHere.insert(std::get<2>(kmers[j]));
 				}
-				clusterStart = j;
-				currentlyValid = true;
-				occurrencesHere.clear();
+				continue;
 			}
-			if (j < pair.second.size())
+			if (occurrencesHere.size() >= minSolidThreshold && currentlyValid)
 			{
-				if (occurrencesHere.count(pair.second[j].second) == 1) currentlyValid = false;
-				occurrencesHere.insert(pair.second[j].second);
+				double minPos = std::get<1>(kmers[clusterStart]);
+				double maxPos = std::get<1>(kmers[j-1]);
+				if (minPos + 1.0 > maxPos)
+				{
+					for (size_t k = clusterStart; k < j; k++)
+					{
+						solidKmers[std::get<2>(kmers[k])].emplace_back(std::get<3>(kmers[k]), std::get<0>(kmers[k]), clusterNum);
+					}
+					clusterNum += 1;
+					validClusters[std::get<0>(kmers[clusterStart])].emplace_back(minPos-0.01, maxPos+0.01);
+				}
 			}
+			currentlyValid = true;
+			occurrencesHere.clear();
+			if (j < i)
+			{
+				occurrencesHere.insert(std::get<2>(kmers[j]));
+			}
+			clusterStart = j;
 		}
+		kmerStart = i;
 	}
-	for (size_t j = 0; j < occurrences.size(); j++)
+	for (size_t i = 0; i < solidKmers.size(); i++)
 	{
-		auto t = chunksPerRead[occurrences[j].first][occurrences[j].second];
-		assert(!NonexistantChunk(std::get<2>(t)));
-		phmap::flat_hash_map<size_t, size_t> kmersHere;
-		phmap::flat_hash_set<size_t> kmersRepeatingHere;
-		size_t lastKmer = std::numeric_limits<size_t>::max();
-		size_t lastCluster = std::numeric_limits<size_t>::max();
-		size_t lastKmerPos = std::numeric_limits<size_t>::max();
-		iterateKmers(readSequences[occurrences[j].first], std::get<0>(t), std::get<1>(t), std::get<2>(t) & firstBitUint64_t, kmerSize, [&kmersEverywhere, &lastKmer, &lastCluster, &lastKmerPos, &validClusters, &readSequences, kmerSize, t, j, callback](const size_t kmer, const size_t pos)
+		std::sort(solidKmers[i].begin(), solidKmers[i].end());
+		for (auto kmer : solidKmers[i])
 		{
-			if (kmersEverywhere.count(kmer) == 0) return;
-			double extrapolatedPos = 100.0 * (double)(pos) / (double)(std::get<1>(t) - std::get<0>(t));
-			if (validClusters.count(kmer) == 0) return;
-			size_t clusterIndex = std::numeric_limits<size_t>::max();
-			for (size_t cluster = 0; cluster < validClusters.at(kmer).size(); cluster++)
-			{
-				if (validClusters.at(kmer)[cluster].first > extrapolatedPos) continue;
-				if (validClusters.at(kmer)[cluster].second < extrapolatedPos) continue;
-				if (clusterIndex != std::numeric_limits<size_t>::max()) continue;
-				clusterIndex = cluster;
-			}
-			if (clusterIndex == std::numeric_limits<size_t>::max()) return;
-			callback(j, std::get<0>(t), std::get<1>(t), std::get<2>(t), kmer, clusterIndex, pos);
-		});
+			auto t = chunksPerRead[occurrences[i].first][occurrences[i].second];
+			callback(i, std::get<0>(t), std::get<1>(t), std::get<2>(t), std::get<1>(kmer), std::get<2>(kmer), std::get<0>(kmer));
+		}
 	}
 	return validClusters;
 }
