@@ -207,6 +207,10 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 		assert(tipConnections.count(otherEnd) == 1);
 		if (tipConnections.at(otherEnd).size() != 1) continue;
 		assert((tipConnections.at(otherEnd).begin()->first) == t);
+		if (otherEnd == t)
+		{
+			if (coverages[t & maskUint64_t] == 2) continue; // bunch of fake inverted should-be-duplex reads in ONT, skip them. todo this should also check the coverage is all from just one read
+		}
 		allowedTips.emplace(t, otherEnd);
 		allowedTips.emplace(otherEnd, t);
 //		std::cerr << "allowed tip from " << ((t & firstBitUint64_t) ? ">" : "<") << (t & maskUint64_t) << " to " << ((otherEnd & firstBitUint64_t) ? ">" : "<") << (otherEnd & maskUint64_t) << std::endl;
@@ -4358,7 +4362,7 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
 	result.resize(rawReadSequences.size());
 	std::vector<std::string> readFiles { };
-	MBG::ReadpartIterator partIterator { 31, 1, MBG::ErrorMasking::Microsatellite, 1, readFiles, false, "" };
+	MBG::ReadpartIterator partIterator { 31, 1, MBG::ErrorMasking::No, 1, readFiles, false, "" };
 	phmap::flat_hash_map<uint64_t, size_t> hashToNode;
 	std::mutex resultMutex;
 	iterateMultithreaded(0, rawReadSequences.size(), numThreads, [&result, &rawReadSequences, &partIterator, &hashToNode, &resultMutex, k, windowSize, middleSkip](const size_t i)
