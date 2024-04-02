@@ -972,7 +972,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 		size_t clusterNum = 0;
 		for (size_t j = kmerStart+1; j <= i; j++)
 		{
-			if (j < i && std::get<1>(kmers[i]) < std::get<1>(kmers[i-1])+1)
+			if (j < i && std::get<1>(kmers[j]) < std::get<1>(kmers[j-1])+1)
 			{
 				if (currentlyValid)
 				{
