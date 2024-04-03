@@ -1083,7 +1083,7 @@ bool siteIsPerfectlyPhased(const std::vector<RankBitvector>& columns, const size
 	const std::vector<uint64_t>& leftbits = columns[left].getBits();
 	const std::vector<uint64_t>& rightbits = columns[right].getBits();
 	assert(leftbits.size() == rightbits.size());
-	for (size_t i = 0; i < leftbits.size()-1; i++)
+	for (size_t i = 0; i*64+64 < columns[left].size(); i++)
 	{
 		oneone += popcount(leftbits[i] & rightbits[i]);
 		zeroone += popcount(~leftbits[i] & rightbits[i]);
@@ -1096,12 +1096,11 @@ bool siteIsPerfectlyPhased(const std::vector<RankBitvector>& columns, const size
 	{
 		mask >>= (64-remainingBits);
 	}
-	oneone += popcount((leftbits.back() & rightbits.back()) & mask);
-	zeroone += popcount((~leftbits.back() & rightbits.back()) & mask);
-	zerozero += popcount((~leftbits.back() & ~rightbits.back()) & mask);
-	onezero += popcount((leftbits.back() & ~rightbits.back()) & mask);
-	if (oneone >= 5 && zerozero >= 5 && onezero == 0 && zeroone == 0) return true;
-	if (oneone >= 0 && zerozero >= 0 && onezero >= 5 && zeroone >= 5) return true;
+	oneone += popcount((leftbits[(columns[left].size()-1)/64] & rightbits[(columns[left].size()-1)/64]) & mask);
+	zeroone += popcount((~leftbits[(columns[left].size()-1)/64] & rightbits[(columns[left].size()-1)/64]) & mask);
+	zerozero += popcount((~leftbits[(columns[left].size()-1)/64] & ~rightbits[(columns[left].size()-1)/64]) & mask);
+	onezero += popcount((leftbits[(columns[left].size()-1)/64] & ~rightbits[(columns[left].size()-1)/64]) & mask);
+	if (oneone == 0 && zerozero == 0 && onezero >= 5 && zeroone >= 5) return true;
 	return false;
 }
 
@@ -1115,7 +1114,7 @@ bool siteIsInformative(const std::vector<RankBitvector>& columns, const size_t l
 	const std::vector<uint64_t>& leftbits = columns[left].getBits();
 	const std::vector<uint64_t>& rightbits = columns[right].getBits();
 	assert(leftbits.size() == rightbits.size());
-	for (size_t i = 0; i < leftbits.size()-1; i++)
+	for (size_t i = 0; i*64+64 < columns[left].size(); i++)
 	{
 		oneone += popcount(leftbits[i] & rightbits[i]);
 		zeroone += popcount(~leftbits[i] & rightbits[i]);
@@ -1128,10 +1127,10 @@ bool siteIsInformative(const std::vector<RankBitvector>& columns, const size_t l
 	{
 		mask >>= (64-remainingBits);
 	}
-	oneone += popcount((leftbits.back() & rightbits.back()) & mask);
-	zeroone += popcount((~leftbits.back() & rightbits.back()) & mask);
-	zerozero += popcount((~leftbits.back() & ~rightbits.back()) & mask);
-	onezero += popcount((leftbits.back() & ~rightbits.back()) & mask);
+	oneone += popcount((leftbits[(columns[left].size()-1)/64] & rightbits[(columns[left].size()-1)/64]) & mask);
+	zeroone += popcount((~leftbits[(columns[left].size()-1)/64] & rightbits[(columns[left].size()-1)/64]) & mask);
+	zerozero += popcount((~leftbits[(columns[left].size()-1)/64] & ~rightbits[(columns[left].size()-1)/64]) & mask);
+	onezero += popcount((leftbits[(columns[left].size()-1)/64] & ~rightbits[(columns[left].size()-1)/64]) & mask);
 	if (zerozero + zeroone < 5) return false;
 	if (onezero + oneone < 5) return false;
 	if (zerozero + onezero < 5) return false;
@@ -1339,9 +1338,9 @@ void splitPerCorrectedKmerPhasing(const std::vector<TwobitString>& readSequences
 			}
 		}
 		size_t columnsInInformative = 0;
-		for (size_t i = 0; i < informativeSite.size(); i++)
+		for (size_t j = 0; j < informativeSite.size(); j++)
 		{
-			if (informativeSite[i]) columnsInInformative += 1;
+			if (informativeSite[j]) columnsInInformative += 1;
 		}
 		if (columnsInInformative < 2)
 		{
@@ -4688,7 +4687,7 @@ void writeReadChunkSequences(const std::string& filename, const std::vector<std:
 		{
 			size_t chunk = std::get<2>(t) & maskUint64_t;
 			bool fw = std::get<2>(t) & firstBitUint64_t;
-			std::string seq = readSequences[i].substr(std::get<0>(t), std::get<1>(t)-std::get<0>(t));
+			std::string seq = readSequences[i].substr(std::get<0>(t), std::get<1>(t)-std::get<0>(t)+1);
 			if (!fw) seq = MBG::revCompRaw(seq);
 			file << chunk << " " << readNames[i] << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << seq << std::endl;
 		}
@@ -4709,7 +4708,7 @@ void writeReadUnitigSequences(const std::string& filename, const std::vector<std
 			{
 				size_t unitig = readPaths[i][j].path[k] & maskUint64_t;
 				bool fw = readPaths[i][j].path[k] & firstBitUint64_t;
-				std::string seq = readSequences[i].substr(readPaths[i][j].readPartInPathnode[k].first, readPaths[i][j].readPartInPathnode[k].second - readPaths[i][j].readPartInPathnode[k].first);
+				std::string seq = readSequences[i].substr(readPaths[i][j].readPartInPathnode[k].first, readPaths[i][j].readPartInPathnode[k].second - readPaths[i][j].readPartInPathnode[k].first+1);
 				if (!fw) seq = MBG::revCompRaw(seq);
 				size_t unitigStart = 0;
 				size_t unitigEnd = graph.unitigLengths[unitig];
@@ -4881,12 +4880,18 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	writeReadChunkSequences("sequences-chunk8.txt", chunksPerRead, readSequences, readNames);
 	writeGraph("fakegraph8.gfa", "fakepaths8.txt", chunksPerRead);
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, readNames, rawReadLengths);
 	splitPerCorrectedKmerPhasing(readSequences, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph8.5.gfa", "fakepaths8.5.txt", chunksPerRead);
 	writeUnitigGraph("graph-round8.5.gfa", "paths8.5.gaf", chunksPerRead, readNames, rawReadLengths);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerCorrectedKmerPhasing(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	writeGraph("fakegraph8.6.gfa", "fakepaths8.6.txt", chunksPerRead);
+	writeUnitigGraph("graph-round8.6.gfa", "paths8.6.gaf", chunksPerRead, readNames, rawReadLengths);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
