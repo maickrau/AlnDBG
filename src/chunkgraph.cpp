@@ -1370,12 +1370,13 @@ void splitPerCorrectedKmerPhasing(const std::vector<TwobitString>& readSequences
 				closestNeighborAndMismatches.emplace_back(mismatches, k);
 			}
 			std::sort(closestNeighborAndMismatches.begin(), closestNeighborAndMismatches.end());
-			closestNeighborAndMismatches.emplace_back(0, j);
 			size_t endIndex = countNeighbors;
 			while (endIndex+1 < closestNeighborAndMismatches.size() && closestNeighborAndMismatches[endIndex+1].first == closestNeighborAndMismatches[countNeighbors].first)
 			{
 				endIndex += 1;
 			}
+			closestNeighborAndMismatches.insert(closestNeighborAndMismatches.begin(), std::make_pair(0, j));
+			endIndex += 1;
 			correctedMatrix.emplace_back();
 			for (size_t k = 0; k < matrix[j].size(); k++)
 			{
