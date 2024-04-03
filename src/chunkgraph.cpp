@@ -1073,6 +1073,38 @@ size_t getHammingdistance(const RankBitvector& left, const RankBitvector& right)
 	return result;
 }
 
+bool siteIsPerfectlyPhased(const std::vector<RankBitvector>& columns, const size_t left, const size_t right)
+{
+	size_t zerozero = 0;
+	size_t zeroone = 0;
+	size_t onezero = 0;
+	size_t oneone = 0;
+	assert(columns[left].size() == columns[right].size());
+	const std::vector<uint64_t>& leftbits = columns[left].getBits();
+	const std::vector<uint64_t>& rightbits = columns[right].getBits();
+	assert(leftbits.size() == rightbits.size());
+	for (size_t i = 0; i < leftbits.size()-1; i++)
+	{
+		oneone += popcount(leftbits[i] & rightbits[i]);
+		zeroone += popcount(~leftbits[i] & rightbits[i]);
+		zerozero += popcount(~leftbits[i] & ~rightbits[i]);
+		onezero += popcount(leftbits[i] & ~rightbits[i]);
+	}
+	size_t remainingBits = columns[left].size() % 64;
+	uint64_t mask = 0xFFFFFFFFFFFFFFFFull;
+	if (remainingBits > 0) // remainingbits 0 means the whole block is valid
+	{
+		mask >>= (64-remainingBits);
+	}
+	oneone += popcount((leftbits.back() & rightbits.back()) & mask);
+	zeroone += popcount((~leftbits.back() & rightbits.back()) & mask);
+	zerozero += popcount((~leftbits.back() & ~rightbits.back()) & mask);
+	onezero += popcount((leftbits.back() & ~rightbits.back()) & mask);
+	if (oneone >= 5 && zerozero >= 5 && onezero == 0 && zeroone == 0) return true;
+	if (oneone >= 0 && zerozero >= 0 && onezero >= 5 && zeroone >= 5) return true;
+	return false;
+}
+
 bool siteIsInformative(const std::vector<RankBitvector>& columns, const size_t left, const size_t right)
 {
 	size_t zerozero = 0;
@@ -1112,6 +1144,24 @@ bool siteIsInformative(const std::vector<RankBitvector>& columns, const size_t l
 	return true;
 }
 
+template <typename T>
+void filterVector(std::vector<T>& vec, const std::vector<bool>& keep)
+{
+	std::vector<size_t> getIndexFrom;
+	for (size_t i = 0; i < keep.size(); i++)
+	{
+		if (!keep[i]) continue;
+		getIndexFrom.emplace_back(i);
+	}
+	assert(getIndexFrom.size() <= keep.size());
+	assert(getIndexFrom.size() == 0 || getIndexFrom.back() < keep.size());
+	for (size_t i = 0; i < getIndexFrom.size(); i++)
+	{
+		vec[i] = vec[getIndexFrom[i]];
+	}
+	vec.resize(getIndexFrom.size());
+}
+
 void filterMatrix(std::vector<RankBitvector>& matrix, const std::vector<bool>& keep)
 {
 	std::vector<size_t> getIndexFrom;
@@ -1131,6 +1181,270 @@ void filterMatrix(std::vector<RankBitvector>& matrix, const std::vector<bool>& k
 		}
 		matrix[i].resize(getIndexFrom.size());
 	}
+}
+
+void splitPerCorrectedKmerPhasing(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+{
+	std::cerr << "splitting by corrected kmer phasing" << std::endl;
+	const size_t countNeighbors = 5;
+	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
+			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
+			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
+		}
+	}
+	std::vector<size_t> iterationOrder;
+	iterationOrder.reserve(occurrencesPerChunk.size());
+	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	{
+		iterationOrder.emplace_back(i);
+	}
+	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
+	size_t nextNum = 0;
+	size_t countSplitted = 0;
+	std::mutex resultMutex;
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, &iterationOrder, kmerSize](const size_t iterationIndex)
+	{
+		auto startTime = getTime();
+		const size_t i = iterationOrder[iterationIndex];
+		if (occurrencesPerChunk[i].size() < 10)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			size_t newID = nextNum;
+			nextNum += 1;
+			std::cerr << "corrected kmer skipped chunk " << i << " coverage " << occurrencesPerChunk[i].size() << ", chunk index " << newID << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
+			}
+			return;
+		}
+		phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToColumn;
+		std::vector<RankBitvector> matrix; // doesn't actually use rank in any way, but exposes uint64 for bitparallel hamming distance calculation
+		std::vector<std::pair<size_t, size_t>> clusters;
+		matrix.resize(occurrencesPerChunk[i].size());
+		auto validClusters = iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, 5, true, [&kmerClusterToColumn, &clusters, &matrix](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+		{
+			assert(occurrenceID < matrix.size());
+			size_t column = std::numeric_limits<size_t>::max();
+			if (kmerClusterToColumn.count(std::make_pair(kmer, clusterIndex)) == 1)
+			{
+				column = kmerClusterToColumn.at(std::make_pair(kmer, clusterIndex));
+			}
+			else
+			{
+				column = kmerClusterToColumn.size();
+				kmerClusterToColumn[std::make_pair(kmer, clusterIndex)] = column;
+				clusters.emplace_back(std::make_pair(kmer, clusterIndex));
+			}
+			if (matrix[occurrenceID].size() <= column)
+			{
+				assert(column < kmerClusterToColumn.size());
+				matrix[occurrenceID].resize(kmerClusterToColumn.size());
+			}
+			assert(!matrix[occurrenceID].get(column));
+			matrix[occurrenceID].set(column, true);
+		});
+		std::vector<std::pair<double, double>> kmerLocation;
+		kmerLocation.resize(clusters.size(), std::make_pair(-1, -1));
+		for (auto pair : kmerClusterToColumn)
+		{
+			size_t index = pair.second;
+			assert(kmerLocation[index].first == -1);
+			kmerLocation[index] = validClusters.at(pair.first.first)[pair.first.second];
+		}
+		for (size_t i = 0; i < kmerLocation.size(); i++)
+		{
+			assert(kmerLocation[i].first != -1);
+		}
+		for (size_t j = 0; j < matrix.size(); j++)
+		{
+			if (matrix[j].size() == kmerClusterToColumn.size()) continue;
+			assert(matrix[j].size() < kmerClusterToColumn.size());
+			matrix[j].resize(kmerClusterToColumn.size());
+		}
+		size_t columnsInUnfiltered = matrix[0].size();
+		std::vector<bool> covered;
+		covered.resize(matrix[0].size(), false);
+		size_t columnsInCovered = 0;
+		std::vector<RankBitvector> columns;
+		for (size_t j = 0; j < matrix[0].size(); j++)
+		{
+			columns.emplace_back();
+			size_t zeros = 0;
+			size_t ones = 0;
+			for (size_t k = 0; k < matrix.size(); k++)
+			{
+				assert(matrix[k].size() == matrix[0].size());
+				columns.back().push_back(matrix[k].get(j));
+				if (matrix[k].get(j))
+				{
+					ones += 1;
+				}
+				else
+				{
+					zeros += 1;
+				}
+			}
+			if (zeros >= 5 && ones >= 5)
+			{
+				covered[j] = true;
+				columnsInCovered += 1;
+			}
+		}
+		if (columnsInCovered < 2)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			size_t newID = nextNum;
+			nextNum += 1;
+			auto endTime = getTime();
+			std::cerr << "corrected kmer skipped chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " columns " << columnsInUnfiltered << " due to covered " << columnsInCovered << ", chunk index " << newID << " time " << formatTime(startTime, endTime) << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
+			}
+			return;
+		}
+		std::vector<bool> informativeSite;
+		informativeSite.resize(matrix[0].size(), false);
+		assert(clusters.size() == informativeSite.size());
+		assert(clusters.size() == kmerClusterToColumn.size());
+		for (size_t j = 0; j < informativeSite.size(); j++)
+		{
+			if (!covered[j]) continue;
+			for (size_t k = 0; k < j; k++)
+			{
+				if (!covered[k]) continue;
+				assert(validClusters.at(clusters[j].first).size() > clusters[j].second);
+				assert(validClusters.at(clusters[k].first).size() > clusters[k].second);
+				if (validClusters.at(clusters[j].first)[clusters[j].second].first < validClusters.at(clusters[k].first)[clusters[k].second].second + 1)
+				{
+					if (validClusters.at(clusters[j].first)[clusters[j].second].second + 1 > validClusters.at(clusters[k].first)[clusters[k].second].first)
+					{
+						continue;
+					}
+				}
+				assert(j != k);
+				if (informativeSite[j] && informativeSite[k]) continue;
+				if (siteIsInformative(columns, j, k) || siteIsInformative(columns, k, j))
+				{
+					informativeSite[j] = true;
+					informativeSite[k] = true;
+				}
+			}
+		}
+		size_t columnsInInformative = 0;
+		for (size_t i = 0; i < informativeSite.size(); i++)
+		{
+			if (informativeSite[i]) columnsInInformative += 1;
+		}
+		if (columnsInInformative < 2)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			size_t newID = nextNum;
+			nextNum += 1;
+			auto endTime = getTime();
+			std::cerr << "corrected kmer skipped chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " due to informative " << columnsInInformative << ", chunk index " << newID << " time " << formatTime(startTime, endTime) << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
+			}
+			return;
+		}
+		filterVector(columns, informativeSite);
+		filterVector(kmerLocation, informativeSite);
+		filterMatrix(matrix, informativeSite);
+		std::vector<RankBitvector> correctedMatrix;
+		for (size_t j = 0; j < matrix.size(); j++)
+		{
+			std::vector<std::pair<size_t, size_t>> closestNeighborAndMismatches;
+			for (size_t k = 0; k < matrix.size(); k++)
+			{
+				if (j == k) continue;
+				size_t mismatches = getHammingdistance(matrix[k], matrix[j]);
+				closestNeighborAndMismatches.emplace_back(mismatches, k);
+			}
+			std::sort(closestNeighborAndMismatches.begin(), closestNeighborAndMismatches.end());
+			closestNeighborAndMismatches.emplace_back(0, j);
+			size_t endIndex = countNeighbors;
+			while (endIndex+1 < closestNeighborAndMismatches.size() && closestNeighborAndMismatches[endIndex+1].first == closestNeighborAndMismatches[countNeighbors].first)
+			{
+				endIndex += 1;
+			}
+			correctedMatrix.emplace_back();
+			for (size_t k = 0; k < matrix[j].size(); k++)
+			{
+				size_t ones = 0;
+				for (size_t m = 0; m <= endIndex; m++)
+				{
+					if (matrix[closestNeighborAndMismatches[m].second].get(k)) ones += 1;
+				}
+				correctedMatrix.back().push_back(ones >= (endIndex+1)/2);
+			}
+		}
+		assert(correctedMatrix.size() == matrix.size());
+		assert(correctedMatrix.size() == occurrencesPerChunk[i].size());
+		std::vector<bool> phasingSite;
+		phasingSite.resize(matrix[0].size(), false);
+		for (size_t j = 0; j < matrix[0].size(); j++)
+		{
+			for (size_t k = 0; k < j; k++)
+			{
+				if (kmerLocation[j].first < kmerLocation[k].second+1 && kmerLocation[j].second + 1 > kmerLocation[k].first) continue;
+				if (phasingSite[j] && phasingSite[k]) continue;
+				if (siteIsPerfectlyPhased(columns, j, k))
+				{
+					phasingSite[j] = true;
+					phasingSite[k] = true;
+				}
+			}
+		}
+		filterMatrix(correctedMatrix, phasingSite);
+		size_t numPhasingSites = correctedMatrix[0].size();
+		std::vector<size_t> parent;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			parent.emplace_back(j);
+		}
+		for (size_t j = 1; j < correctedMatrix.size(); j++)
+		{
+			assert(correctedMatrix[j].size() == correctedMatrix[0].size());
+			for (size_t k = 0; k < j; k++)
+			{
+				size_t mismatches = getHammingdistance(correctedMatrix[j], correctedMatrix[k]);
+				if (mismatches == 0)
+				{
+					merge(parent, j, k);
+				}
+			}
+		}
+		auto endTime = getTime();
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			size_t first = nextNum;
+			phmap::flat_hash_map<size_t, size_t> keyToNode;
+			for (size_t j = 0; j < parent.size(); j++)
+			{
+				size_t key = find(parent, j);
+				if (keyToNode.count(key) == 1) continue;
+				keyToNode[key] = nextNum;
+				nextNum += 1;
+			}
+			if (keyToNode.size() >= 2) countSplitted += 1;
+			size_t last = nextNum-1;
+			std::cerr << "corrected kmer splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " informative " << columnsInInformative << " phasing sites " << numPhasingSites << " to " << keyToNode.size() << " chunks range " << first << " - " << last << " time " << formatTime(startTime, endTime) << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
+			}
+		}
+	});
+	std::cerr << "corrected kmer phasing splitted " << countSplitted << " chunks" << std::endl;
 }
 
 void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
@@ -4568,6 +4882,10 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph8.gfa", "fakepaths8.txt", chunksPerRead);
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, readNames, rawReadLengths);
+	splitPerCorrectedKmerPhasing(readSequences, chunksPerRead, 11, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	writeGraph("fakegraph8.5.gfa", "fakepaths8.5.txt", chunksPerRead);
+	writeUnitigGraph("graph-round8.5.gfa", "paths8.5.gaf", chunksPerRead, readNames, rawReadLengths);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerAllelePhasingWithinChunk(readSequences, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
