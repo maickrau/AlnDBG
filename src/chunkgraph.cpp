@@ -4879,6 +4879,10 @@ void makeGraph(const std::vector<std::string>& readNames, const std::vector<size
 	writeUnitigGraph("graph-round7.gfa", "paths7.gaf", chunksPerRead, readNames, rawReadLengths);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
+	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
+	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
+	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
+	splitPerNearestNeighborPhasing(readSequences, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeReadChunkSequences("sequences-chunk8.txt", chunksPerRead, readSequences, readNames);
 	writeGraph("fakegraph8.gfa", "fakepaths8.txt", chunksPerRead);
