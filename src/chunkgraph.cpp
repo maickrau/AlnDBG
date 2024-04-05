@@ -1182,10 +1182,9 @@ void filterMatrix(std::vector<RankBitvector>& matrix, const std::vector<bool>& k
 	}
 }
 
-void splitPerCorrectedKmerPhasing(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+template <typename F>
+void iterateChunksByCoverage(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, F callback)
 {
-	std::cerr << "splitting by corrected kmer phasing" << std::endl;
-	const size_t countNeighbors = 5;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -1204,13 +1203,22 @@ void splitPerCorrectedKmerPhasing(const std::vector<TwobitString>& readSequences
 		iterationOrder.emplace_back(i);
 	}
 	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&occurrencesPerChunk, &iterationOrder, callback](const size_t iterationIndex)
+	{
+		callback(iterationOrder[iterationIndex], occurrencesPerChunk);
+	});
+}
+
+void splitPerCorrectedKmerPhasing(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+{
+	std::cerr << "splitting by corrected kmer phasing" << std::endl;
+	const size_t countNeighbors = 5;
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, &iterationOrder, kmerSize](const size_t iterationIndex)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences, &countSplitted, kmerSize](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		auto startTime = getTime();
-		const size_t i = iterationOrder[iterationIndex];
 		if (occurrencesPerChunk[i].size() < 10)
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
@@ -1452,31 +1460,12 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 	std::cerr << "splitting by nearest neighbor phasing" << std::endl;
 	const size_t countNeighbors = 5;
 	const size_t countDifferences = 100;
-	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-		{
-			auto t = chunksPerRead[i][j];
-			if (NonexistantChunk(std::get<2>(t))) continue;
-			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
-			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
-		}
-	}
-	std::vector<size_t> iterationOrder;
-	iterationOrder.reserve(occurrencesPerChunk.size());
-	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
-	{
-		iterationOrder.emplace_back(i);
-	}
-	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, &iterationOrder, kmerSize](const size_t iterationIndex)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences, &countSplitted, kmerSize](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		auto startTime = getTime();
-		const size_t i = iterationOrder[iterationIndex];
 		if (occurrencesPerChunk[i].size() < 10)
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
@@ -1684,21 +1673,10 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by allele phasing" << std::endl;
-	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-		{
-			auto t = chunksPerRead[i][j];
-			if (NonexistantChunk(std::get<2>(t))) continue;
-			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
-			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
-		}
-	}
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, kmerSize](const size_t i)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences, &countSplitted, kmerSize](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		if (occurrencesPerChunk[i].size() < 10)
 		{
@@ -1843,9 +1821,8 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, &countSplitted, &iterationOrder, kmerSize](const size_t iterationIndex)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences, &countSplitted, &iterationOrder, kmerSize](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
-		const size_t i = iterationOrder[iterationIndex];
 		// auto startTime = getTime();
 		if (occurrencesPerChunk[i].size() < 10)
 		{
@@ -2118,20 +2095,9 @@ void splitPerAllUniqueKmerSVs(const std::vector<TwobitString>& readSequences, st
 	std::cerr << "splitting by all-unique kmers" << std::endl;
 	const size_t maxDistanceDifference = 50;
 	const size_t k = 11;
-	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-		{
-			auto t = chunksPerRead[i][j];
-			if (NonexistantChunk(std::get<2>(t))) continue;
-			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
-			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
-		}
-	}
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, k](const size_t i)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences, k](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		phmap::flat_hash_set<size_t> kmersEverywhere;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
@@ -2226,20 +2192,9 @@ void countGoodishKmersInChunks(const std::vector<TwobitString>& readSequences, s
 	std::cerr << "counting goodish kmers" << std::endl;
 	const size_t k = 11;
 	const size_t distance = 100;
-	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-		{
-			auto t = chunksPerRead[i][j];
-			if (NonexistantChunk(std::get<2>(t))) continue;
-			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
-			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
-		}
-	}
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, k, distance](const size_t i)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences, k, distance](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		phmap::flat_hash_set<size_t> kmersEverywhere;
 		size_t averageSize = 0;
@@ -2344,20 +2299,9 @@ void countGoodKmersInChunks(const std::vector<TwobitString>& readSequences, std:
 {
 	std::cerr << "counting good kmers" << std::endl;
 	const size_t k = 11;
-	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-		{
-			auto t = chunksPerRead[i][j];
-			if (NonexistantChunk(std::get<2>(t))) continue;
-			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
-			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
-		}
-	}
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, k](const size_t i)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences, k](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		phmap::flat_hash_set<size_t> kmersEverywhere;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
@@ -2776,20 +2720,9 @@ void splitPerBaseCounts(const std::vector<TwobitString>& readSequences, std::vec
 {
 	const size_t mismatchFloor = 10;
 	std::cerr << "splitting by base counts" << std::endl;
-	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-		{
-			auto t = chunksPerRead[i][j];
-			if (NonexistantChunk(std::get<2>(t))) continue;
-			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t) + 1);
-			occurrencesPerChunk[std::get<2>(t)].emplace_back(i, j);
-		}
-	}
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences, mismatchFloor](const size_t i)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		std::vector<std::vector<size_t>> countsPerOccurrence;
 		countsPerOccurrence.resize(occurrencesPerChunk[i].size());
@@ -3350,20 +3283,9 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 void splitPerMinHashes(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting by minhash" << std::endl;
-	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-		{
-			auto t = chunksPerRead[i][j];
-			if (NonexistantChunk(std::get<2>(t))) continue;
-			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t) + 1);
-			occurrencesPerChunk[std::get<2>(t)].emplace_back(i, j);
-		}
-	}
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &readSequences](const size_t i)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		phmap::flat_hash_map<size_t, size_t> parent;
 		std::vector<size_t> oneHashPerLocation;
