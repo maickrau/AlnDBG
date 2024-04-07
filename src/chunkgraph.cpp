@@ -1891,135 +1891,133 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by phasing kmers" << std::endl;
-	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	size_t countSplitted = 0;
+	std::mutex resultMutex;
+	std::vector<std::vector<std::pair<size_t, size_t>>> chunksNeedProcessing;
+	std::vector<std::vector<std::pair<size_t, size_t>>> chunksDoneProcessing;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
 			if (NonexistantChunk(std::get<2>(t))) continue;
-			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
-			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
+			if ((std::get<2>(t) & maskUint64_t) >= chunksNeedProcessing.size()) chunksNeedProcessing.resize((std::get<2>(t) & maskUint64_t)+1);
+			chunksNeedProcessing[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
 	}
-	std::vector<size_t> iterationOrder;
-	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	// biggest on top so starts processing first
+	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
+	iterateMultithreaded(0, numThreads, numThreads, [&readSequences, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, kmerSize](size_t dummy)
 	{
-		iterationOrder.emplace_back(i);
-	}
-	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
-	size_t nextNum = 0;
-	size_t countSplitted = 0;
-	std::mutex resultMutex;
-	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences, &countSplitted, &iterationOrder, kmerSize](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
-	{
-		auto startTime = getTime();
-		if (occurrencesPerChunk[i].size() < 10)
+		while (true)
 		{
-			std::lock_guard<std::mutex> lock { resultMutex };
-			size_t newID = nextNum;
-			nextNum += 1;
-			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			std::vector<std::pair<size_t, size_t>> chunkBeingDone;
 			{
-				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
+				std::lock_guard<std::mutex> lock { resultMutex };
+				if (chunksNeedProcessing.size() == 0) return;
+				std::swap(chunkBeingDone, chunksNeedProcessing.back());
+				chunksNeedProcessing.pop_back();
 			}
-			return;
-		}
-		phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<size_t, size_t>> fwForks; // (hom kmer, hom cluster) -> (occurrence ID -> seq char)
-		phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<size_t, size_t>> bwForks; // (hom kmer, hom cluster) -> (occurrence ID -> seq char)
-		size_t lastOccurrenceID = std::numeric_limits<size_t>::max();
-		size_t lastKmer = std::numeric_limits<size_t>::max();
-		size_t lastCluster = std::numeric_limits<size_t>::max();
-		size_t lastKmerPos = std::numeric_limits<size_t>::max();
-		auto validClusters = iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size() * 0.95, false, [&fwForks, &bwForks, &lastOccurrenceID, &lastKmer, &lastKmerPos, &lastCluster, &occurrencesPerChunk, &readSequences, &chunksPerRead, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
-		{
-			if (occurrenceID != lastOccurrenceID || pos != lastKmerPos+1)
+			auto startTime = getTime();
+			if (chunkBeingDone.size() < 10)
 			{
-				if (lastOccurrenceID != std::numeric_limits<size_t>::max())
+				std::lock_guard<std::mutex> lock { resultMutex };
+				chunksDoneProcessing.emplace_back();
+				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
+				continue;
+			}
+			phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<size_t, size_t>> fwForks; // (hom kmer, hom cluster) -> (occurrence ID -> seq char)
+			phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<size_t, size_t>> bwForks; // (hom kmer, hom cluster) -> (occurrence ID -> seq char)
+			size_t lastOccurrenceID = std::numeric_limits<size_t>::max();
+			size_t lastKmer = std::numeric_limits<size_t>::max();
+			size_t lastCluster = std::numeric_limits<size_t>::max();
+			size_t lastKmerPos = std::numeric_limits<size_t>::max();
+			auto validClusters = iterateSolidKmers(readSequences, chunksPerRead, chunkBeingDone, kmerSize, chunkBeingDone.size() * 0.95, false, [&fwForks, &bwForks, &lastOccurrenceID, &lastKmer, &lastKmerPos, &lastCluster, &chunkBeingDone, &readSequences, &chunksPerRead, kmerSize](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+			{
+				if (occurrenceID != lastOccurrenceID || pos != lastKmerPos+1)
 				{
-					auto t = chunksPerRead[occurrencesPerChunk[i][lastOccurrenceID].first][occurrencesPerChunk[i][lastOccurrenceID].second];
-					if (lastKmerPos + kmerSize <= std::get<1>(t))
+					if (lastOccurrenceID != std::numeric_limits<size_t>::max())
 					{
+						auto t = chunksPerRead[chunkBeingDone[lastOccurrenceID].first][chunkBeingDone[lastOccurrenceID].second];
+						if (lastKmerPos + kmerSize <= std::get<1>(t))
+						{
+							if ((std::get<2>(t) & firstBitUint64_t))
+							{
+								assert(fwForks.count(std::make_pair(lastKmer, lastCluster)) == 0 || fwForks.at(std::make_pair(lastKmer, lastCluster)).count(lastOccurrenceID) == 0);
+								fwForks[std::make_pair(lastKmer, lastCluster)][lastOccurrenceID] = readSequences[chunkBeingDone[lastOccurrenceID].first].get(std::get<0>(t) + lastKmerPos + kmerSize);
+							}
+							else
+							{
+								assert(fwForks.count(std::make_pair(lastKmer, lastCluster)) == 0 || fwForks.at(std::make_pair(lastKmer, lastCluster)).count(lastOccurrenceID) == 0);
+								fwForks[std::make_pair(lastKmer, lastCluster)][lastOccurrenceID] = 3 - readSequences[chunkBeingDone[lastOccurrenceID].first].get(std::get<1>(t) - (lastKmerPos + kmerSize));
+							}
+						}
+					}
+					if (pos > 0)
+					{
+						auto t = chunksPerRead[chunkBeingDone[occurrenceID].first][chunkBeingDone[occurrenceID].second];
 						if ((std::get<2>(t) & firstBitUint64_t))
 						{
-							assert(fwForks.count(std::make_pair(lastKmer, lastCluster)) == 0 || fwForks.at(std::make_pair(lastKmer, lastCluster)).count(lastOccurrenceID) == 0);
-							fwForks[std::make_pair(lastKmer, lastCluster)][lastOccurrenceID] = readSequences[occurrencesPerChunk[i][lastOccurrenceID].first].get(std::get<0>(t) + lastKmerPos + kmerSize);
+							assert(bwForks.count(std::make_pair(kmer, clusterIndex)) == 0 || bwForks.at(std::make_pair(kmer, clusterIndex)).count(occurrenceID) == 0);
+							bwForks[std::make_pair(kmer, clusterIndex)][occurrenceID] = readSequences[chunkBeingDone[occurrenceID].first].get(std::get<0>(t) + pos - 1);
 						}
 						else
 						{
-							assert(fwForks.count(std::make_pair(lastKmer, lastCluster)) == 0 || fwForks.at(std::make_pair(lastKmer, lastCluster)).count(lastOccurrenceID) == 0);
-							fwForks[std::make_pair(lastKmer, lastCluster)][lastOccurrenceID] = 3 - readSequences[occurrencesPerChunk[i][lastOccurrenceID].first].get(std::get<1>(t) - (lastKmerPos + kmerSize));
+							assert(bwForks.count(std::make_pair(kmer, clusterIndex)) == 0 || bwForks.at(std::make_pair(kmer, clusterIndex)).count(occurrenceID) == 0);
+							bwForks[std::make_pair(kmer, clusterIndex)][occurrenceID] = 3 - readSequences[chunkBeingDone[occurrenceID].first].get(std::get<1>(t) - pos + 1);
 						}
 					}
 				}
-				if (pos > 0)
+				lastOccurrenceID = occurrenceID;
+				lastCluster = clusterIndex;
+				lastKmerPos = pos;
+				lastKmer = kmer;
+			});
+			size_t checkedPairs = 0;
+			std::vector<std::vector<size_t>> phaseIdentities;
+			phaseIdentities.resize(chunkBeingDone.size());
+			for (const auto& bwFork : bwForks)
+			{
+				for (const auto& fwFork : fwForks)
 				{
-					auto t = chunksPerRead[occurrencesPerChunk[i][occurrenceID].first][occurrencesPerChunk[i][occurrenceID].second];
-					if ((std::get<2>(t) & firstBitUint64_t))
-					{
-						assert(bwForks.count(std::make_pair(kmer, clusterIndex)) == 0 || bwForks.at(std::make_pair(kmer, clusterIndex)).count(occurrenceID) == 0);
-						bwForks[std::make_pair(kmer, clusterIndex)][occurrenceID] = readSequences[occurrencesPerChunk[i][occurrenceID].first].get(std::get<0>(t) + pos - 1);
-					}
-					else
-					{
-						assert(bwForks.count(std::make_pair(kmer, clusterIndex)) == 0 || bwForks.at(std::make_pair(kmer, clusterIndex)).count(occurrenceID) == 0);
-						bwForks[std::make_pair(kmer, clusterIndex)][occurrenceID] = 3 - readSequences[occurrencesPerChunk[i][occurrenceID].first].get(std::get<1>(t) - pos + 1);
-					}
+					if (validClusters.at(bwFork.first.first)[bwFork.first.second].second > validClusters.at(fwFork.first.first)[fwFork.first.second].first) continue;
+					checkedPairs += 1;
+					checkPhasablePair(bwFork.second, fwFork.second, phaseIdentities);
 				}
 			}
-			lastOccurrenceID = occurrenceID;
-			lastCluster = clusterIndex;
-			lastKmerPos = pos;
-			lastKmer = kmer;
-		});
-		size_t checkedPairs = 0;
-		std::vector<std::vector<size_t>> phaseIdentities;
-		phaseIdentities.resize(occurrencesPerChunk[i].size());
-		for (const auto& bwFork : bwForks)
-		{
+			for (const auto& bwFork : bwForks)
+			{
+				for (const auto& bwFork2 : bwForks)
+				{
+					if (validClusters.at(bwFork.first.first)[bwFork.first.second].second+1 > validClusters.at(bwFork2.first.first)[bwFork2.first.second].first) continue;
+					checkedPairs += 1;
+					checkPhasablePair(bwFork.second, bwFork2.second, phaseIdentities);
+				}
+			}
 			for (const auto& fwFork : fwForks)
 			{
-				if (validClusters.at(bwFork.first.first)[bwFork.first.second].second > validClusters.at(fwFork.first.first)[fwFork.first.second].first) continue;
-				checkedPairs += 1;
-				checkPhasablePair(bwFork.second, fwFork.second, phaseIdentities);
+				for (const auto& fwFork2 : fwForks)
+				{
+					if (validClusters.at(fwFork.first.first)[fwFork.first.second].second+1 > validClusters.at(fwFork2.first.first)[fwFork2.first.second].first) continue;
+					checkedPairs += 1;
+					checkPhasablePair(fwFork.second, fwFork2.second, phaseIdentities);
+				}
 			}
-		}
-		for (const auto& bwFork : bwForks)
-		{
-			for (const auto& bwFork2 : bwForks)
+			std::vector<size_t> parent;
+			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
-				if (validClusters.at(bwFork.first.first)[bwFork.first.second].second+1 > validClusters.at(bwFork2.first.first)[bwFork2.first.second].first) continue;
-				checkedPairs += 1;
-				checkPhasablePair(bwFork.second, bwFork2.second, phaseIdentities);
+				parent.emplace_back(j);
 			}
-		}
-		for (const auto& fwFork : fwForks)
-		{
-			for (const auto& fwFork2 : fwForks)
+			for (size_t j = 1; j < phaseIdentities.size(); j++)
 			{
-				if (validClusters.at(fwFork.first.first)[fwFork.first.second].second+1 > validClusters.at(fwFork2.first.first)[fwFork2.first.second].first) continue;
-				checkedPairs += 1;
-				checkPhasablePair(fwFork.second, fwFork2.second, phaseIdentities);
+				for (size_t k = 0; k < j; k++)
+				{
+					if (phaseIdentities[k] != phaseIdentities[j]) continue;
+					merge(parent, k, j);
+				}
 			}
-		}
-		std::vector<size_t> parent;
-		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
-		{
-			parent.emplace_back(j);
-		}
-		for (size_t j = 1; j < phaseIdentities.size(); j++)
-		{
-			for (size_t k = 0; k < j; k++)
-			{
-				if (phaseIdentities[k] != phaseIdentities[j]) continue;
-				merge(parent, k, j);
-			}
-		}
-		auto endTime = getTime();
-		{
-			std::lock_guard<std::mutex> lock { resultMutex };
 			phmap::flat_hash_map<size_t, size_t> keyToNode;
-			size_t first = nextNum;
+			size_t nextNum = 0;
 			for (size_t j = 0; j < parent.size(); j++)
 			{
 				size_t key = find(parent, j);
@@ -2027,15 +2025,44 @@ void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequen
 				keyToNode[key] = nextNum;
 				nextNum += 1;
 			}
-			size_t last = nextNum-1;
-			if (keyToNode.size() >= 2) countSplitted += 1;
-			std::cerr << "phasable kmer splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs << " to " << keyToNode.size() << " chunks range " << first << " - " << last << " time " << formatTime(startTime, endTime) << std::endl;
-			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			if (keyToNode.size() == 1)
 			{
-				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + keyToNode.at(find(parent, j));
+				std::lock_guard<std::mutex> lock { resultMutex };
+				auto endTime = getTime();
+				std::cerr << "phasing kmer splitted chunk with coverage " << chunkBeingDone.size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
+				chunksDoneProcessing.emplace_back();
+				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
+				continue;
+			}
+			std::vector<std::vector<std::pair<size_t, size_t>>> chunkResult;
+			chunkResult.resize(keyToNode.size());
+			for (size_t j = 0; j < parent.size(); j++)
+			{
+				chunkResult[keyToNode.at(find(parent, j))].emplace_back(chunkBeingDone[j]);
+			}
+			// sort smallest last, so emplace-pop-swap puts biggest on top of chunksNeedProcessing
+			std::sort(chunkResult.begin(), chunkResult.end(), [](const auto& left, const auto& right) { return left.size() > right.size(); });
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				auto endTime = getTime();
+				if (keyToNode.size() >= 2) countSplitted += 1;
+				std::cerr << "phasing kmer splitted chunk with coverage " << chunkBeingDone.size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
+				while (chunkResult.size() > 0)
+				{
+					chunksNeedProcessing.emplace_back();
+					std::swap(chunksNeedProcessing.back(), chunkResult.back());
+					chunkResult.pop_back();
+				}
 			}
 		}
 	});
+	for (size_t i = 0; i < chunksDoneProcessing.size(); i++)
+	{
+		for (auto pair : chunksDoneProcessing[i])
+		{
+			std::get<2>(chunksPerRead[pair.first][pair.second]) = i + (std::get<2>(chunksPerRead[pair.first][pair.second]) & firstBitUint64_t);
+		}
+	}
 	std::cerr << "phasing kmers splitted " << countSplitted << " chunks" << std::endl;
 }
 
