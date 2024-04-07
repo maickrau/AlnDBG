@@ -1763,129 +1763,157 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by allele phasing" << std::endl;
-	size_t nextNum = 0;
 	size_t countSplitted = 0;
+	size_t countSplittedTo = 0;
 	std::mutex resultMutex;
-	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &readSequences, &countSplitted, kmerSize](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	std::vector<std::vector<std::pair<size_t, size_t>>> chunksNeedProcessing;
+	std::vector<std::vector<std::pair<size_t, size_t>>> chunksDoneProcessing;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
-		if (occurrencesPerChunk[i].size() < 10)
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			std::lock_guard<std::mutex> lock { resultMutex };
-			size_t newID = nextNum;
-			nextNum += 1;
-			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
-			{
-				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + newID;
-			}
-			return;
+			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
+			if ((std::get<2>(t) & maskUint64_t) >= chunksNeedProcessing.size()) chunksNeedProcessing.resize((std::get<2>(t) & maskUint64_t)+1);
+			chunksNeedProcessing[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
-		std::vector<std::tuple<size_t, size_t, size_t, size_t, size_t, size_t>> alleles; // startkmer, startcluster, endkmer, endcluster, occurrenceID, allele
-		size_t lastOccurrence = std::numeric_limits<size_t>::max();
-		size_t lastKmer = std::numeric_limits<size_t>::max();
-		size_t lastCluster = std::numeric_limits<size_t>::max();
-		size_t lastKmerPos = std::numeric_limits<size_t>::max();
-		iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size(), false, [&occurrencesPerChunk, &readSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+	}
+	// biggest on top so starts processing first
+	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
+	iterateMultithreaded(0, numThreads, numThreads, [&readSequences, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &countSplittedTo, kmerSize](size_t dummy)
+	{
+		while (true)
 		{
-			if (occurrenceID != lastOccurrence || lastKmer == std::numeric_limits<size_t>::max())
+			std::vector<std::pair<size_t, size_t>> chunkBeingDone;
 			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				if (chunksNeedProcessing.size() == 0) return;
+				std::swap(chunkBeingDone, chunksNeedProcessing.back());
+				chunksNeedProcessing.pop_back();
+			}
+			auto startTime = getTime();
+			if (chunkBeingDone.size() < 10)
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				chunksDoneProcessing.emplace_back();
+				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
+				continue;
+			}
+			std::vector<std::tuple<size_t, size_t, size_t, size_t, size_t, size_t>> alleles; // startkmer, startcluster, endkmer, endcluster, occurrenceID, allele
+			size_t lastOccurrence = std::numeric_limits<size_t>::max();
+			size_t lastKmer = std::numeric_limits<size_t>::max();
+			size_t lastCluster = std::numeric_limits<size_t>::max();
+			size_t lastKmerPos = std::numeric_limits<size_t>::max();
+			iterateSolidKmers(readSequences, chunksPerRead, chunkBeingDone, kmerSize, chunkBeingDone.size(), false, [&chunkBeingDone, &readSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+			{
+				if (occurrenceID != lastOccurrence || lastKmer == std::numeric_limits<size_t>::max())
+				{
+					lastOccurrence = occurrenceID;
+					lastKmer = kmer;
+					lastCluster = clusterIndex;
+					lastKmerPos = pos;
+					return;
+				}
+				size_t allele;
+				if (node & firstBitUint64_t)
+				{
+					allele = getAllele(readSequences[chunkBeingDone[occurrenceID].first], chunkStartPos + lastKmerPos, chunkStartPos + pos + kmerSize, node & firstBitUint64_t);
+				}
+				else
+				{
+					allele = getAllele(readSequences[chunkBeingDone[occurrenceID].first], chunkEndPos - (pos + kmerSize)+1, chunkEndPos - lastKmerPos+1, node & firstBitUint64_t);
+				}
+				alleles.emplace_back(lastKmer, lastCluster, kmer, clusterIndex, occurrenceID, allele);
 				lastOccurrence = occurrenceID;
 				lastKmer = kmer;
 				lastCluster = clusterIndex;
 				lastKmerPos = pos;
-				return;
-			}
-			size_t allele;
-			if (node & firstBitUint64_t)
+			});
+			std::sort(alleles.begin(), alleles.end());
+			std::vector<std::vector<std::vector<size_t>>> occurrencesPerAlleleSite;
+			occurrencesPerAlleleSite = getAlleleOccurrences(alleles, chunkBeingDone.size());
+			std::vector<bool> informativeOccurrence;
+			informativeOccurrence.resize(occurrencesPerAlleleSite.size(), false);
+			for (size_t j = 1; j < occurrencesPerAlleleSite.size(); j++)
 			{
-				allele = getAllele(readSequences[occurrencesPerChunk[i][occurrenceID].first], chunkStartPos + lastKmerPos, chunkStartPos + pos + kmerSize, node & firstBitUint64_t);
-			}
-			else
-			{
-				allele = getAllele(readSequences[occurrencesPerChunk[i][occurrenceID].first], chunkEndPos - (pos + kmerSize)+1, chunkEndPos - lastKmerPos+1, node & firstBitUint64_t);
-			}
-			alleles.emplace_back(lastKmer, lastCluster, kmer, clusterIndex, occurrenceID, allele);
-			lastOccurrence = occurrenceID;
-			lastKmer = kmer;
-			lastCluster = clusterIndex;
-			lastKmerPos = pos;
-		});
-		std::sort(alleles.begin(), alleles.end());
-		std::vector<std::vector<std::vector<size_t>>> occurrencesPerAlleleSite;
-		occurrencesPerAlleleSite = getAlleleOccurrences(alleles, occurrencesPerChunk[i].size());
-/*		{
-			std::lock_guard<std::mutex> lock { resultMutex };
-			auto t = chunksPerRead[occurrencesPerChunk[i][0].first][occurrencesPerChunk[i][0].second];
-			std::cerr << "chunk " << i << " has approx length " << std::get<1>(t) - std::get<0>(t) << std::endl;
-			std::cerr << "chunk " << i << " has coverage " << occurrencesPerChunk[i].size() << std::endl;
-			std::cerr << "chunk " << i << " has " << kmerPositionsInChunks.size() << " potential kmers" << std::endl;
-			std::cerr << "chunk " << i << " has " << numClusters << " clusters" << std::endl;
-			std::cerr << "chunk " << i << " has " << alleles.size() << " alleles" << std::endl;
-			std::cerr << "chunk " << i << " has " << occurrencesPerAlleleSite.size() << " allele occurrences" << std::endl;
-		}*/
-		std::vector<bool> informativeOccurrence;
-		informativeOccurrence.resize(occurrencesPerAlleleSite.size(), false);
-		for (size_t j = 1; j < occurrencesPerAlleleSite.size(); j++)
-		{
-			for (size_t k = 0; k < j; k++)
-			{
-				if (informativeOccurrence[j] && informativeOccurrence[k]) continue;
-				if (allelesMatchPerfectly(occurrencesPerAlleleSite[j], occurrencesPerAlleleSite[k]))
+				for (size_t k = 0; k < j; k++)
 				{
-//					std::cerr << "match occurrences " << j << " and " << k << std::endl;
-					informativeOccurrence[j] = true;
-					informativeOccurrence[k] = true;
+					if (informativeOccurrence[j] && informativeOccurrence[k]) continue;
+					if (allelesMatchPerfectly(occurrencesPerAlleleSite[j], occurrencesPerAlleleSite[k]))
+					{
+						informativeOccurrence[j] = true;
+						informativeOccurrence[k] = true;
+					}
 				}
 			}
-		}
-		std::vector<std::vector<size_t>> occurrenceAlleles;
-		occurrenceAlleles.resize(occurrencesPerChunk[i].size());
-		for (size_t site = 0; site < occurrencesPerAlleleSite.size(); site++)
-		{
-			if (!informativeOccurrence[site]) continue;
-			for (size_t allele = 0; allele < occurrencesPerAlleleSite[site].size(); allele++)
+			std::vector<std::vector<size_t>> occurrenceAlleles;
+			occurrenceAlleles.resize(chunkBeingDone.size());
+			for (size_t site = 0; site < occurrencesPerAlleleSite.size(); site++)
 			{
-				for (auto occurrence : occurrencesPerAlleleSite[site][allele])
+				if (!informativeOccurrence[site]) continue;
+				for (size_t allele = 0; allele < occurrencesPerAlleleSite[site].size(); allele++)
 				{
-					occurrenceAlleles[occurrence].emplace_back(allele);
+					for (auto occurrence : occurrencesPerAlleleSite[site][allele])
+					{
+						occurrenceAlleles[occurrence].emplace_back(allele);
+					}
 				}
 			}
-		}
-//		std::cerr << "chunk " << i << " has " << occurrenceAlleles[0].size() << " informative sites" << std::endl;
-		std::vector<size_t> orderedOccurrences;
-		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
-		{
-			orderedOccurrences.emplace_back(j);
-		}
-		std::sort(orderedOccurrences.begin(), orderedOccurrences.end(), [&occurrenceAlleles](size_t left, size_t right)
-		{
-			assert(occurrenceAlleles[left].size() == occurrenceAlleles[right].size());
-			for (size_t i = 0; i < occurrenceAlleles[left].size(); i++)
+			std::vector<size_t> orderedOccurrences;
+			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
-				if (occurrenceAlleles[left][i] < occurrenceAlleles[right][i]) return true;
-				if (occurrenceAlleles[left][i] > occurrenceAlleles[right][i]) return false;
+				orderedOccurrences.emplace_back(j);
 			}
-			return false;
-		});
-		{
-			std::lock_guard<std::mutex> lock { resultMutex };
-			// size_t first, last;
-			// first = nextNum;
-			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			std::sort(orderedOccurrences.begin(), orderedOccurrences.end(), [&occurrenceAlleles](size_t left, size_t right)
 			{
-				size_t occurrence = orderedOccurrences[j];
+				assert(occurrenceAlleles[left].size() == occurrenceAlleles[right].size());
+				for (size_t i = 0; i < occurrenceAlleles[left].size(); i++)
+				{
+					if (occurrenceAlleles[left][i] < occurrenceAlleles[right][i]) return true;
+					if (occurrenceAlleles[left][i] > occurrenceAlleles[right][i]) return false;
+				}
+				return false;
+			});
+			std::vector<std::vector<std::pair<size_t, size_t>>> chunkResult;
+			chunkResult.emplace_back();
+			for (size_t j = 0; j < chunkBeingDone.size(); j++)
+			{
 				if (j > 0 && occurrenceAlleles[orderedOccurrences[j]] != occurrenceAlleles[orderedOccurrences[j-1]])
 				{
-					nextNum += 1;
-					countSplitted += 1;
+					chunkResult.emplace_back();
 				}
-				std::get<2>(chunksPerRead[occurrencesPerChunk[i][occurrence].first][occurrencesPerChunk[i][occurrence].second]) = nextNum + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][occurrence].first][occurrencesPerChunk[i][occurrence].second]) & firstBitUint64_t);
+				chunkResult.back().emplace_back(chunkBeingDone[orderedOccurrences[j]]);
 			}
-			// last = nextNum;
-			nextNum += 1;
-//			std::cerr << "chunk " << i << " split to range " << first << " - " << last << std::endl;
+			if (chunkResult.size() == 1)
+			{
+				chunksDoneProcessing.emplace_back();
+				std::swap(chunksDoneProcessing.back(), chunkResult[0]);
+				continue;
+			}
+			assert(chunkResult.size() >= 2);
+			// sort smallest last, so emplace-swap-pop puts biggest on top of chunksNeedProcessing
+			std::sort(chunkResult.begin(), chunkResult.end(), [](const auto& left, const auto& right) { return left.size() > right.size(); });
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				countSplittedTo += chunkResult.size();
+				countSplitted += 1;
+				while (chunkResult.size() > 0)
+				{
+					chunksNeedProcessing.emplace_back();
+					std::swap(chunksNeedProcessing.back(), chunkResult.back());
+					chunkResult.pop_back();
+				}
+			}
 		}
 	});
-	std::cerr << "allele phasing splitted " << countSplitted << " chunks" << std::endl;
+	for (size_t i = 0; i < chunksDoneProcessing.size(); i++)
+	{
+		for (auto pair : chunksDoneProcessing[i])
+		{
+			std::get<2>(chunksPerRead[pair.first][pair.second]) = i + (std::get<2>(chunksPerRead[pair.first][pair.second]) & firstBitUint64_t);
+		}
+	}
+	std::cerr << "allele phasing splitted " << countSplitted << " chunks to " << countSplittedTo << std::endl;
 }
 
 void splitPerPhasingKmersWithinChunk(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
