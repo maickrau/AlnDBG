@@ -3053,6 +3053,54 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 				solidKmersPerOccurrence[j].emplace(kmerkey);
 			}
 		}
+		{
+			std::vector<std::tuple<size_t, size_t, size_t, size_t, size_t, size_t>> alleles; // startkmer, startcluster, endkmer, endcluster, occurrenceID, allele
+			size_t lastOccurrence = std::numeric_limits<size_t>::max();
+			size_t lastKmer = std::numeric_limits<size_t>::max();
+			size_t lastCluster = std::numeric_limits<size_t>::max();
+			size_t lastKmerPos = std::numeric_limits<size_t>::max();
+			iterateSolidKmers(readSequences, chunksPerRead, occurrencesPerChunk[i], kmerSize, occurrencesPerChunk[i].size(), false, [&occurrencesPerChunk, &readSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+			{
+				if (occurrenceID != lastOccurrence || lastKmer == std::numeric_limits<size_t>::max())
+				{
+					lastOccurrence = occurrenceID;
+					lastKmer = kmer;
+					lastCluster = clusterIndex;
+					lastKmerPos = pos;
+					return;
+				}
+				size_t allele;
+				if (node & firstBitUint64_t)
+				{
+					allele = getAllele(readSequences[occurrencesPerChunk[i][occurrenceID].first], chunkStartPos + lastKmerPos, chunkStartPos + pos + kmerSize, node & firstBitUint64_t);
+				}
+				else
+				{
+					allele = getAllele(readSequences[occurrencesPerChunk[i][occurrenceID].first], chunkEndPos - (pos + kmerSize)+1, chunkEndPos - lastKmerPos+1, node & firstBitUint64_t);
+				}
+				alleles.emplace_back(lastKmer, lastCluster, kmer, clusterIndex, occurrenceID, allele);
+				lastOccurrence = occurrenceID;
+				lastKmer = kmer;
+				lastCluster = clusterIndex;
+				lastKmerPos = pos;
+			});
+			std::sort(alleles.begin(), alleles.end());
+			std::vector<std::vector<std::vector<size_t>>> occurrencesPerAlleleSite;
+			occurrencesPerAlleleSite = getAlleleOccurrences(alleles, occurrencesPerChunk[i].size());
+			size_t nextNum = kmerToNumber.size() + kmerClusterToNumber.size();
+			for (size_t j = 0; j < occurrencesPerAlleleSite.size(); j++)
+			{
+				if (occurrencesPerAlleleSite[j].size() < 2) continue;
+				for (size_t allele = 0; allele < occurrencesPerAlleleSite[j].size(); allele++)
+				{
+					for (size_t k : occurrencesPerAlleleSite[j][allele])
+					{
+						solidKmersPerOccurrence[k].emplace(nextNum);
+					}
+					nextNum += 1;
+				}
+			}
+		}
 		for (const size_t phaseGroup : applicablePhasingGroups)
 		{
 			phmap::flat_hash_set<size_t> kmersInFirst;
