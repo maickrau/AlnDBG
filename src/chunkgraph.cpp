@@ -675,6 +675,26 @@ std::vector<std::vector<std::vector<size_t>>> getAlleleOccurrences(const std::ve
 	return result;
 }
 
+bool allelesMatchTwoVariantsThreeHaps(const std::vector<std::vector<size_t>>& left, const std::vector<std::vector<size_t>>& right)
+{
+	if (left.size() != 2) return false;
+	if (right.size() != 2) return false;
+	if (left[0].size() < 10) return false;
+	if (left[1].size() < 10) return false;
+	if (right[0].size() < 10) return false;
+	if (right[1].size() < 10) return false;
+	size_t zerozero = intersectSize(left[0], right[0]);
+	size_t zeroone = intersectSize(left[0], right[1]);
+	size_t onezero = intersectSize(left[1], right[0]);
+	size_t oneone = intersectSize(left[1], right[1]);
+	if (zerozero > 0 && zerozero < 10) return false;
+	if (zeroone > 0 && zeroone < 10) return false;
+	if (onezero > 0 && onezero < 10) return false;
+	if (oneone > 0 && oneone < 10) return false;
+	if (zerozero > 0 && zeroone > 0 && onezero > 0 && oneone > 0) return false;
+	return true;
+}
+
 bool allelesMatchPerfectly(const std::vector<std::vector<size_t>>& left, const std::vector<std::vector<size_t>>& right)
 {
 	if (left.size() != right.size()) return false;
@@ -1840,6 +1860,11 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 				{
 					if (informativeOccurrence[j] && informativeOccurrence[k]) continue;
 					if (allelesMatchPerfectly(occurrencesPerAlleleSite[j], occurrencesPerAlleleSite[k]))
+					{
+						informativeOccurrence[j] = true;
+						informativeOccurrence[k] = true;
+					}
+					else if (allelesMatchTwoVariantsThreeHaps(occurrencesPerAlleleSite[j], occurrencesPerAlleleSite[k]))
 					{
 						informativeOccurrence[j] = true;
 						informativeOccurrence[k] = true;
