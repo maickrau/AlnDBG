@@ -1911,6 +1911,7 @@ void splitPerAllelePhasingWithinChunk(const std::vector<TwobitString>& readSeque
 			}
 			if (chunkResult.size() == 1)
 			{
+				std::lock_guard<std::mutex> lock { resultMutex };
 				chunksDoneProcessing.emplace_back();
 				std::swap(chunksDoneProcessing.back(), chunkResult[0]);
 				continue;
