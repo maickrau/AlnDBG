@@ -3009,6 +3009,16 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 			if (firsts+seconds < readsHere.size() * 0.25) continue;
 			applicablePhasingGroups.push_back(j);
 		}
+		if (applicablePhasingGroups.size() == 0)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = nextNum + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
+			}
+			nextNum += 1;
+			return;
+		}
 		phmap::flat_hash_map<size_t, std::vector<size_t>> phaseGroupsPerRead;
 		size_t nextGroupNum = 0;
 		std::vector<phmap::flat_hash_set<size_t>> solidKmersPerOccurrence;
@@ -3099,6 +3109,37 @@ void splitPerInterchunkPhasedKmers(const std::vector<TwobitString>& readSequence
 						solidKmersPerOccurrence[k].emplace(nextNum);
 					}
 					nextNum += 1;
+				}
+			}
+		}
+		{
+			phmap::flat_hash_map<size_t, size_t> kmerCoverage;
+			for (size_t j = 0; j < solidKmersPerOccurrence.size(); j++)
+			{
+				for (auto kmer : solidKmersPerOccurrence[j])
+				{
+					kmerCoverage[kmer] += 1;
+				}
+			}
+			phmap::flat_hash_set<size_t> removeKmers;
+			for (auto pair : kmerCoverage)
+			{
+				if (pair.second < 3 || pair.second + 3 > occurrencesPerChunk[i].size())
+				{
+					removeKmers.insert(pair.first);
+				}
+			}
+			if (removeKmers.size() >= 1)
+			{
+				for (size_t j = 0; j < solidKmersPerOccurrence.size(); j++)
+				{
+					for (auto kmer : removeKmers)
+					{
+						if (solidKmersPerOccurrence[j].count(kmer) == 1)
+						{
+							solidKmersPerOccurrence[j].erase(kmer);
+						}
+					}
 				}
 			}
 		}
