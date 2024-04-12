@@ -971,7 +971,6 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 	std::vector<std::vector<std::tuple<uint16_t, uint16_t, KmerType>>> solidKmers; // pos, cluster, kmer
 	solidKmers.resize(occurrences.size());
 	phmap::flat_hash_map<KmerType, std::vector<std::tuple<float, uint32_t, uint16_t>>> kmers; // kmer -> (extrapolated-pos, occurrence, occurrence-pos)
-	phmap::flat_hash_set<KmerType> droppedOutOfContext;
 	phmap::flat_hash_map<KmerType, size_t> nextCluster;
 	// 40 blocks so it advances 2.5% of sequence every block so kmers seen before block cannot cluster with kmers seen after block if no kmers in block
 	for (size_t offsetBreakpoint = 0; offsetBreakpoint < 40; offsetBreakpoint++)
@@ -995,49 +994,46 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 				startPos = std::get<1>(t) - nextOffset;
 				endPos = std::get<1>(t) - currentPosPerOccurrence[j];
 			}
-			iterateKmers(readSequences[occurrences[j].first], startPos, endPos, std::get<2>(t) & firstBitUint64_t, kmerSize, [&kmers, &droppedOutOfContext, &inContext, &currentPosPerOccurrence, t, j](const size_t kmer, const size_t pos)
+			iterateKmers(readSequences[occurrences[j].first], startPos, endPos, std::get<2>(t) & firstBitUint64_t, kmerSize, [&kmers, &inContext, &currentPosPerOccurrence, t, j](const size_t kmer, const size_t pos)
 			{
 				double extrapolatedPos = 100.0 * (double)(pos+currentPosPerOccurrence[j]) / (double)(std::get<1>(t) - std::get<0>(t));
 				assert((size_t)(pos+currentPosPerOccurrence[j]) < (size_t)std::numeric_limits<uint16_t>::max());
 				kmers[kmer].emplace_back(extrapolatedPos, j, (pos+currentPosPerOccurrence[j]));
-				if (droppedOutOfContext.count(kmer) == 1) droppedOutOfContext.erase(kmer);
 				inContext.insert(kmer);
 			});
 			currentPosPerOccurrence[j] = nextOffset - kmerSize + 2;
 		}
 		if (offsetBreakpoint == 39)
 		{
-			droppedOutOfContext.insert(inContext.begin(), inContext.end());
 			inContext.clear();
 		}
-		assert(droppedOutOfContext.size() + inContext.size() == kmers.size());
-		for (KmerType kmer : droppedOutOfContext)
+		phmap::flat_hash_set<KmerType> eraseKmers;
+		for (auto& pair : kmers)
 		{
-			assert(kmers.count(kmer) == 1);
-			assert(kmers.at(kmer).size() >= 1);
-			if (kmers[kmer].size() >= minSolidThreshold)
+			if (inContext.count(pair.first) == 1) continue;
+			if (pair.second.size() >= minSolidThreshold)
 			{
-				std::sort(kmers[kmer].begin(), kmers[kmer].end());
+				std::sort(pair.second.begin(), pair.second.end());
 				size_t clusterStart = 0;
 				phmap::flat_hash_set<size_t> occurrencesHere;
 				bool currentlyNonrepetitive = true;
-				occurrencesHere.insert(std::get<1>(kmers[kmer][0]));
-				size_t clusterNum = nextCluster[kmer];
-				for (size_t j = 1; j <= kmers.at(kmer).size(); j++)
+				occurrencesHere.insert(std::get<1>(pair.second[0]));
+				size_t clusterNum = nextCluster[pair.first];
+				for (size_t j = 1; j <= pair.second.size(); j++)
 				{
-					if (j < kmers[kmer].size() && std::get<0>(kmers[kmer][j]) < std::get<0>(kmers[kmer][j-1])+1)
+					if (j < pair.second.size() && std::get<0>(pair.second[j]) < std::get<0>(pair.second[j-1])+1)
 					{
-						if (occurrencesHere.count(std::get<1>(kmers[kmer][j])) == 1)
+						if (occurrencesHere.count(std::get<1>(pair.second[j])) == 1)
 						{
 							currentlyNonrepetitive = false;
 						}
-						occurrencesHere.insert(std::get<1>(kmers[kmer][j]));
+						occurrencesHere.insert(std::get<1>(pair.second[j]));
 						continue;
 					}
 					if (occurrencesHere.size() >= minSolidThreshold && (currentlyNonrepetitive || allowTwoAlleleRepeats))
 					{
-						double minPos = std::get<0>(kmers[kmer][clusterStart]);
-						double maxPos = std::get<0>(kmers[kmer][j-1]);
+						double minPos = std::get<0>(pair.second[clusterStart]);
+						double maxPos = std::get<0>(pair.second[j-1]);
 						assert(!currentlyNonrepetitive || j-clusterStart == occurrencesHere.size());
 						if (minPos + 1.0 > maxPos)
 						{
@@ -1046,37 +1042,37 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 								phmap::flat_hash_map<size_t, size_t> kmerCountPerOccurrence;
 								for (size_t k = clusterStart; k < j; k++)
 								{
-									kmerCountPerOccurrence[std::get<1>(kmers[kmer][k])] += 1;
+									kmerCountPerOccurrence[std::get<1>(pair.second[k])] += 1;
 								}
 								phmap::flat_hash_set<size_t> foundCounts;
-								for (auto pair : kmerCountPerOccurrence)
+								for (auto pair2 : kmerCountPerOccurrence)
 								{
-									foundCounts.insert(pair.second);
+									foundCounts.insert(pair2.second);
 								}
 								if (foundCounts.size() == 2)
 								{
 									size_t firstCount = *foundCounts.begin();
 									size_t secondCount = *(++foundCounts.begin());
 									assert(firstCount != secondCount);
-									for (auto pair : kmerCountPerOccurrence)
+									for (auto pair2 : kmerCountPerOccurrence)
 									{
-										if (pair.second == firstCount)
+										if (pair2.second == firstCount)
 										{
 											// todo pos should be something reasonable not this. but nothing uses poses of repetitive kmers as of comment time
 											assert(clusterNum < (size_t)std::numeric_limits<uint16_t>::max());
-											solidKmers[pair.first].emplace_back(std::numeric_limits<uint16_t>::max(), clusterNum, kmer);
+											solidKmers[pair2.first].emplace_back(std::numeric_limits<uint16_t>::max(), clusterNum, pair.first);
 										}
 										else
 										{
-											assert(pair.second == secondCount);
+											assert(pair2.second == secondCount);
 											// todo pos should be something reasonable not this. but nothing uses poses of repetitive kmers as of comment time
 											assert(clusterNum+1 < (size_t)std::numeric_limits<uint16_t>::max());
-											solidKmers[pair.first].emplace_back(std::numeric_limits<uint16_t>::max(), clusterNum+1, kmer);
+											solidKmers[pair2.first].emplace_back(std::numeric_limits<uint16_t>::max(), clusterNum+1, pair.first);
 										}
 									}
 									clusterNum += 2;
-									validClusters[kmer].emplace_back(minPos-0.01, maxPos+0.01);
-									validClusters[kmer].emplace_back(minPos-0.01, maxPos+0.01);
+									validClusters[pair.first].emplace_back(minPos-0.01, maxPos+0.01);
+									validClusters[pair.first].emplace_back(minPos-0.01, maxPos+0.01);
 								}
 							}
 							else
@@ -1084,29 +1080,32 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 								assert(j - clusterStart == occurrencesHere.size());
 								for (size_t k = clusterStart; k < j; k++)
 								{
-									assert((size_t)std::get<2>(kmers[kmer][k]) < (size_t)std::numeric_limits<uint16_t>::max());
+									assert((size_t)std::get<2>(pair.second[k]) < (size_t)std::numeric_limits<uint16_t>::max());
 									assert(clusterNum < (size_t)std::numeric_limits<uint16_t>::max());
-									solidKmers[std::get<1>(kmers[kmer][k])].emplace_back(std::get<2>(kmers[kmer][k]), clusterNum, kmer);
+									solidKmers[std::get<1>(pair.second[k])].emplace_back(std::get<2>(pair.second[k]), clusterNum, pair.first);
 								}
 								clusterNum += 1;
-								validClusters[kmer].emplace_back(minPos-0.01, maxPos+0.01);
+								validClusters[pair.first].emplace_back(minPos-0.01, maxPos+0.01);
 							}
 						}
 					}
 					currentlyNonrepetitive = true;
 					occurrencesHere.clear();
-					if (j < kmers[kmer].size())
+					if (j < pair.second.size())
 					{
-						occurrencesHere.insert(std::get<1>(kmers[kmer][j]));
+						occurrencesHere.insert(std::get<1>(pair.second[j]));
 					}
 					clusterStart = j;
 				}
-				nextCluster[kmer] = clusterNum;
+				nextCluster[pair.first] = clusterNum;
 			}
+			eraseKmers.insert(pair.first);
+		}
+		for (KmerType kmer : eraseKmers)
+		{
 			kmers.erase(kmer);
 		}
 		assert(kmers.size() == inContext.size());
-		droppedOutOfContext = inContext;
 	}
 	for (size_t i = 0; i < solidKmers.size(); i++)
 	{
