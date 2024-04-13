@@ -1034,69 +1034,76 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 			{
 				std::sort(kmers[index].begin(), kmers[index].end());
 				size_t clusterStart = 0;
-				phmap::flat_hash_set<size_t> occurrencesHere;
+				std::vector<bool> occurrencesHere;
+				occurrencesHere.resize(occurrences.size(), false);
 				bool currentlyNonrepetitive = true;
-				occurrencesHere.insert(std::get<1>(kmers[index][0]));
+				occurrencesHere[std::get<1>(kmers[index][0])] = true;
 				size_t clusterNum = nextCluster[index];
 				for (size_t j = 1; j <= kmers[index].size(); j++)
 				{
 					if (j < kmers[index].size() && std::get<0>(kmers[index][j]) < std::get<0>(kmers[index][j-1])+1)
 					{
-						if (occurrencesHere.count(std::get<1>(kmers[index][j])) == 1)
+						if (occurrencesHere[std::get<1>(kmers[index][j])])
 						{
 							currentlyNonrepetitive = false;
 						}
-						occurrencesHere.insert(std::get<1>(kmers[index][j]));
+						occurrencesHere[std::get<1>(kmers[index][j])] = true;
 						continue;
 					}
-					if (occurrencesHere.size() >= minSolidThreshold && (currentlyNonrepetitive || allowTwoAlleleRepeats))
+					if (j-clusterStart >= minSolidThreshold && (currentlyNonrepetitive || allowTwoAlleleRepeats))
 					{
 						double minPos = std::get<0>(kmers[index][clusterStart]);
 						double maxPos = std::get<0>(kmers[index][j-1]);
-						assert(!currentlyNonrepetitive || j-clusterStart == occurrencesHere.size());
 						if (minPos + 1.0 > maxPos)
 						{
 							if (!currentlyNonrepetitive && allowTwoAlleleRepeats)
 							{
-								phmap::flat_hash_map<size_t, size_t> kmerCountPerOccurrence;
-								for (size_t k = clusterStart; k < j; k++)
+								size_t countOccurrences = 0;
+								for (size_t k = 0; k < occurrencesHere.size(); k++)
 								{
-									kmerCountPerOccurrence[std::get<1>(kmers[index][k])] += 1;
+									countOccurrences += occurrencesHere[k] ? 1 : 0;
 								}
-								phmap::flat_hash_set<size_t> foundCounts;
-								for (auto pair2 : kmerCountPerOccurrence)
+								if (countOccurrences >= minSolidThreshold)
 								{
-									foundCounts.insert(pair2.second);
-								}
-								if (foundCounts.size() == 2)
-								{
-									size_t firstCount = *foundCounts.begin();
-									size_t secondCount = *(++foundCounts.begin());
-									assert(firstCount != secondCount);
+									phmap::flat_hash_map<size_t, size_t> kmerCountPerOccurrence;
+									for (size_t k = clusterStart; k < j; k++)
+									{
+										kmerCountPerOccurrence[std::get<1>(kmers[index][k])] += 1;
+									}
+									phmap::flat_hash_set<size_t> foundCounts;
 									for (auto pair2 : kmerCountPerOccurrence)
 									{
-										if (pair2.second == firstCount)
-										{
-											// todo pos should be something reasonable not this. but nothing uses poses of repetitive kmers as of comment time
-											assert(clusterNum < (size_t)std::numeric_limits<uint16_t>::max());
-											solidKmers[pair2.first].emplace_back(std::numeric_limits<uint16_t>::max(), clusterNum, index);
-										}
-										else
-										{
-											assert(pair2.second == secondCount);
-											// todo pos should be something reasonable not this. but nothing uses poses of repetitive kmers as of comment time
-											assert(clusterNum+1 < (size_t)std::numeric_limits<uint16_t>::max());
-											solidKmers[pair2.first].emplace_back(std::numeric_limits<uint16_t>::max(), clusterNum+1, index);
-										}
+										foundCounts.insert(pair2.second);
 									}
-									clusterNum += 2;
-									validClusters[index].emplace_back(minPos-0.01, maxPos+0.01);
-									validClusters[index].emplace_back(minPos-0.01, maxPos+0.01);
+									if (foundCounts.size() == 2)
+									{
+										size_t firstCount = *foundCounts.begin();
+										size_t secondCount = *(++foundCounts.begin());
+										assert(firstCount != secondCount);
+										for (auto pair2 : kmerCountPerOccurrence)
+										{
+											if (pair2.second == firstCount)
+											{
+												// todo pos should be something reasonable not this. but nothing uses poses of repetitive kmers as of comment time
+												assert(clusterNum < (size_t)std::numeric_limits<uint16_t>::max());
+												solidKmers[pair2.first].emplace_back(std::numeric_limits<uint16_t>::max(), clusterNum, index);
+											}
+											else
+											{
+												assert(pair2.second == secondCount);
+												// todo pos should be something reasonable not this. but nothing uses poses of repetitive kmers as of comment time
+												assert(clusterNum+1 < (size_t)std::numeric_limits<uint16_t>::max());
+												solidKmers[pair2.first].emplace_back(std::numeric_limits<uint16_t>::max(), clusterNum+1, index);
+											}
+										}
+										clusterNum += 2;
+										validClusters[index].emplace_back(minPos-0.01, maxPos+0.01);
+										validClusters[index].emplace_back(minPos-0.01, maxPos+0.01);
+									}
 								}
 							}
 							else
 							{
-								assert(j - clusterStart == occurrencesHere.size());
 								for (size_t k = clusterStart; k < j; k++)
 								{
 									assert((size_t)std::get<2>(kmers[index][k]) < (size_t)std::numeric_limits<uint16_t>::max());
@@ -1109,10 +1116,10 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 						}
 					}
 					currentlyNonrepetitive = true;
-					occurrencesHere.clear();
+					occurrencesHere.assign(occurrencesHere.size(), false);
 					if (j < kmers[index].size())
 					{
-						occurrencesHere.insert(std::get<1>(kmers[index][j]));
+						occurrencesHere[std::get<1>(kmers[index][j])] = true;
 					}
 					clusterStart = j;
 				}
