@@ -1572,12 +1572,30 @@ void splitPerCorrectedKmerPhasing(const std::vector<TwobitString>& readSequences
 	std::cerr << "corrected kmer phasing splitted " << countSplitted << " chunks" << std::endl;
 }
 
+class ScopedCounterIncrementer
+{
+public:
+	ScopedCounterIncrementer(std::atomic<size_t>& counter) :
+	counter(counter)
+	{
+		counter += 1;
+	}
+	~ScopedCounterIncrementer()
+	{
+		counter -= 1;
+	}
+private:
+	std::atomic<size_t>& counter;
+};
+
 void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by nearest neighbor phasing" << std::endl;
 	const size_t countNeighbors = 5;
 	const size_t countDifferences = 100;
 	size_t countSplitted = 0;
+	std::atomic<size_t> threadsRunning;
+	threadsRunning = 0;
 	std::mutex resultMutex;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksNeedProcessing;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksDoneProcessing;
@@ -1593,17 +1611,31 @@ void splitPerNearestNeighborPhasing(const std::vector<TwobitString>& readSequenc
 	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
-	iterateMultithreaded(0, numThreads, numThreads, [&readSequences, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, countNeighbors, countDifferences, kmerSize](size_t dummy)
+	iterateMultithreaded(0, numThreads, numThreads, [&readSequences, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, countNeighbors, countDifferences, kmerSize, &threadsRunning](size_t dummy)
 	{
 		while (true)
 		{
 			std::vector<std::pair<size_t, size_t>> chunkBeingDone;
+			bool gotOne = false;
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
-				if (chunksNeedProcessing.size() == 0) return;
-				std::swap(chunkBeingDone, chunksNeedProcessing.back());
-				chunksNeedProcessing.pop_back();
+				if (chunksNeedProcessing.size() >= 1)
+				{
+					std::swap(chunkBeingDone, chunksNeedProcessing.back());
+					chunksNeedProcessing.pop_back();
+					gotOne = true;
+				}
+				else
+				{
+					if (threadsRunning == 0) return;
+				}
 			}
+			if (!gotOne)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+				continue;
+			}
+			ScopedCounterIncrementer threadCounter { threadsRunning };
 			auto startTime = getTime();
 			if (chunkBeingDone.size() < 10)
 			{
