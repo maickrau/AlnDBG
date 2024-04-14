@@ -4448,17 +4448,32 @@ bool hasOtherHigherCoverageEdge(const uint64_t fork, const uint64_t edge, const 
 	return false;
 }
 
+double estimateCoverage(const ChunkUnitigGraph& graph)
+{
+	double sum = 0;
+	double div = 0;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (graph.unitigLengths[i] < 100000) continue;
+		sum += graph.unitigLengths[i] * graph.coverages[i];
+		div += graph.unitigLengths[i];
+	}
+	return div/sum;
+}
+
 void cleanTips(const std::vector<TwobitString>& readSequences, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage)
 {
 	std::cerr << "cleaning tips" << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
 	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage);
+	double reestimatedCoverage = estimateCoverage(graph);
+	if (reestimatedCoverage < 1) reestimatedCoverage = approxOneHapCoverage;
 	phmap::flat_hash_set<uint64_t> solidFork;
 	phmap::flat_hash_set<uint64_t> acceptableFork;
 	{
 		std::vector<std::pair<uint64_t, std::vector<std::vector<size_t>>>> forkReads = getUnitigForkReads(graph, readPaths);
-		solidFork = getSolidForks(forkReads, approxOneHapCoverage * 0.5);
+		solidFork = getSolidForks(forkReads, std::min(approxOneHapCoverage, reestimatedCoverage) * 0.5);
 		acceptableFork = getAcceptableForks(forkReads, solidFork, 3);
 	}
 	phmap::flat_hash_set<size_t> removeChunks;
