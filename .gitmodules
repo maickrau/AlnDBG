@@ -19,3 +19,6 @@
 [submodule "edlib"]
 	path = edlib
 	url = https://github.com/Martinsos/edlib.git
+[submodule "fastacompressor"]
+	path = fastacompressor
+	url = https://github.com/maickrau/fastacompressor.git
