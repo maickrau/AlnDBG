@@ -4821,7 +4821,7 @@ void resolveSemiAmbiguousUnitigs(std::vector<std::vector<std::tuple<size_t, size
 			uint64_t prev = triplet.first.first;
 			uint64_t after = triplet.first.second;
 			prevToAllele[i][prev] = clusterToAllele.at(find(parent, after));
-			afterToAllele[i][prev] = clusterToAllele.at(find(parent, after));
+			afterToAllele[i][after] = clusterToAllele.at(find(parent, after));
 		}
 		canResolveUnitig[i] = true;
 	}
