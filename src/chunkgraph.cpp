@@ -69,6 +69,13 @@ public:
 	size_t pathRightClip;
 };
 
+class ConsensusString
+{
+public:
+	TwobitString bases;
+	std::vector<std::pair<size_t, size_t>> Nchunks;
+};
+
 std::string getChunkSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t read, const size_t index)
 {
 	auto t = chunksPerRead[read][index];
@@ -3336,12 +3343,7 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 	}
 	if (sequenceCount.size() == 0)
 	{
-		std::string fakeseq;
-		for (size_t i = start; i <= end; i++)
-		{
-			fakeseq += "A";
-		}
-		return fakeseq;
+		return "";
 	}
 	size_t maxCount = 0;
 	for (const auto& pair : sequenceCount)
@@ -3355,7 +3357,7 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 	assert(false);
 }
 
-std::vector<TwobitString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& chunkLengths, const std::vector<size_t>& chunkCoverages, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
+std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& chunkLengths, const std::vector<size_t>& chunkCoverages, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
 {
 	std::vector<phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>>> readAnchorPoints; // unitigpos -> read, fw, readpos
 	readAnchorPoints.resize(unitigGraph.unitigLengths.size());
@@ -3397,7 +3399,7 @@ std::vector<TwobitString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGra
 			readAnchorPoints[unitig][unitigEndPos].emplace_back(i, fw, readEnd);
 		}
 	}
-	std::vector<TwobitString> result;
+	std::vector<ConsensusString> result;
 	result.resize(unitigGraph.unitigLengths.size());
 	for (size_t unitigi = 0; unitigi < unitigGraph.unitigLengths.size(); unitigi++)
 	{
@@ -3423,26 +3425,37 @@ std::vector<TwobitString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGra
 		for (size_t i = 1; i < anchorPositions.size(); i++)
 		{
 			std::string seq = getConsensusSequence(sequenceIndex, readAnchorPoints[unitigi], anchorPositions[i-1], anchorPositions[i]);
-			if (i+1 < anchorPositions.size()) seq.pop_back();
-			for (size_t j = 0; j < seq.size(); j++)
+			if (seq.size() >= 1)
 			{
-				switch(seq[j])
+				if (i+1 < anchorPositions.size()) seq.pop_back();
+				for (size_t j = 0; j < seq.size(); j++)
 				{
-				case 'A':
-					result[unitigi].emplace_back(0);
-					break;
-				case 'C':
-					result[unitigi].emplace_back(1);
-					break;
-				case 'G':
-					result[unitigi].emplace_back(2);
-					break;
-				case 'T':
-					result[unitigi].emplace_back(3);
-					break;
-				default:
-					assert(false);
-					break;
+					switch(seq[j])
+					{
+					case 'A':
+						result[unitigi].bases.emplace_back(0);
+						break;
+					case 'C':
+						result[unitigi].bases.emplace_back(1);
+						break;
+					case 'G':
+						result[unitigi].bases.emplace_back(2);
+						break;
+					case 'T':
+						result[unitigi].bases.emplace_back(3);
+						break;
+					default:
+						assert(false);
+						break;
+					}
+				}
+			}
+			else
+			{
+				result[unitigi].Nchunks.emplace_back(result[unitigi].bases.size(), anchorPositions[i]-anchorPositions[i-1]);
+				for(size_t j = anchorPositions[i-1]; j < anchorPositions[i]; j++)
+				{
+					result[unitigi].bases.emplace_back(0);
 				}
 			}
 		}
@@ -3653,7 +3666,7 @@ SparseEdgeContainer filterOutZEdges(const std::vector<std::vector<uint64_t>>& un
 	return result;
 }
 
-std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<TwobitString>> getChunkUnitigGraphInner(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const bool alsoConsensuses, const double approxOneHapCoverage, const FastaCompressor::CompressedStringIndex& sequenceIndex)
+std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphInner(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const bool alsoConsensuses, const double approxOneHapCoverage, const FastaCompressor::CompressedStringIndex& sequenceIndex)
 {
 	ChunkUnitigGraph result;
 	std::vector<std::vector<size_t>> lengths;
@@ -3716,7 +3729,7 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<T
 		result.chunksInUnitig[i] = unitigs[i];
 	}
 	auto paths = getUnitigPaths(result, chunksPerRead, allowedNode, unitigs, chunkLocationInUnitig);
-	std::vector<TwobitString> consensuses;
+	std::vector<ConsensusString> consensuses;
 	if (alsoConsensuses)
 	{
 		consensuses = getUnitigConsensuses(result, paths, sequenceIndex, chunksPerRead, lengths, coverages, chunkLocationInUnitig, edgeOverlaps);
@@ -3724,7 +3737,7 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<T
 	return std::make_tuple(result, paths, consensuses);
 }
 
-std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<TwobitString>> getChunkUnitigGraphWithConsensuses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage)
+std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphWithConsensuses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage)
 {
 	return getChunkUnitigGraphInner(chunksPerRead, true, approxOneHapCoverage, sequenceIndex);
 }
@@ -3736,13 +3749,21 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUniti
 	return std::make_tuple(std::get<0>(result), std::get<1>(result));
 }
 
-void writeUnitigSequences(const std::string& filename, const std::vector<TwobitString>& sequences)
+void writeUnitigSequences(const std::string& filename, const std::vector<ConsensusString>& sequences)
 {
 	std::ofstream file { filename };
 	for (size_t i = 0; i < sequences.size(); i++)
 	{
 		file << ">unitig_" << i << std::endl;
-		file << sequences[i].toString() << std::endl;
+		std::string str = sequences[i].bases.toString();
+		for (auto pair : sequences[i].Nchunks)
+		{
+			for (size_t j = pair.first; j < pair.first+pair.second; j++)
+			{
+				str[j] = 'N';
+			}
+		}
+		file << str << std::endl;
 	}
 }
 
@@ -3751,7 +3772,7 @@ void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile
 	std::cerr << "writing unitig graph " << graphFile << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::vector<TwobitString> unitigSequences;
+	std::vector<ConsensusString> unitigSequences;
 	std::tie(graph, readPaths, unitigSequences) = getChunkUnitigGraphWithConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage);
 	writeUnitigGraph(graphFile, graph);
 	std::cerr << "writing unitig paths " << pathsFile << std::endl;
