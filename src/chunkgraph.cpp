@@ -704,6 +704,13 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 {
 	assert(chunkSequences.size() < (size_t)std::numeric_limits<uint32_t>::max());
 	std::vector<size_t> currentPosPerOccurrence;
+	// 40 blocks so it advances 2.5% of sequence every block so kmers seen before block cannot cluster with kmers seen after block if no kmers in block
+	size_t numBlocks = 40;
+	// unless the strings are small, then no blocks
+	if (chunkSequences[0].size() < 1000)
+	{
+		numBlocks = 2;
+	}
 	for (size_t j = 0; j < chunkSequences.size(); j++)
 	{
 		assert(chunkSequences[j].size() < (size_t)std::numeric_limits<uint16_t>::max());
@@ -717,14 +724,13 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 	std::vector<size_t> nextCluster;
 	std::vector<size_t> kmersDroppingOutOfContext;
 	std::vector<KmerType> actualKmer;
-	// 40 blocks so it advances 2.5% of sequence every block so kmers seen before block cannot cluster with kmers seen after block if no kmers in block
-	for (size_t offsetBreakpoint = 0; offsetBreakpoint < 40; offsetBreakpoint++)
+	for (size_t offsetBreakpoint = 0; offsetBreakpoint < numBlocks; offsetBreakpoint++)
 	{
 		phmap::flat_hash_set<size_t> inContext;
 		for (size_t j = 0; j < chunkSequences.size(); j++)
 		{
-			size_t nextOffset = (double)(offsetBreakpoint+1)/(double)40 * (chunkSequences[j].size()-1);
-			assert(offsetBreakpoint != 39 || nextOffset == chunkSequences[j].size()-1);
+			size_t nextOffset = (double)(offsetBreakpoint+1)/(double)numBlocks * (chunkSequences[j].size()-1);
+			assert(offsetBreakpoint != (numBlocks-1) || nextOffset == chunkSequences[j].size()-1);
 			assert(nextOffset > currentPosPerOccurrence[j] + kmerSize);
 			size_t startPos, endPos;
 			startPos = currentPosPerOccurrence[j];
@@ -752,7 +758,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 			});
 			currentPosPerOccurrence[j] = nextOffset - kmerSize + 2;
 		}
-		if (offsetBreakpoint == 39)
+		if (offsetBreakpoint == (numBlocks-1))
 		{
 			kmersDroppingOutOfContext.insert(kmersDroppingOutOfContext.end(), inContext.begin(), inContext.end());
 			inContext.clear();
@@ -3313,9 +3319,169 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 	return result;
 }
 
+std::string getConsensus(const phmap::flat_hash_map<std::string, size_t>& sequenceCount, const size_t totalCount)
+{
+	const size_t kmerSize = 11;
+	phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<std::pair<size_t, size_t>, size_t>> outEdges;
+	std::vector<TwobitString> strings;
+	for (auto pair : sequenceCount)
+	{
+		for (size_t i = 0; i < pair.second; i++)
+		{
+			strings.emplace_back(pair.first);
+		}
+	}
+	size_t lastRead = std::numeric_limits<size_t>::max();
+	size_t lastKmer = std::numeric_limits<size_t>::max();
+	size_t lastCluster = std::numeric_limits<size_t>::max();
+	iterateSolidKmers(strings, kmerSize, strings.size()*0.5, false, true, [&outEdges, &lastRead, &lastKmer, &lastCluster](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+	{
+		if (occurrenceID != lastRead && lastRead != std::numeric_limits<size_t>::max())
+		{
+			outEdges[std::make_pair(lastKmer, lastCluster)][std::make_pair(std::numeric_limits<size_t>::max(), 1)] += 1;
+		}
+		if (pos == 0)
+		{
+			lastRead = occurrenceID;
+			lastKmer = std::numeric_limits<size_t>::max();
+			lastCluster = 0;
+			return;
+		}
+		if (occurrenceID != lastRead)
+		{
+			lastRead = occurrenceID;
+			lastKmer = std::numeric_limits<size_t>::max();
+			lastCluster = 0;
+		}
+		if (occurrenceID == lastRead)
+		{
+			outEdges[std::make_pair(lastKmer, lastCluster)][std::make_pair(kmer, clusterIndex)] += 1;
+		}
+		lastRead = occurrenceID;
+		lastKmer = kmer;
+		lastCluster = clusterIndex;
+	});
+	if (lastRead != std::numeric_limits<size_t>::max())
+	{
+		outEdges[std::make_pair(lastKmer, lastCluster)][std::make_pair(std::numeric_limits<size_t>::max(), 1)] += 1;
+	}
+	std::vector<std::pair<size_t, size_t>> greedyChosenPath;
+	greedyChosenPath.emplace_back(std::numeric_limits<size_t>::max(), 0);
+	while (true)
+	{
+		if (greedyChosenPath.back().first == std::numeric_limits<size_t>::max() && greedyChosenPath.back().second == 1)
+		{
+			break;
+		}
+		assert(outEdges.count(greedyChosenPath.back()) == 1);
+		size_t maxEdge = 0;
+		for (auto pair : outEdges.at(greedyChosenPath.back()))
+		{
+			maxEdge = std::max(maxEdge, pair.second);
+		}
+		for (auto pair : outEdges.at(greedyChosenPath.back()))
+		{
+			if (pair.second == maxEdge)
+			{
+				greedyChosenPath.emplace_back(pair.first);
+				break;
+			}
+		}
+	}
+	assert(greedyChosenPath.size() >= 2);
+	assert(greedyChosenPath[0].first == std::numeric_limits<size_t>::max());
+	assert(greedyChosenPath[0].second == 0);
+	assert(greedyChosenPath.back().first == std::numeric_limits<size_t>::max());
+	assert(greedyChosenPath.back().second == 1);
+	std::vector<phmap::flat_hash_map<std::string, size_t>> pieceCounts;
+	pieceCounts.resize(greedyChosenPath.size()-1);
+	phmap::flat_hash_map<std::pair<std::pair<size_t, size_t>, std::pair<size_t, size_t>>, size_t> pieceLocation;
+	for (size_t i = 1; i < greedyChosenPath.size(); i++)
+	{
+		pieceLocation[std::make_pair(greedyChosenPath[i-1], greedyChosenPath[i])] = i-1;
+	}
+	lastRead = std::numeric_limits<size_t>::max();
+	lastKmer = std::numeric_limits<size_t>::max();
+	lastCluster = std::numeric_limits<size_t>::max();
+	size_t lastPos = std::numeric_limits<size_t>::max();
+	iterateSolidKmers(strings, kmerSize, strings.size()*0.5, false, true, [&strings, &pieceLocation, &pieceCounts, &lastRead, &lastKmer, &lastCluster, &lastPos, kmerSize](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+	{
+		if (occurrenceID != lastRead && lastRead != std::numeric_limits<size_t>::max())
+		{
+			std::pair<size_t, size_t> from { lastKmer, lastCluster };
+			std::pair<size_t, size_t> to { std::numeric_limits<size_t>::max(), 1 };
+			if (pieceLocation.count(std::make_pair(from, to)) == 1)
+			{
+				std::string seq = strings[lastRead].substr(lastPos, strings[lastRead].size()-lastPos);
+				pieceCounts[pieceLocation.at(std::make_pair(from, to))][seq] += 1;
+			}
+		}
+		if (pos == 0)
+		{
+			lastRead = occurrenceID;
+			lastKmer = std::numeric_limits<size_t>::max();
+			lastCluster = 0;
+			lastPos = 0;
+			return;
+		}
+		if (occurrenceID != lastRead)
+		{
+			lastRead = occurrenceID;
+			lastKmer = std::numeric_limits<size_t>::max();
+			lastCluster = 0;
+			lastPos = 0;
+		}
+		if (occurrenceID == lastRead)
+		{
+			std::pair<size_t, size_t> from { lastKmer, lastCluster };
+			std::pair<size_t, size_t> to { kmer, clusterIndex };
+			if (pieceLocation.count(std::make_pair(from, to)) == 1)
+			{
+				std::string seq = strings[occurrenceID].substr(lastPos, pos-lastPos+kmerSize);
+				pieceCounts[pieceLocation.at(std::make_pair(from, to))][seq] += 1;
+			}
+		}
+		lastRead = occurrenceID;
+		lastKmer = kmer;
+		lastCluster = clusterIndex;
+		lastPos = pos;
+	});
+	if (lastRead != std::numeric_limits<size_t>::max())
+	{
+		std::pair<size_t, size_t> from { lastKmer, lastCluster };
+		std::pair<size_t, size_t> to { std::numeric_limits<size_t>::max(), 1 };
+		if (pieceLocation.count(std::make_pair(from, to)) == 1)
+		{
+			std::string seq = strings[lastRead].substr(lastPos, strings[lastRead].size()-lastPos);
+			pieceCounts[pieceLocation.at(std::make_pair(from, to))][seq] += 1;
+		}
+	}
+	std::string result;
+	for (size_t i = 0; i < pieceCounts.size(); i++)
+	{
+		size_t maxCount = 0;
+		for (const auto& pair : pieceCounts[i])
+		{
+			maxCount = std::max(maxCount, pair.second);
+		}
+		assert(maxCount >= 1);
+		for (const auto& pair : pieceCounts[i])
+		{
+			if (pair.second == maxCount)
+			{
+				result += pair.first;
+				if (i+1 < pieceCounts.size()) result.erase(result.end() - kmerSize, result.end());
+				break;
+			}
+		}
+	}
+	return result;
+}
+
 std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>>& readAnchorPoints, const size_t start, const size_t end)
 {
 	phmap::flat_hash_map<std::string, size_t> sequenceCount;
+	size_t totalCount = 0;
 	for (auto t1 : readAnchorPoints.at(start))
 	{
 		for (auto t2 : readAnchorPoints.at(end))
@@ -3339,6 +3505,7 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 				sequenceHere = MBG::revCompRaw(sequenceHere);
 			}
 			sequenceCount[sequenceHere] += 1;
+			totalCount += 1;
 		}
 	}
 	if (sequenceCount.size() == 0)
@@ -3350,11 +3517,15 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 	{
 		maxCount = std::max(maxCount, pair.second);
 	}
-	for (const auto& pair : sequenceCount)
+	std::cerr << "span " << start << " " << end << " maxCount " << maxCount << " totalcount " << totalCount << std::endl;
+	if (maxCount*2 > totalCount || totalCount == 2)
 	{
-		if (pair.second == maxCount) return pair.first;
+		for (const auto& pair : sequenceCount)
+		{
+			if (pair.second == maxCount) return pair.first;
+		}
 	}
-	assert(false);
+	return getConsensus(sequenceCount, totalCount);
 }
 
 std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& chunkLengths, const std::vector<size_t>& chunkCoverages, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
