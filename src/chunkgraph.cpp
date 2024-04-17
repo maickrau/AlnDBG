@@ -1439,6 +1439,41 @@ bool siteIsPerfectlyPhased(const std::vector<RankBitvector>& columns, const size
 	return false;
 }
 
+bool siteIsPhasedTwoVariantsThreeHaps(const std::vector<RankBitvector>& columns, const size_t left, const size_t right)
+{
+	size_t zerozero = 0;
+	size_t zeroone = 0;
+	size_t onezero = 0;
+	size_t oneone = 0;
+	assert(columns[left].size() == columns[right].size());
+	const std::vector<uint64_t>& leftbits = columns[left].getBits();
+	const std::vector<uint64_t>& rightbits = columns[right].getBits();
+	assert(leftbits.size() == rightbits.size());
+	for (size_t i = 0; i*64+64 < columns[left].size(); i++)
+	{
+		oneone += popcount(leftbits[i] & rightbits[i]);
+		zeroone += popcount(~leftbits[i] & rightbits[i]);
+		zerozero += popcount(~leftbits[i] & ~rightbits[i]);
+		onezero += popcount(leftbits[i] & ~rightbits[i]);
+	}
+	size_t remainingBits = columns[left].size() % 64;
+	uint64_t mask = 0xFFFFFFFFFFFFFFFFull;
+	if (remainingBits > 0) // remainingbits 0 means the whole block is valid
+	{
+		mask >>= (64-remainingBits);
+	}
+	oneone += popcount((leftbits[(columns[left].size()-1)/64] & rightbits[(columns[left].size()-1)/64]) & mask);
+	zeroone += popcount((~leftbits[(columns[left].size()-1)/64] & rightbits[(columns[left].size()-1)/64]) & mask);
+	zerozero += popcount((~leftbits[(columns[left].size()-1)/64] & ~rightbits[(columns[left].size()-1)/64]) & mask);
+	onezero += popcount((leftbits[(columns[left].size()-1)/64] & ~rightbits[(columns[left].size()-1)/64]) & mask);
+	if (zerozero > 0 && zerozero < 10) return false;
+	if (onezero > 0 && onezero < 10) return false;
+	if (zeroone > 0 && zeroone < 10) return false;
+	if (oneone > 0 && oneone < 10) return false;
+	if (zerozero > 0 && zeroone > 0 && onezero > 0 && oneone > 0) return false;
+	return true;
+}
+
 bool siteIsInformative(const std::vector<RankBitvector>& columns, const size_t left, const size_t right)
 {
 	size_t zerozero = 0;
@@ -1763,6 +1798,11 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 					if (kmerLocation[j].first < kmerLocation[k].second+1 && kmerLocation[j].second + 1 > kmerLocation[k].first) continue;
 					if (phasingSite[j] && phasingSite[k]) continue;
 					if (siteIsPerfectlyPhased(columns, j, k))
+					{
+						phasingSite[j] = true;
+						phasingSite[k] = true;
+					}
+					else if (siteIsPhasedTwoVariantsThreeHaps(columns, j, k))
 					{
 						phasingSite[j] = true;
 						phasingSite[k] = true;
