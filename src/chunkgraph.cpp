@@ -703,13 +703,14 @@ template <typename KmerType, typename F>
 phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSolidKmersWithKmerType(const std::vector<TwobitString>& chunkSequences, const size_t kmerSize, const size_t minSolidThreshold, const bool allowTwoAlleleRepeats, const bool needClusters, F callback)
 {
 	assert(chunkSequences.size() < (size_t)std::numeric_limits<uint32_t>::max());
+	assert(chunkSequences.size() >= 1);
 	std::vector<size_t> currentPosPerOccurrence;
 	// 40 blocks so it advances 2.5% of sequence every block so kmers seen before block cannot cluster with kmers seen after block if no kmers in block
 	size_t numBlocks = 40;
 	// unless the strings are small, then no blocks
 	if (chunkSequences[0].size() < 1000)
 	{
-		numBlocks = 2;
+		numBlocks = 1;
 	}
 	for (size_t j = 0; j < chunkSequences.size(); j++)
 	{
@@ -3319,7 +3320,7 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 	return result;
 }
 
-std::string getConsensus(const phmap::flat_hash_map<std::string, size_t>& sequenceCount, const size_t totalCount)
+std::string getConsensusFromSolidKmers(const phmap::flat_hash_map<std::string, size_t>& sequenceCount, const size_t totalCount)
 {
 	const size_t kmerSize = 11;
 	phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<std::pair<size_t, size_t>, size_t>> outEdges;
@@ -3476,6 +3477,38 @@ std::string getConsensus(const phmap::flat_hash_map<std::string, size_t>& sequen
 		}
 	}
 	return result;
+}
+
+std::string getConsensusPickArbitrary(const phmap::flat_hash_map<std::string, size_t>& sequenceCount, const size_t totalCount)
+{
+	size_t maxCount = 0;
+	for (const auto& pair : sequenceCount)
+	{
+		maxCount = std::max(pair.second, maxCount);
+	}
+	for (const auto& pair : sequenceCount)
+	{
+		if (pair.second == maxCount) return pair.first;
+	}
+	assert(false);
+}
+
+std::string getConsensus(const phmap::flat_hash_map<std::string, size_t>& sequenceCount, const size_t totalCount)
+{
+	std::vector<size_t> lengths;
+	for (const auto& pair : sequenceCount)
+	{
+		for (size_t i = 0; i < pair.second; i++)
+		{
+			lengths.emplace_back(pair.first.size());
+		}
+	}
+	std::sort(lengths.begin(), lengths.end());
+	if (lengths[lengths.size()/2] < 20)
+	{
+		return getConsensusPickArbitrary(sequenceCount, totalCount);
+	}
+	return getConsensusFromSolidKmers(sequenceCount, totalCount);
 }
 
 std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>>& readAnchorPoints, const size_t start, const size_t end)
@@ -5034,28 +5067,33 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		numChunks += chunksPerRead[i].size();
 	}
 	std::cerr << numChunks << " chunks" << std::endl;
-	writeGraph("fakegraph2.gfa", "fakepaths2.txt", chunksPerRead);
+	writeGraph("fakegraph-pre.gfa", "fakepaths-pre.txt", chunksPerRead);
 	splitPerLength(chunksPerRead);
-	writeGraph("fakegraph3.gfa", "fakepaths3.txt", chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round1.gfa", "paths1.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+	writeGraph("fakegraph1.gfa", "fakepaths1.txt", chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerBaseCounts(sequenceIndex, chunksPerRead, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round2.gfa", "paths2.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+	writeGraph("fakegraph2.gfa", "fakepaths2.txt", chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerMinHashes(sequenceIndex, chunksPerRead, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round3.gfa", "paths3.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+	writeGraph("fakegraph3.gfa", "fakepaths3.txt", chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	writeReadChunkSequences("sequences-chunk4.txt", chunksPerRead, sequenceIndex);
 	writeUnitigGraph("graph-round4.gfa", "paths4.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+	writeGraph("fakegraph4.gfa", "fakepaths4.txt", chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerSequenceIdentity(sequenceIndex, chunksPerRead, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph5.gfa", "fakepaths5.txt", chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	writeReadChunkSequences("sequences-chunk5.txt", chunksPerRead, sequenceIndex);
 	writeUnitigGraph("graph-round5.gfa", "paths5.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerAllelePhasingWithinChunk(sequenceIndex, chunksPerRead, 11, numThreads);
@@ -5121,7 +5159,8 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeReadChunkSequences("sequences-chunk13.txt", chunksPerRead, sequenceIndex);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", "unitigs13.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+	writeUnitigGraph("graph-round13-2.gfa", "paths13-2.gaf", "unitigs13-2.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeReadUnitigSequences("sequences-graph13.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
