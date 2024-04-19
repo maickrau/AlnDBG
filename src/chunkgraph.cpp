@@ -2350,6 +2350,80 @@ std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, co
 	return result;
 }
 
+void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
+{
+	assert(kmerSize <= 31);
+	std::vector<std::tuple<size_t, size_t, uint64_t, uint64_t, bool>> indexWithFirstLastKmers;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto seq = sequenceIndex.getSubstring(i, std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j])-std::get<0>(chunksPerRead[i][j])+1);
+			uint64_t firstKmer = 0;
+			uint64_t lastKmer = 0;
+			for (size_t k = 0; k < kmerSize; k++)
+			{
+				firstKmer <<= 2;
+				lastKmer <<= 2;
+				switch(seq[k])
+				{
+					case 'A':
+						firstKmer += 0;
+						break;
+					case 'C':
+						firstKmer += 1;
+						break;
+					case 'G':
+						firstKmer += 2;
+						break;
+					case 'T':
+						firstKmer += 3;
+						break;
+					default:
+						assert(false);
+				}
+				switch(seq[seq.size()-1-k])
+				{
+					case 'A':
+						lastKmer += 3;
+						break;
+					case 'C':
+						lastKmer += 2;
+						break;
+					case 'G':
+						lastKmer += 1;
+						break;
+					case 'T':
+						lastKmer += 0;
+						break;
+					default:
+						assert(false);
+				}
+			}
+			indexWithFirstLastKmers.emplace_back(i, j, std::min(firstKmer, lastKmer), std::max(firstKmer, lastKmer), firstKmer < lastKmer);
+		}
+	}
+	std::sort(indexWithFirstLastKmers.begin(), indexWithFirstLastKmers.end(), [](auto left, auto right)
+	{
+		if (std::get<2>(left) < std::get<2>(right)) return true;
+		if (std::get<2>(left) > std::get<2>(right)) return false;
+		if (std::get<3>(left) < std::get<3>(right)) return true;
+		if (std::get<3>(left) > std::get<3>(right)) return false;
+		return false;
+	});
+	size_t nextNum = 0;
+	for (size_t iii = 0; iii < indexWithFirstLastKmers.size(); iii++)
+	{
+		if (iii > 0 && (std::get<2>(indexWithFirstLastKmers[iii]) != std::get<2>(indexWithFirstLastKmers[iii-1]) || std::get<3>(indexWithFirstLastKmers[iii]) != std::get<3>(indexWithFirstLastKmers[iii-1])))
+		{
+			nextNum += 1;
+		}
+		size_t i = std::get<0>(indexWithFirstLastKmers[iii]);
+		size_t j = std::get<1>(indexWithFirstLastKmers[iii]);
+		std::get<2>(chunksPerRead[i][j]) = nextNum + (std::get<4>(indexWithFirstLastKmers[iii]) ? firstBitUint64_t : 0);
+	}
+}
+
 void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	const size_t mismatchFloor = 10;
@@ -3196,6 +3270,7 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 		assert(std::get<0>(chunkLocationInUnitig[i]) != std::numeric_limits<uint64_t>::max());
 		assert(std::get<3>(chunkLocationInUnitig[i]) != 0);
 		assert(std::get<2>(chunkLocationInUnitig[i]) < std::get<3>(chunkLocationInUnitig[i]));
+		assert(std::get<3>(chunkLocationInUnitig[i]) - std::get<2>(chunkLocationInUnitig[i]) == lengths[i][lengths[i].size()/2]);
 		assert(std::get<3>(chunkLocationInUnitig[i]) <= unitigLengths[unitig]);
 		if (std::get<0>(chunkLocationInUnitig[i]) & firstBitUint64_t) continue;
 		std::get<1>(chunkLocationInUnitig[i]) = unitigs[unitig].size() - 1 - std::get<1>(chunkLocationInUnitig[i]);
@@ -3203,6 +3278,7 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 		std::get<2>(chunkLocationInUnitig[i]) = unitigLengths[unitig] - std::get<2>(chunkLocationInUnitig[i]);
 		std::get<3>(chunkLocationInUnitig[i]) = unitigLengths[unitig] - std::get<3>(chunkLocationInUnitig[i]);
 		assert(std::get<2>(chunkLocationInUnitig[i]) < std::get<3>(chunkLocationInUnitig[i]));
+		assert(std::get<3>(chunkLocationInUnitig[i]) - std::get<2>(chunkLocationInUnitig[i]) == lengths[i][lengths[i].size()/2]);
 		assert(std::get<3>(chunkLocationInUnitig[i]) <= unitigLengths[unitig]);
 	}
 	return std::make_tuple(unitigs, unitigLengths, chunkLocationInUnitig);
@@ -3563,6 +3639,11 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 
 std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& chunkLengths, const std::vector<size_t>& chunkCoverages, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
 {
+	for (size_t i = 0; i < chunkLocationInUnitig.size(); i++)
+	{
+		if (std::get<0>(chunkLocationInUnitig[i]) == std::numeric_limits<size_t>::max()) continue;
+		std::cerr << "chunk " << i << " location in unitig " << ((std::get<0>(chunkLocationInUnitig[i]) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(chunkLocationInUnitig[i]) & maskUint64_t) << " " << std::get<1>(chunkLocationInUnitig[i]) << " " << std::get<2>(chunkLocationInUnitig[i]) << " " << std::get<3>(chunkLocationInUnitig[i]) << std::endl;
+	}
 	std::vector<phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>>> readAnchorPoints; // unitigpos -> read, fw, readpos
 	readAnchorPoints.resize(unitigGraph.unitigLengths.size());
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -5047,7 +5128,16 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 			}
 		}
 	}
-	return result;
+	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> realResult;
+	realResult.resize(sequenceIndex.size());
+	for (size_t i = 0; i < result.size(); i++)
+	{
+		for (size_t j = 1; j < result[i].size(); j++)
+		{
+			realResult[i].emplace_back(std::get<0>(result[i][j-1]), std::get<1>(result[i][j]), 0);
+		}
+	}
+	return realResult;
 }
 
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t k, const size_t windowSize, const size_t middleSkip)
@@ -5068,6 +5158,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	}
 	std::cerr << numChunks << " chunks" << std::endl;
 	writeGraph("fakegraph-pre.gfa", "fakepaths-pre.txt", chunksPerRead);
+	splitPerFirstLastKmers(sequenceIndex, chunksPerRead, k);
 	splitPerLength(chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round1.gfa", "paths1.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
