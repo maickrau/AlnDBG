@@ -5128,22 +5128,47 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 			}
 		}
 	}
-	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> realResult;
-	realResult.resize(sequenceIndex.size());
-	for (size_t i = 0; i < result.size(); i++)
+	return result;
+}
+
+void addMissingPiecesBetweenChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
+{
+	std::vector<std::tuple<size_t, size_t, size_t>> additionalPieces;
+	size_t maxChunk = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
-		for (size_t j = 1; j < result[i].size(); j++)
+		if (chunksPerRead[i].size() == 0) continue;
+		maxChunk = std::max(std::get<2>(chunksPerRead[i][0]) & maskUint64_t, maxChunk);
+		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
 		{
-			realResult[i].emplace_back(std::get<0>(result[i][j-1]), std::get<1>(result[i][j]), 0);
+			maxChunk = std::max(std::get<2>(chunksPerRead[i][j]) & maskUint64_t, maxChunk);
+			if (std::get<1>(chunksPerRead[i][j-1]) < std::get<0>(chunksPerRead[i][j]))
+			{
+				size_t start = std::get<1>(chunksPerRead[i][j-1])-kmerSize+1;
+				size_t end = std::get<0>(chunksPerRead[i][j])+kmerSize-1;
+				assert(start > std::get<0>(chunksPerRead[i][j-1]));
+				assert(end > std::get<1>(chunksPerRead[i][j-1]));
+				assert(start < std::get<0>(chunksPerRead[i][j]));
+				assert(end < std::get<1>(chunksPerRead[i][j]));
+				additionalPieces.emplace_back(start, end, i);
+			}
 		}
 	}
-	return realResult;
+	for (auto t : additionalPieces)
+	{
+		chunksPerRead[std::get<2>(t)].emplace_back(std::get<0>(t), std::get<1>(t), maxChunk+1);
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		std::sort(chunksPerRead[i].begin(), chunksPerRead[i].end());
+	}
 }
 
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t k, const size_t windowSize, const size_t middleSkip)
 {
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getBetterChunksPerRead(sequenceIndex, rawReadLengths, numThreads, k, windowSize, middleSkip);
+	addMissingPiecesBetweenChunks(chunksPerRead, k);
 	size_t numChunks = 0;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
