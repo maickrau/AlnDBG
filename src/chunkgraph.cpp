@@ -3594,7 +3594,7 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 	return getConsensus(sequenceCount, totalCount);
 }
 
-std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& chunkLengths, const std::vector<size_t>& chunkCoverages, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
+std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& chunkLengths, const std::vector<size_t>& chunkCoverages, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps, const size_t numThreads)
 {
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::cerr << "getting unitig consensuses" << std::endl;
@@ -3640,9 +3640,8 @@ std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitig
 	}
 	std::vector<ConsensusString> result;
 	result.resize(unitigGraph.unitigLengths.size());
-	for (size_t unitigi = 0; unitigi < unitigGraph.unitigLengths.size(); unitigi++)
+	iterateMultithreaded(0, unitigGraph.unitigLengths.size(), numThreads, [&readAnchorPoints, &sequenceIndex, &result, &unitigGraph](const size_t unitigi)
 	{
-		std::cerr << "doing unitig " << unitigi << " consensus" << std::endl;
 		std::vector<size_t> anchorPositions;
 		for (const auto& pair : readAnchorPoints[unitigi])
 		{
@@ -3689,7 +3688,7 @@ std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitig
 				}
 			}
 		}
-	}
+	});
 	std::cerr << "got unitig consensuses" << std::endl;
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	return result;
@@ -3898,7 +3897,7 @@ SparseEdgeContainer filterOutZEdges(const std::vector<std::vector<uint64_t>>& un
 	return result;
 }
 
-std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphInner(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const bool alsoConsensuses, const double approxOneHapCoverage, const FastaCompressor::CompressedStringIndex& sequenceIndex)
+std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphInner(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const bool alsoConsensuses, const double approxOneHapCoverage, const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t numThreads)
 {
 	ChunkUnitigGraph result;
 	std::vector<std::vector<size_t>> lengths;
@@ -3964,20 +3963,20 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<C
 	std::vector<ConsensusString> consensuses;
 	if (alsoConsensuses)
 	{
-		consensuses = getUnitigConsensuses(result, paths, sequenceIndex, chunksPerRead, lengths, coverages, chunkLocationInUnitig, edgeOverlaps);
+		consensuses = getUnitigConsensuses(result, paths, sequenceIndex, chunksPerRead, lengths, coverages, chunkLocationInUnitig, edgeOverlaps, numThreads);
 	}
 	return std::make_tuple(result, paths, consensuses);
 }
 
-std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphWithConsensuses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage)
+std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphWithConsensuses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage, const size_t numThreads)
 {
-	return getChunkUnitigGraphInner(chunksPerRead, true, approxOneHapCoverage, sequenceIndex);
+	return getChunkUnitigGraphInner(chunksPerRead, true, approxOneHapCoverage, sequenceIndex, numThreads);
 }
 
 std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUnitigGraph(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage)
 {
 	FastaCompressor::CompressedStringIndex fakeSequences { 0, 0 };
-	auto result = getChunkUnitigGraphInner(chunksPerRead, false, approxOneHapCoverage, fakeSequences);
+	auto result = getChunkUnitigGraphInner(chunksPerRead, false, approxOneHapCoverage, fakeSequences, 1);
 	return std::make_tuple(std::get<0>(result), std::get<1>(result));
 }
 
@@ -3999,13 +3998,13 @@ void writeUnitigSequences(const std::string& filename, const std::vector<Consens
 	}
 }
 
-void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::string& unitigSequencesFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage)
+void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::string& unitigSequencesFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t numThreads)
 {
 	std::cerr << "writing unitig graph " << graphFile << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
 	std::vector<ConsensusString> unitigSequences;
-	std::tie(graph, readPaths, unitigSequences) = getChunkUnitigGraphWithConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage);
+	std::tie(graph, readPaths, unitigSequences) = getChunkUnitigGraphWithConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage, numThreads);
 	writeUnitigGraph(graphFile, graph);
 	std::cerr << "writing unitig paths " << pathsFile << std::endl;
 	writeUnitigPaths(pathsFile, graph, readPaths, sequenceIndex, rawReadLengths);
@@ -5223,7 +5222,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	writeReadChunkSequences("sequences-chunk13.txt", chunksPerRead, sequenceIndex);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeUnitigGraph("graph-round13.gfa", "paths13.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
-	writeUnitigGraph("graph-round13-2.gfa", "paths13-2.gaf", "unitigs13-2.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+	writeUnitigGraph("graph-round13-2.gfa", "paths13-2.gaf", "unitigs13-2.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeReadUnitigSequences("sequences-graph13.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
