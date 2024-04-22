@@ -3579,7 +3579,6 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 	{
 		maxCount = std::max(maxCount, pair.second);
 	}
-	std::cerr << "span " << start << " " << end << " maxCount " << maxCount << " totalcount " << totalCount << std::endl;
 	if (maxCount*2 > totalCount || totalCount == 2)
 	{
 		for (const auto& pair : sequenceCount)
@@ -3592,11 +3591,8 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 
 std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& chunkLengths, const std::vector<size_t>& chunkCoverages, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
 {
-	for (size_t i = 0; i < chunkLocationInUnitig.size(); i++)
-	{
-		if (std::get<0>(chunkLocationInUnitig[i]) == std::numeric_limits<size_t>::max()) continue;
-		std::cerr << "chunk " << i << " location in unitig " << ((std::get<0>(chunkLocationInUnitig[i]) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(chunkLocationInUnitig[i]) & maskUint64_t) << " " << std::get<1>(chunkLocationInUnitig[i]) << " " << std::get<2>(chunkLocationInUnitig[i]) << " " << std::get<3>(chunkLocationInUnitig[i]) << std::endl;
-	}
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	std::cerr << "getting unitig consensuses" << std::endl;
 	std::vector<phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>>> readAnchorPoints; // unitigpos -> read, fw, readpos
 	readAnchorPoints.resize(unitigGraph.unitigLengths.size());
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -3641,6 +3637,7 @@ std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitig
 	result.resize(unitigGraph.unitigLengths.size());
 	for (size_t unitigi = 0; unitigi < unitigGraph.unitigLengths.size(); unitigi++)
 	{
+		std::cerr << "doing unitig " << unitigi << " consensus" << std::endl;
 		std::vector<size_t> anchorPositions;
 		for (const auto& pair : readAnchorPoints[unitigi])
 		{
@@ -3649,16 +3646,6 @@ std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitig
 		assert(anchorPositions.size() >= 2);
 		std::sort(anchorPositions.begin(), anchorPositions.end());
 		assert(anchorPositions[0] == 0);
-		std::cerr << "unitig " << unitigi << " has " << anchorPositions.size() << " anchor positions" << std::endl;
-		for (size_t i = 0; i < anchorPositions.size(); i++)
-		{
-			std::cerr << "pos " << i << " location " << anchorPositions[i] << " reads";
-			for (auto t : readAnchorPoints[unitigi][anchorPositions[i]])
-			{
-				std::cerr << " " << std::get<0>(t) << (std::get<1>(t) ? "+" : "-") << "(" << std::get<2>(t) << ")";
-			}
-			std::cerr << std::endl;
-		}
 		assert(anchorPositions.back() == unitigGraph.unitigLengths[unitigi]);
 		for (size_t i = 1; i < anchorPositions.size(); i++)
 		{
@@ -3698,6 +3685,8 @@ std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitig
 			}
 		}
 	}
+	std::cerr << "got unitig consensuses" << std::endl;
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	return result;
 }
 
