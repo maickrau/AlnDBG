@@ -3404,6 +3404,7 @@ std::vector<std::pair<size_t, size_t>> getConsensusSolidKmerPath(const phmap::fl
 	assert(outEdges.at(greedyChosenPath.back()).size() >= 1);
 	while (outEdges.count(greedyChosenPath.back()) == 1)
 	{
+		assert(greedyChosenPath.size() <= outEdges.size()+5);
 		size_t maxcov = 0;
 		for (auto edge : outEdges.at(greedyChosenPath.back()))
 		{
@@ -3449,13 +3450,17 @@ std::string getConsensusFromSolidKmers(const phmap::flat_hash_map<std::string, s
 	}
 	iterateSolidKmers(strings, kmerSize, strings.size()*0.5, false, true, [&kmersPerString](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 	{
+		if (pos == 0) return;
+		assert(pos > std::get<2>(kmersPerString[occurrenceID].back()));
 		kmersPerString[occurrenceID].emplace_back(kmer, clusterIndex, pos);
 	});
 	for (size_t i = 0; i < kmersPerString.size(); i++)
 	{
+		assert(std::get<2>(kmersPerString[i].back()) < strings[i].size());
 		kmersPerString[i].emplace_back(std::numeric_limits<size_t>::max(), 1, strings[i].size());
 		for (size_t j = 1; j < kmersPerString[i].size(); j++)
 		{
+			assert(std::get<2>(kmersPerString[i][j]) > std::get<2>(kmersPerString[i][j-1]));
 			std::pair<size_t, size_t> from { std::get<0>(kmersPerString[i][j-1]), std::get<1>(kmersPerString[i][j-1]) };
 			std::pair<size_t, size_t> to { std::get<0>(kmersPerString[i][j]), std::get<1>(kmersPerString[i][j]) };
 			outEdges[from][to] += 1;
