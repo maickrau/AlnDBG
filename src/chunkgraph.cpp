@@ -3448,7 +3448,7 @@ std::string getConsensusFromSolidKmers(const phmap::flat_hash_map<std::string, s
 	{
 		kmersPerString[i].emplace_back(std::numeric_limits<size_t>::max(), 0, 0);
 	}
-	iterateSolidKmers(strings, kmerSize, strings.size()*0.5, false, true, [&kmersPerString](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+	iterateSolidKmers(strings, kmerSize, (strings.size()+1)*0.5, false, true, [&kmersPerString](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 	{
 		if (pos == 0) return;
 		assert(pos > std::get<2>(kmersPerString[occurrenceID].back()));
