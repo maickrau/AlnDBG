@@ -3396,12 +3396,42 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 	return result;
 }
 
-std::vector<std::pair<size_t, size_t>> getConsensusSolidKmerPath(const phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<std::pair<size_t, size_t>, size_t>>& outEdges)
+void removeKmer(std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>& kmersPerString, std::pair<size_t, size_t> removeThis)
 {
+	assert(removeThis.first != std::numeric_limits<size_t>::max());
+	for (size_t i = 0; i < kmersPerString.size(); i++)
+	{
+		assert(kmersPerString[i].size() >= 2);
+		assert(std::get<0>(kmersPerString[i][0]) != removeThis.first || std::get<1>(kmersPerString[i][0]) != removeThis.second);
+		assert(std::get<0>(kmersPerString[i].back()) != removeThis.first || std::get<1>(kmersPerString[i].back()) != removeThis.second);
+		for (size_t j = kmersPerString[i].size()-2; j > 0; j--)
+		{
+			if (std::get<0>(kmersPerString[i][j]) != removeThis.first || std::get<1>(kmersPerString[i][j]) != removeThis.second) continue;
+			kmersPerString[i].erase(kmersPerString[i].begin()+j);
+		}
+	}
+}
+
+std::vector<std::pair<size_t, size_t>> getConsensusSolidKmerPath(std::vector<std::vector<std::tuple<size_t, size_t, size_t>>>& kmersPerString)
+{
+start:
+	phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<std::pair<size_t, size_t>, size_t>> outEdges;
+	for (size_t i = 0; i < kmersPerString.size(); i++)
+	{
+		for (size_t j = 1; j < kmersPerString[i].size(); j++)
+		{
+			assert(std::get<2>(kmersPerString[i][j]) > std::get<2>(kmersPerString[i][j-1]));
+			std::pair<size_t, size_t> from { std::get<0>(kmersPerString[i][j-1]), std::get<1>(kmersPerString[i][j-1]) };
+			std::pair<size_t, size_t> to { std::get<0>(kmersPerString[i][j]), std::get<1>(kmersPerString[i][j]) };
+			outEdges[from][to] += 1;
+		}
+	}
 	std::vector<std::pair<size_t, size_t>> greedyChosenPath;
 	greedyChosenPath.emplace_back(std::numeric_limits<size_t>::max(), 0);
 	assert(outEdges.count(greedyChosenPath.back()) == 1);
 	assert(outEdges.at(greedyChosenPath.back()).size() >= 1);
+	phmap::flat_hash_set<std::pair<size_t, size_t>> visited;
+	visited.emplace(std::numeric_limits<size_t>::max(), 0);
 	while (outEdges.count(greedyChosenPath.back()) == 1)
 	{
 		assert(greedyChosenPath.size() <= outEdges.size()+5);
@@ -3415,6 +3445,12 @@ std::vector<std::pair<size_t, size_t>> getConsensusSolidKmerPath(const phmap::fl
 		{
 			if (edge.second == maxcov)
 			{
+				if (visited.count(edge.first) == 1)
+				{
+					removeKmer(kmersPerString, edge.first);
+					goto start; // manual tail call recursion optimization because apparently gcc doesn't
+				}
+				visited.emplace(edge.first);
 				greedyChosenPath.emplace_back(edge.first);
 				break;
 			}
@@ -3430,7 +3466,6 @@ std::string getConsensusFromSolidKmers(const phmap::flat_hash_map<std::string, s
 {
 	const size_t kmerSize = 11;
 	assert(sequenceCount.size() >= 2);
-	phmap::flat_hash_map<std::pair<size_t, size_t>, phmap::flat_hash_map<std::pair<size_t, size_t>, size_t>> outEdges;
 	std::vector<TwobitString> strings;
 	for (auto pair : sequenceCount)
 	{
@@ -3458,15 +3493,8 @@ std::string getConsensusFromSolidKmers(const phmap::flat_hash_map<std::string, s
 	{
 		assert(std::get<2>(kmersPerString[i].back()) < strings[i].size());
 		kmersPerString[i].emplace_back(std::numeric_limits<size_t>::max(), 1, strings[i].size());
-		for (size_t j = 1; j < kmersPerString[i].size(); j++)
-		{
-			assert(std::get<2>(kmersPerString[i][j]) > std::get<2>(kmersPerString[i][j-1]));
-			std::pair<size_t, size_t> from { std::get<0>(kmersPerString[i][j-1]), std::get<1>(kmersPerString[i][j-1]) };
-			std::pair<size_t, size_t> to { std::get<0>(kmersPerString[i][j]), std::get<1>(kmersPerString[i][j]) };
-			outEdges[from][to] += 1;
-		}
 	}
-	std::vector<std::pair<size_t, size_t>> chosenPath = getConsensusSolidKmerPath(outEdges);
+	std::vector<std::pair<size_t, size_t>> chosenPath = getConsensusSolidKmerPath(kmersPerString);
 	assert(chosenPath.size() >= 2);
 	assert(chosenPath[0].first == std::numeric_limits<size_t>::max());
 	assert(chosenPath[0].second == 0);
