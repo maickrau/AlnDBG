@@ -5175,7 +5175,6 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	writeReadChunkSequences("sequences-chunk4.txt", chunksPerRead, sequenceIndex);
 	writeUnitigGraph("graph-round4.gfa", "paths4.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 	writeGraph("fakegraph4.gfa", "fakepaths4.txt", chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -5183,7 +5182,6 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph5.gfa", "fakepaths5.txt", chunksPerRead);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	writeReadChunkSequences("sequences-chunk5.txt", chunksPerRead, sequenceIndex);
 	writeUnitigGraph("graph-round5.gfa", "paths5.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerAllelePhasingWithinChunk(sequenceIndex, chunksPerRead, 11, numThreads);
@@ -5198,7 +5196,6 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerNearestNeighborPhasing(sequenceIndex, chunksPerRead, 11, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	writeReadChunkSequences("sequences-chunk8.txt", chunksPerRead, sequenceIndex);
 	writeGraph("fakegraph8.gfa", "fakepaths8.txt", chunksPerRead);
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 	splitPerCorrectedKmerPhasing(sequenceIndex, chunksPerRead, 11, numThreads);
