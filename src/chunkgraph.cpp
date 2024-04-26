@@ -5020,6 +5020,103 @@ void cleanTips(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& c
 	std::cerr << "removed " << removeUnitigCount << " unitigs, " << removeChunks.size() << " chunks" << std::endl;
 }
 
+void resolveVerySmallNodes(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<size_t>& rawReadLengths, const size_t maxResolveSize, const size_t numThreads, const double approxOneHapCoverage)
+{
+	std::cerr << "resolving very small nodes" << std::endl;
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage);
+	phmap::flat_hash_set<size_t> resolvableTinies;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (graph.chunksInUnitig[i].size() != 1) continue;
+		if (graph.unitigLengths[i] >= maxResolveSize) continue;
+		if (graph.edges.getEdges(std::make_pair(i, true)).size() < 2 && graph.edges.getEdges(std::make_pair(i, false)).size() < 2) continue;
+		resolvableTinies.insert(graph.chunksInUnitig[i][0] & maskUint64_t);
+	}
+	size_t nextNum = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (!NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) nextNum = std::max(nextNum, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+			if (resolvableTinies.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 0) continue;
+			if (std::get<0>(chunksPerRead[i][j]) == 0)
+			{
+				resolvableTinies.erase(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+			}
+			if (std::get<1>(chunksPerRead[i][j])+1 == rawReadLengths[i])
+			{
+				resolvableTinies.erase(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+			}
+			if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1])+1)
+			{
+				resolvableTinies.erase(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+			}
+			if (j+1 < chunksPerRead[i].size() && std::get<1>(chunksPerRead[i][j])+1 == std::get<1>(chunksPerRead[i][j-1]))
+			{
+				resolvableTinies.erase(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+			}
+		}
+	}
+	for (size_t chunk : resolvableTinies)
+	{
+		std::cerr << "resolve tiny chunk " << chunk << std::endl;
+	}
+	nextNum += 1;
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeToNumber;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		std::vector<size_t> eraseIndices;
+		std::vector<std::tuple<size_t, size_t, uint64_t>> newChunks;
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (resolvableTinies.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 0) continue;
+			eraseIndices.emplace_back(j);
+			if (j > 0)
+			{
+				uint64_t here = std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t;
+				uint64_t neighbor = std::get<2>(chunksPerRead[i][j-1]) ^ firstBitUint64_t;
+				if (!NonexistantChunk(neighbor))
+				{
+					std::pair<uint64_t, uint64_t> key { here, neighbor };
+					if (edgeToNumber.count(key) == 0)
+					{
+						edgeToNumber[key] = nextNum;
+						nextNum += 1;
+					}
+					uint64_t node = edgeToNumber.at(key);
+					newChunks.emplace_back(std::get<0>(chunksPerRead[i][j])-1, std::get<1>(chunksPerRead[i][j]), node);
+				}
+			}
+			if (j+1 < chunksPerRead[i].size())
+			{
+				uint64_t here = std::get<2>(chunksPerRead[i][j]);
+				uint64_t neighbor = std::get<2>(chunksPerRead[i][j+1]);
+				if (!NonexistantChunk(neighbor))
+				{
+					std::pair<uint64_t, uint64_t> key { here, neighbor };
+					if (edgeToNumber.count(key) == 0)
+					{
+						edgeToNumber[key] = nextNum;
+						nextNum += 1;
+					}
+					uint64_t node = edgeToNumber.at(key) + firstBitUint64_t;
+					newChunks.emplace_back(std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j])+1, node);
+				}
+			}
+		}
+		if (eraseIndices.size() == 0 && newChunks.size() == 0) continue;
+		for (size_t j = eraseIndices.size()-1; j < eraseIndices.size(); j--)
+		{
+			size_t index = eraseIndices[j];
+			chunksPerRead[i].erase(chunksPerRead[i].begin()+index);
+		}
+		chunksPerRead[i].insert(chunksPerRead[i].end(), newChunks.begin(), newChunks.end());
+		std::sort(chunksPerRead[i].begin(), chunksPerRead[i].end());
+	}
+}
+
 void resolveSemiAmbiguousUnitigs(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage)
 {
 	std::cerr << "resolving semiambiguous resolvable unitigs" << std::endl;
@@ -5903,6 +6000,9 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 	resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 	resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
+	writeGraph("fakegraph12.7.gfa", "fakepaths12.7.txt", chunksPerRead);
+	writeUnitigGraph("graph-round12.7.gfa", "paths12.7.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+	resolveVerySmallNodes(chunksPerRead, rawReadLengths, middleSkip, numThreads, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	countReadRepetitiveUnitigs(chunksPerRead, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
