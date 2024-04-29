@@ -911,17 +911,19 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 	}
 }
 
-size_t getHammingdistance(const RankBitvector& left, const RankBitvector& right)
+size_t getHammingdistance(const RankBitvector& left, const RankBitvector& right, const size_t maxEdits)
 {
 	assert(left.size() == right.size());
 	const std::vector<uint64_t>& leftbits = left.getBits();
 	const std::vector<uint64_t>& rightbits = right.getBits();
 	assert(leftbits.size() == rightbits.size());
+	assert(left.size() <= leftbits.size()*64);
 	size_t result = 0;
-	for (size_t i = 0; i < leftbits.size(); i++)
+	for (size_t i = 0; i*64 < left.size(); i++)
 	{
 		uint64_t notEqual = leftbits[i] ^ rightbits[i];
 		result += popcount(notEqual);
+		if (result > maxEdits) return result;
 	}
 	return result;
 }
@@ -1283,7 +1285,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 				for (size_t k = 0; k < matrix.size(); k++)
 				{
 					if (j == k) continue;
-					size_t mismatches = getHammingdistance(matrix[k], matrix[j]);
+					size_t mismatches = getHammingdistance(matrix[k], matrix[j], std::numeric_limits<size_t>::max());
 					closestNeighborAndMismatches.emplace_back(mismatches, k);
 				}
 				std::sort(closestNeighborAndMismatches.begin(), closestNeighborAndMismatches.end());
@@ -1339,7 +1341,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 				assert(correctedMatrix[j].size() == correctedMatrix[0].size());
 				for (size_t k = 0; k < j; k++)
 				{
-					size_t mismatches = getHammingdistance(correctedMatrix[j], correctedMatrix[k]);
+					size_t mismatches = getHammingdistance(correctedMatrix[j], correctedMatrix[k], 0);
 					if (mismatches == 0)
 					{
 						merge(parent, j, k);
@@ -1467,15 +1469,21 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			std::cerr << "start chunk with coverage " << chunkBeingDone.size() << std::endl;
 			phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToColumn;
 			std::vector<RankBitvector> matrix; // doesn't actually use rank in any way, but exposes uint64 for bitparallel hamming distance calculation
 			std::vector<std::pair<size_t, size_t>> clusters;
 			matrix.resize(chunkBeingDone.size());
 			std::vector<TwobitString> chunkSequences;
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			std::cerr << "get sequences" << std::endl;
 			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
 				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
 			}
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			std::cerr << "iterate kmers" << std::endl;
 			auto validClusters = iterateSolidKmers(chunkSequences, kmerSize, 5, true, true, [&kmerClusterToColumn, &clusters, &matrix](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 			{
 				assert(occurrenceID < matrix.size());
@@ -1505,10 +1513,13 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				matrix[j].resize(kmerClusterToColumn.size());
 			}
 			size_t columnsInUnfiltered = matrix[0].size();
+			std::cerr << columnsInUnfiltered << " columns in unfiltered" << std::endl;
 			std::vector<bool> covered;
 			covered.resize(matrix[0].size(), false);
 			size_t columnsInCovered = 0;
 			std::vector<RankBitvector> columns;
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			std::cerr << "get covered" << std::endl;
 			for (size_t j = 0; j < matrix[0].size(); j++)
 			{
 				columns.emplace_back();
@@ -1542,10 +1553,13 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
+			std::cerr << columnsInCovered << " columns in covered" << std::endl;
 			std::vector<bool> informativeSite;
 			informativeSite.resize(matrix[0].size(), false);
 			assert(clusters.size() == informativeSite.size());
 			assert(clusters.size() == kmerClusterToColumn.size());
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			std::cerr << "get informative" << std::endl;
 			for (size_t j = 0; j < informativeSite.size(); j++)
 			{
 				if (!covered[j]) continue;
@@ -1584,20 +1598,83 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
+			std::cerr << columnsInInformative << " columns in informative" << std::endl;
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			std::cerr << "filter" << std::endl;
 			filterMatrix(matrix, informativeSite);
 			std::vector<RankBitvector> correctedMatrix;
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			std::cerr << "get corrected" << std::endl;
 			for (size_t j = 0; j < matrix.size(); j++)
 			{
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				std::cerr << "get corrected " << j << " hamming distances" << std::endl;
 				std::vector<std::pair<size_t, size_t>> closestNeighborAndMismatches;
+				size_t maxEditsHere = std::numeric_limits<size_t>::max();
+				size_t countEqualToMaxEdits = 0;
 				for (size_t k = 0; k < matrix.size(); k++)
 				{
 					if (j == k) continue;
-					size_t mismatches = getHammingdistance(matrix[k], matrix[j]);
-					closestNeighborAndMismatches.emplace_back(mismatches, k);
+					size_t mismatches = getHammingdistance(matrix[k], matrix[j], maxEditsHere);
+					if (closestNeighborAndMismatches.size() < countNeighbors)
+					{
+						closestNeighborAndMismatches.emplace_back(mismatches, k);
+						if (closestNeighborAndMismatches.size() == countNeighbors)
+						{
+							maxEditsHere = 0;
+							for (size_t l = 0; l < closestNeighborAndMismatches.size(); l++)
+							{
+								if (closestNeighborAndMismatches[l].first < maxEditsHere) continue;
+								if (closestNeighborAndMismatches[l].first > maxEditsHere) countEqualToMaxEdits = 0;
+								maxEditsHere = closestNeighborAndMismatches[l].first;
+								countEqualToMaxEdits += 1;
+							}
+						}
+					}
+					else
+					{
+						if (mismatches <= maxEditsHere)
+						{
+							closestNeighborAndMismatches.emplace_back(mismatches, k);
+							if (mismatches == maxEditsHere)
+							{
+								countEqualToMaxEdits += 1;
+							}
+							else
+							{
+								if (closestNeighborAndMismatches.size() > countNeighbors+countEqualToMaxEdits)
+								{
+									size_t newMaxEdits = 0;
+									countEqualToMaxEdits = 0;
+									for (size_t l = closestNeighborAndMismatches.size()-1; l < closestNeighborAndMismatches.size(); l--)
+									{
+										if (closestNeighborAndMismatches[l].first == maxEditsHere)
+										{
+											std::swap(closestNeighborAndMismatches[l], closestNeighborAndMismatches.back());
+											closestNeighborAndMismatches.pop_back();
+										}
+										else
+										{
+											assert(closestNeighborAndMismatches[l].first < maxEditsHere);
+											if (closestNeighborAndMismatches[l].first > newMaxEdits) countEqualToMaxEdits = 0;
+											newMaxEdits = std::max(newMaxEdits, closestNeighborAndMismatches[l].first);
+											if (closestNeighborAndMismatches[l].first == newMaxEdits) countEqualToMaxEdits += 1;
+										}
+									}
+									assert(newMaxEdits < maxEditsHere);
+									maxEditsHere = newMaxEdits;
+								}
+							}
+						}
+					}
 				}
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				std::cerr << "get corrected " << j << " sort" << std::endl;
 				std::sort(closestNeighborAndMismatches.begin(), closestNeighborAndMismatches.end());
 				closestNeighborAndMismatches.emplace_back(0, j);
 				size_t endIndex = countNeighbors;
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				std::cerr << "get corrected " << j << " get corrected" << std::endl;
 				while (endIndex+1 < closestNeighborAndMismatches.size() && closestNeighborAndMismatches[endIndex+1].first == closestNeighborAndMismatches[countNeighbors].first)
 				{
 					endIndex += 1;
@@ -1620,18 +1697,22 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 			{
 				parent.emplace_back(j);
 			}
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			std::cerr << "merge corrected" << std::endl;
 			for (size_t j = 1; j < correctedMatrix.size(); j++)
 			{
 				assert(correctedMatrix[j].size() == matrix[0].size());
 				for (size_t k = 0; k < j; k++)
 				{
-					size_t mismatches = getHammingdistance(correctedMatrix[j], correctedMatrix[k]);
+					size_t mismatches = getHammingdistance(correctedMatrix[j], correctedMatrix[k], countDifferences);
 					if (mismatches <= countDifferences)
 					{
 						merge(parent, j, k);
 					}
 				}
 			}
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			std::cerr << "finalize" << std::endl;
 			auto endTime = getTime();
 			size_t nextNum = 0;
 			phmap::flat_hash_map<size_t, size_t> keyToNode;
@@ -5939,7 +6020,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	writeGraph("fakegraph7.gfa", "fakepaths7.txt", chunksPerRead);
 	writeUnitigGraph("graph-round7.gfa", "paths7.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	splitPerNearestNeighborPhasing(sequenceIndex, chunksPerRead, 11, numThreads);
+	splitPerNearestNeighborPhasing(sequenceIndex, chunksPerRead, 11, 1);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	writeGraph("fakegraph8.gfa", "fakepaths8.txt", chunksPerRead);
 	writeUnitigGraph("graph-round8.gfa", "paths8.gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
