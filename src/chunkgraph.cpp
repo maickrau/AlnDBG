@@ -1010,6 +1010,7 @@ bool siteIsInformative(const std::vector<RankBitvector>& columns, const size_t l
 		zeroone += popcount(~leftbits[i] & rightbits[i]);
 		zerozero += popcount(~leftbits[i] & ~rightbits[i]);
 		onezero += popcount(leftbits[i] & ~rightbits[i]);
+		if (zerozero > 0 && zeroone > 0 && onezero > 0 && oneone > 0) return false;
 	}
 	size_t remainingBits = columns[left].size() % 64;
 	uint64_t mask = 0xFFFFFFFFFFFFFFFFull;
@@ -1097,6 +1098,92 @@ void iterateChunksByCoverage(const std::vector<std::vector<std::tuple<size_t, si
 	{
 		callback(iterationOrder[iterationIndex], occurrencesPerChunk);
 	});
+}
+
+std::vector<RankBitvector> getCorrectedMatrix(const std::vector<RankBitvector>& matrix, const size_t countNeighbors)
+{
+	std::vector<RankBitvector> correctedMatrix;
+	for (size_t j = 0; j < matrix.size(); j++)
+	{
+		std::vector<std::pair<size_t, size_t>> closestNeighborAndMismatches;
+		size_t maxEditsHere = std::numeric_limits<size_t>::max();
+		size_t countEqualToMaxEdits = 0;
+		for (size_t kindex = 1; kindex < matrix.size(); kindex++)
+		{
+			size_t k = (j + matrix.size() + (kindex+1)/2 * (kindex % 2 ? 1 : -1)) % matrix.size();
+			assert(k != j);
+			size_t mismatches = getHammingdistance(matrix[k], matrix[j], maxEditsHere);
+			if (closestNeighborAndMismatches.size() < countNeighbors)
+			{
+				closestNeighborAndMismatches.emplace_back(mismatches, k);
+				if (closestNeighborAndMismatches.size() == countNeighbors)
+				{
+					maxEditsHere = 0;
+					for (size_t l = 0; l < closestNeighborAndMismatches.size(); l++)
+					{
+						if (closestNeighborAndMismatches[l].first < maxEditsHere) continue;
+						if (closestNeighborAndMismatches[l].first > maxEditsHere) countEqualToMaxEdits = 0;
+						maxEditsHere = closestNeighborAndMismatches[l].first;
+						countEqualToMaxEdits += 1;
+					}
+				}
+			}
+			else
+			{
+				if (mismatches <= maxEditsHere)
+				{
+					closestNeighborAndMismatches.emplace_back(mismatches, k);
+					if (mismatches == maxEditsHere)
+					{
+						countEqualToMaxEdits += 1;
+					}
+					else
+					{
+						if (closestNeighborAndMismatches.size() > countNeighbors+countEqualToMaxEdits)
+						{
+							size_t newMaxEdits = 0;
+							countEqualToMaxEdits = 0;
+							for (size_t l = closestNeighborAndMismatches.size()-1; l < closestNeighborAndMismatches.size(); l--)
+							{
+								if (closestNeighborAndMismatches[l].first == maxEditsHere)
+								{
+									std::swap(closestNeighborAndMismatches[l], closestNeighborAndMismatches.back());
+									closestNeighborAndMismatches.pop_back();
+								}
+								else
+								{
+									assert(closestNeighborAndMismatches[l].first < maxEditsHere);
+									if (closestNeighborAndMismatches[l].first > newMaxEdits) countEqualToMaxEdits = 0;
+									newMaxEdits = std::max(newMaxEdits, closestNeighborAndMismatches[l].first);
+									if (closestNeighborAndMismatches[l].first == newMaxEdits) countEqualToMaxEdits += 1;
+								}
+							}
+							assert(newMaxEdits < maxEditsHere);
+							maxEditsHere = newMaxEdits;
+						}
+					}
+				}
+			}
+		}
+		std::sort(closestNeighborAndMismatches.begin(), closestNeighborAndMismatches.end());
+		closestNeighborAndMismatches.emplace_back(0, j);
+		size_t endIndex = countNeighbors;
+		while (endIndex+1 < closestNeighborAndMismatches.size() && closestNeighborAndMismatches[endIndex+1].first == closestNeighborAndMismatches[countNeighbors].first)
+		{
+			endIndex += 1;
+		}
+		correctedMatrix.emplace_back();
+		for (size_t k = 0; k < matrix[j].size(); k++)
+		{
+			size_t ones = 0;
+			for (size_t m = 0; m <= endIndex; m++)
+			{
+				if (matrix[closestNeighborAndMismatches[m].second].get(k)) ones += 1;
+			}
+			correctedMatrix.back().push_back(ones >= (endIndex+1)/2);
+		}
+	}
+	return correctedMatrix;
 }
 
 void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
@@ -1243,6 +1330,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 				for (size_t k = 0; k < j; k++)
 				{
 					if (!covered[k]) continue;
+					if (informativeSite[j] && informativeSite[k]) continue;
 					assert(validClusters.at(clusters[j].first).size() > clusters[j].second);
 					assert(validClusters.at(clusters[k].first).size() > clusters[k].second);
 					if (validClusters.at(clusters[j].first)[clusters[j].second].first < validClusters.at(clusters[k].first)[clusters[k].second].second + 1)
@@ -1252,8 +1340,6 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 							continue;
 						}
 					}
-					assert(j != k);
-					if (informativeSite[j] && informativeSite[k]) continue;
 					if (siteIsInformative(columns, j, k) || siteIsInformative(columns, k, j))
 					{
 						informativeSite[j] = true;
@@ -1278,35 +1364,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 			filterVector(columns, informativeSite);
 			filterVector(kmerLocation, informativeSite);
 			filterMatrix(matrix, informativeSite);
-			std::vector<RankBitvector> correctedMatrix;
-			for (size_t j = 0; j < matrix.size(); j++)
-			{
-				std::vector<std::pair<size_t, size_t>> closestNeighborAndMismatches;
-				for (size_t k = 0; k < matrix.size(); k++)
-				{
-					if (j == k) continue;
-					size_t mismatches = getHammingdistance(matrix[k], matrix[j], std::numeric_limits<size_t>::max());
-					closestNeighborAndMismatches.emplace_back(mismatches, k);
-				}
-				std::sort(closestNeighborAndMismatches.begin(), closestNeighborAndMismatches.end());
-				size_t endIndex = countNeighbors;
-				while (endIndex+1 < closestNeighborAndMismatches.size() && closestNeighborAndMismatches[endIndex+1].first == closestNeighborAndMismatches[countNeighbors].first)
-				{
-					endIndex += 1;
-				}
-				closestNeighborAndMismatches.insert(closestNeighborAndMismatches.begin(), std::make_pair(0, j));
-				endIndex += 1;
-				correctedMatrix.emplace_back();
-				for (size_t k = 0; k < matrix[j].size(); k++)
-				{
-					size_t ones = 0;
-					for (size_t m = 0; m <= endIndex; m++)
-					{
-						if (matrix[closestNeighborAndMismatches[m].second].get(k)) ones += 1;
-					}
-					correctedMatrix.back().push_back(ones >= (endIndex+1)/2);
-				}
-			}
+			std::vector<RankBitvector> correctedMatrix = getCorrectedMatrix(matrix, countNeighbors);
 			assert(correctedMatrix.size() == matrix.size());
 			assert(correctedMatrix.size() == chunkBeingDone.size());
 			std::vector<bool> phasingSite;
@@ -1554,6 +1612,7 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				for (size_t k = 0; k < j; k++)
 				{
 					if (!covered[k]) continue;
+					if (informativeSite[j] && informativeSite[k]) continue;
 					assert(validClusters.at(clusters[j].first).size() > clusters[j].second);
 					assert(validClusters.at(clusters[k].first).size() > clusters[k].second);
 					if (validClusters.at(clusters[j].first)[clusters[j].second].first < validClusters.at(clusters[k].first)[clusters[k].second].second + 1)
@@ -1563,8 +1622,6 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 							continue;
 						}
 					}
-					assert(j != k);
-					if (informativeSite[j] && informativeSite[k]) continue;
 					if (siteIsInformative(columns, j, k) || siteIsInformative(columns, k, j))
 					{
 						informativeSite[j] = true;
@@ -1587,87 +1644,7 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				continue;
 			}
 			filterMatrix(matrix, informativeSite);
-			std::vector<RankBitvector> correctedMatrix;
-			for (size_t j = 0; j < matrix.size(); j++)
-			{
-				std::vector<std::pair<size_t, size_t>> closestNeighborAndMismatches;
-				size_t maxEditsHere = std::numeric_limits<size_t>::max();
-				size_t countEqualToMaxEdits = 0;
-				for (size_t kindex = 1; kindex < matrix.size(); kindex++)
-				{
-					size_t k = (j + matrix.size() + (kindex+1)/2 * (kindex % 2 ? 1 : -1)) % matrix.size();
-					assert(k != j);
-					size_t mismatches = getHammingdistance(matrix[k], matrix[j], maxEditsHere);
-					if (closestNeighborAndMismatches.size() < countNeighbors)
-					{
-						closestNeighborAndMismatches.emplace_back(mismatches, k);
-						if (closestNeighborAndMismatches.size() == countNeighbors)
-						{
-							maxEditsHere = 0;
-							for (size_t l = 0; l < closestNeighborAndMismatches.size(); l++)
-							{
-								if (closestNeighborAndMismatches[l].first < maxEditsHere) continue;
-								if (closestNeighborAndMismatches[l].first > maxEditsHere) countEqualToMaxEdits = 0;
-								maxEditsHere = closestNeighborAndMismatches[l].first;
-								countEqualToMaxEdits += 1;
-							}
-						}
-					}
-					else
-					{
-						if (mismatches <= maxEditsHere)
-						{
-							closestNeighborAndMismatches.emplace_back(mismatches, k);
-							if (mismatches == maxEditsHere)
-							{
-								countEqualToMaxEdits += 1;
-							}
-							else
-							{
-								if (closestNeighborAndMismatches.size() > countNeighbors+countEqualToMaxEdits)
-								{
-									size_t newMaxEdits = 0;
-									countEqualToMaxEdits = 0;
-									for (size_t l = closestNeighborAndMismatches.size()-1; l < closestNeighborAndMismatches.size(); l--)
-									{
-										if (closestNeighborAndMismatches[l].first == maxEditsHere)
-										{
-											std::swap(closestNeighborAndMismatches[l], closestNeighborAndMismatches.back());
-											closestNeighborAndMismatches.pop_back();
-										}
-										else
-										{
-											assert(closestNeighborAndMismatches[l].first < maxEditsHere);
-											if (closestNeighborAndMismatches[l].first > newMaxEdits) countEqualToMaxEdits = 0;
-											newMaxEdits = std::max(newMaxEdits, closestNeighborAndMismatches[l].first);
-											if (closestNeighborAndMismatches[l].first == newMaxEdits) countEqualToMaxEdits += 1;
-										}
-									}
-									assert(newMaxEdits < maxEditsHere);
-									maxEditsHere = newMaxEdits;
-								}
-							}
-						}
-					}
-				}
-				std::sort(closestNeighborAndMismatches.begin(), closestNeighborAndMismatches.end());
-				closestNeighborAndMismatches.emplace_back(0, j);
-				size_t endIndex = countNeighbors;
-				while (endIndex+1 < closestNeighborAndMismatches.size() && closestNeighborAndMismatches[endIndex+1].first == closestNeighborAndMismatches[countNeighbors].first)
-				{
-					endIndex += 1;
-				}
-				correctedMatrix.emplace_back();
-				for (size_t k = 0; k < matrix[j].size(); k++)
-				{
-					size_t ones = 0;
-					for (size_t m = 0; m <= endIndex; m++)
-					{
-						if (matrix[closestNeighborAndMismatches[m].second].get(k)) ones += 1;
-					}
-					correctedMatrix.back().push_back(ones >= (endIndex+1)/2);
-				}
-			}
+			std::vector<RankBitvector> correctedMatrix = getCorrectedMatrix(matrix, countNeighbors);
 			assert(correctedMatrix.size() == matrix.size());
 			assert(correctedMatrix.size() == chunkBeingDone.size());
 			std::vector<size_t> parent;
