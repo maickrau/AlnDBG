@@ -1399,6 +1399,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 				assert(correctedMatrix[j].size() == correctedMatrix[0].size());
 				for (size_t k = 0; k < j; k++)
 				{
+					if (find(parent, j) == find(parent, k)) continue;
 					size_t mismatches = getHammingdistance(correctedMatrix[j], correctedMatrix[k], 0);
 					if (mismatches == 0)
 					{
@@ -1657,6 +1658,7 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				assert(correctedMatrix[j].size() == matrix[0].size());
 				for (size_t k = 0; k < j; k++)
 				{
+					if (find(parent, j) == find(parent, k)) continue;
 					size_t mismatches = getHammingdistance(correctedMatrix[j], correctedMatrix[k], countDifferences);
 					if (mismatches <= countDifferences)
 					{
