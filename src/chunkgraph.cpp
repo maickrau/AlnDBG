@@ -1174,8 +1174,10 @@ std::vector<RankBitvector> getCorrectedMatrix(const std::vector<RankBitvector>& 
 		}
 	}
 	std::vector<RankBitvector> correctedMatrix;
+	correctedMatrix.resize(matrix.size());
 	for (size_t j = 0; j < matrix.size(); j++)
 	{
+		correctedMatrix[j].resize(matrix[j].size());
 		closestNeighborAndMismatchesPerLine[j].emplace_back(0, j);
 		std::sort(closestNeighborAndMismatchesPerLine[j].begin(), closestNeighborAndMismatchesPerLine[j].end());
 		size_t endIndex = countNeighbors;
@@ -1183,7 +1185,6 @@ std::vector<RankBitvector> getCorrectedMatrix(const std::vector<RankBitvector>& 
 		{
 			endIndex += 1;
 		}
-		correctedMatrix.emplace_back();
 		for (size_t k = 0; k < matrix[j].size(); k++)
 		{
 			size_t ones = 0;
@@ -1191,7 +1192,7 @@ std::vector<RankBitvector> getCorrectedMatrix(const std::vector<RankBitvector>& 
 			{
 				if (matrix[closestNeighborAndMismatchesPerLine[j][m].second].get(k)) ones += 1;
 			}
-			correctedMatrix.back().push_back(ones >= (endIndex+1)/2);
+			correctedMatrix[j].set(k, ones >= (endIndex+1)/2);
 		}
 	}
 	return correctedMatrix;
