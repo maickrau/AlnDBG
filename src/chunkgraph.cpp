@@ -1492,24 +1492,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 			}
 			filterMatrix(correctedMatrix, phasingSite);
 			size_t numPhasingSites = correctedMatrix[0].size();
-			std::vector<size_t> parent;
-			for (size_t j = 0; j < chunkBeingDone.size(); j++)
-			{
-				parent.emplace_back(j);
-			}
-			for (size_t j = 1; j < correctedMatrix.size(); j++)
-			{
-				assert(correctedMatrix[j].size() == correctedMatrix[0].size());
-				for (size_t k = 0; k < j; k++)
-				{
-					if (find(parent, j) == find(parent, k)) continue;
-					size_t mismatches = getHammingdistance(correctedMatrix[j], correctedMatrix[k], 0);
-					if (mismatches == 0)
-					{
-						merge(parent, j, k);
-					}
-				}
-			}
+			std::vector<size_t> parent = getFastTransitiveClosure(correctedMatrix.size(), 0, [&correctedMatrix](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(correctedMatrix[i], correctedMatrix[j], maxDist); });
 			auto endTime = getTime();
 			size_t nextNum = 0;
 			phmap::flat_hash_map<size_t, size_t> keyToNode;
