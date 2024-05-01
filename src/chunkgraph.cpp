@@ -1155,6 +1155,97 @@ void checkAddMismatch(std::vector<std::vector<std::pair<size_t, size_t>>>& close
 	}
 }
 
+template <typename F>
+std::vector<size_t> getFastTransitiveClosure(const size_t itemCount, const size_t maxDistance, F distanceFunction)
+{
+	std::vector<size_t> parent;
+	parent.resize(itemCount);
+	for (size_t i = 0; i < itemCount; i++)
+	{
+		parent[i] = i;
+	}
+	std::vector<size_t> clusterExample;
+	std::vector<std::vector<size_t>> clusterAdditionals;
+	std::vector<size_t> clusterMaxDistance;
+	for (size_t i = 0; i < itemCount; i++)
+	{
+		bool found = false;
+		for (size_t j = 0; j < clusterExample.size(); j++)
+		{
+			size_t distance = distanceFunction(i, clusterExample[j], maxDistance);
+			if (distance <= maxDistance)
+			{
+				clusterAdditionals[j].emplace_back(i);
+				found = true;
+				clusterMaxDistance[j] = std::max(distance, clusterMaxDistance[j]);
+				merge(parent, i, clusterExample[j]);
+				break;
+			}
+		}
+		if (!found)
+		{
+			clusterExample.emplace_back(i);
+			clusterAdditionals.emplace_back();
+			clusterMaxDistance.emplace_back(0);
+		}
+	}
+	for (size_t i = 1; i < clusterExample.size(); i++)
+	{
+		for (size_t j = 0; j < i; j++)
+		{
+			if (find(parent, clusterExample[i]) == find(parent, clusterExample[j])) continue;
+			size_t distance = distanceFunction(clusterExample[i], clusterExample[j], maxDistance + clusterMaxDistance[i] + clusterMaxDistance[j]);
+			if (distance <= maxDistance)
+			{
+				merge(parent, clusterExample[i], clusterExample[j]);
+				continue;
+			}
+			else if (distance <= maxDistance + clusterMaxDistance[i] + clusterMaxDistance[j])
+			{
+				bool found = false;
+				for (size_t k : clusterAdditionals[i])
+				{
+					if (distanceFunction(k, clusterExample[j], maxDistance) <= maxDistance)
+					{
+						found = true;
+						merge(parent, k, clusterExample[j]);
+						break;
+					}
+				}
+				if (!found)
+				{
+					for (size_t l : clusterAdditionals[j])
+					{
+						if (distanceFunction(l, clusterExample[i], maxDistance) <= maxDistance)
+						{
+							found = true;
+							merge(parent, l, clusterExample[i]);
+							break;
+						}
+					}
+				}
+				if (!found)
+				{
+					for (size_t k : clusterAdditionals[i])
+					{
+						for (size_t l : clusterAdditionals[j])
+						{
+							if (distanceFunction(k, l, maxDistance) <= maxDistance)
+							{
+								found = true;
+								merge(parent, k, l);
+								break;
+							}
+						}
+						if (found) break;
+					}
+				}
+			}
+		}
+	}
+	return parent;
+}
+
 std::vector<RankBitvector> getCorrectedMatrix(const std::vector<RankBitvector>& matrix, const size_t countNeighbors)
 {
 	std::vector<std::vector<std::pair<size_t, size_t>>> closestNeighborAndMismatchesPerLine;
@@ -1540,21 +1631,15 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "begin chunk with coverage " << chunkBeingDone.size() << std::endl;
 			phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToColumn;
 			std::vector<RankBitvector> matrix; // doesn't actually use rank in any way, but exposes uint64 for bitparallel hamming distance calculation
 			std::vector<std::pair<size_t, size_t>> clusters;
 			matrix.resize(chunkBeingDone.size());
 			std::vector<TwobitString> chunkSequences;
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "get sequences" << std::endl;
 			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
 				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
 			}
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "get kmers" << std::endl;
 			auto validClusters = iterateSolidKmers(chunkSequences, kmerSize, 5, true, true, [&kmerClusterToColumn, &clusters, &matrix](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 			{
 				assert(occurrenceID < matrix.size());
@@ -1588,20 +1673,19 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 			covered.resize(matrix[0].size(), false);
 			size_t columnsInCovered = 0;
 			std::vector<RankBitvector> columns;
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "get covered" << std::endl;
+			columns.resize(matrix[0].size());
 			for (size_t j = 0; j < matrix[0].size(); j++)
 			{
-				columns.emplace_back();
+				columns[j].resize(matrix.size());
 				size_t zeros = 0;
 				size_t ones = 0;
 				for (size_t k = 0; k < matrix.size(); k++)
 				{
 					assert(matrix[k].size() == matrix[0].size());
-					columns.back().push_back(matrix[k].get(j));
+					columns[j].set(k, matrix[k].get(j));
 				}
-				const std::vector<uint64_t>& bits = columns.back().getBits();
-				for (size_t k = 0; k*64+64 <= columns.back().size(); k++)
+				const std::vector<uint64_t>& bits = columns[j].getBits();
+				for (size_t k = 0; k*64+64 <= columns[j].size(); k++)
 				{
 					ones += popcount(bits[k]);
 					zeros += 64-popcount(bits[k]);
@@ -1609,9 +1693,9 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				}
 				if (zeros < 5 || ones < 5)
 				{
-					for (size_t k = int(columns.back().size()/64)*64; k < columns.back().size(); k++)
+					for (size_t k = int(columns[j].size()/64)*64; k < columns[j].size(); k++)
 					{
-						if (columns.back().get(k))
+						if (columns[j].get(k))
 						{
 							ones += 1;
 						}
@@ -1636,14 +1720,10 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "covered " << columnsInCovered << std::endl;
 			std::vector<bool> informativeSite;
 			informativeSite.resize(matrix[0].size(), false);
 			assert(clusters.size() == informativeSite.size());
 			assert(clusters.size() == kmerClusterToColumn.size());
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "get informative" << std::endl;
 			for (size_t j = 0; j < informativeSite.size(); j++)
 			{
 				if (!covered[j]) continue;
@@ -1681,38 +1761,11 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "informative " << columnsInInformative << std::endl;
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "filter matrix" << std::endl;
 			filterMatrix(matrix, informativeSite);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "get corrected matrix" << std::endl;
 			std::vector<RankBitvector> correctedMatrix = getCorrectedMatrix(matrix, countNeighbors);
 			assert(correctedMatrix.size() == matrix.size());
 			assert(correctedMatrix.size() == chunkBeingDone.size());
-			std::vector<size_t> parent;
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "get clusters" << std::endl;
-			for (size_t j = 0; j < chunkBeingDone.size(); j++)
-			{
-				parent.emplace_back(j);
-			}
-			for (size_t j = 1; j < correctedMatrix.size(); j++)
-			{
-				assert(correctedMatrix[j].size() == matrix[0].size());
-				for (size_t k = 0; k < j; k++)
-				{
-					if (find(parent, j) == find(parent, k)) continue;
-					size_t mismatches = getHammingdistance(correctedMatrix[j], correctedMatrix[k], countDifferences);
-					if (mismatches <= countDifferences)
-					{
-						merge(parent, j, k);
-					}
-				}
-			}
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "finalize" << std::endl;
+			std::vector<size_t> parent = getFastTransitiveClosure(correctedMatrix.size(), countDifferences, [&correctedMatrix](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(correctedMatrix[i], correctedMatrix[j], maxDist); });
 			auto endTime = getTime();
 			size_t nextNum = 0;
 			phmap::flat_hash_map<size_t, size_t> keyToNode;
@@ -6088,7 +6141,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 7:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerNearestNeighborPhasing(sequenceIndex, chunksPerRead, 11, 1);
+			splitPerNearestNeighborPhasing(sequenceIndex, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(8, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
