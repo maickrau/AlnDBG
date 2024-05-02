@@ -4343,7 +4343,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 		}
 		if (hasBwFork[unitig])
 		{
-			if (bwForksPerUnitigSet[unitig].first.size() >= 2 && bwForksPerUnitigSet[i].second.size() >= 2)
+			if (bwForksPerUnitigSet[unitig].first.size() >= 2 && bwForksPerUnitigSet[unitig].second.size() >= 2)
 			{
 				size_t firstsHere = 0;
 				size_t secondsHere = 0;
@@ -4482,7 +4482,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			phmap::flat_hash_set<size_t> removeKmers;
 			for (auto pair : kmerCoverage)
 			{
-				if (pair.second < 3 || pair.second + 3 > occurrencesPerChunk[i].size())
+				if (pair.second < 2 || pair.second + 2 > occurrencesPerChunk[i].size())
 				{
 					removeKmers.insert(pair.first);
 				}
