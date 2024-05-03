@@ -944,6 +944,7 @@ bool siteIsPerfectlyPhased(const std::vector<RankBitvector>& columns, const size
 		zeroone += popcount(~leftbits[i] & rightbits[i]);
 		zerozero += popcount(~leftbits[i] & ~rightbits[i]);
 		onezero += popcount(leftbits[i] & ~rightbits[i]);
+		if (oneone > 0 || zerozero > 0) return false;
 	}
 	size_t remainingBits = columns[left].size() % 64;
 	uint64_t mask = 0xFFFFFFFFFFFFFFFFull;
@@ -975,6 +976,7 @@ bool siteIsPhasedTwoVariantsThreeHaps(const std::vector<RankBitvector>& columns,
 		zeroone += popcount(~leftbits[i] & rightbits[i]);
 		zerozero += popcount(~leftbits[i] & ~rightbits[i]);
 		onezero += popcount(leftbits[i] & ~rightbits[i]);
+		if (zerozero > 0 && zeroone > 0 && onezero > 0 && oneone > 0) return false;
 	}
 	size_t remainingBits = columns[left].size() % 64;
 	uint64_t mask = 0xFFFFFFFFFFFFFFFFull;
@@ -1289,6 +1291,45 @@ std::vector<RankBitvector> getCorrectedMatrix(const std::vector<RankBitvector>& 
 	return correctedMatrix;
 }
 
+bool rowEqual(const RankBitvector& left, const RankBitvector& right)
+{
+	assert(left.size() == right.size());
+	for (size_t i = 0; i < left.size(); i++)
+	{
+		if (left.get(i) != right.get(i)) return false;
+	}
+	return true;
+}
+
+void sortAndInterleave(std::vector<RankBitvector>& correctedMatrix)
+{
+	std::sort(correctedMatrix.begin(), correctedMatrix.end(), [](const RankBitvector& left, const RankBitvector& right)
+	{
+		for(size_t i = 0; i < left.size(); i++)
+		{
+			if (!left.get(i) && right.get(i)) return true;
+			if (left.get(i) && !right.get(i)) return false;
+		}
+		return false;
+	});
+	size_t countDistinctRows = 1;
+	for (size_t i = 1; i < correctedMatrix.size(); i++)
+	{
+		if (!rowEqual(correctedMatrix[i], correctedMatrix[i-1])) countDistinctRows += 1;
+	}
+	std::swap(correctedMatrix[1], correctedMatrix.back());
+	size_t pos = 2;
+	for (size_t div = 2; div <= 64; div *= 2)
+	{
+		for (size_t off = 1; off < div; off += 2)
+		{
+			std::swap(correctedMatrix[pos], correctedMatrix[correctedMatrix.size()/div*off]);
+			pos += 1;
+		}
+	}
+	assert(pos == 65);
+}
+
 void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by corrected kmer phasing" << std::endl;
@@ -1325,14 +1366,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
 				chunksDoneProcessing.emplace_back();
-				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
-				continue;
-			}
-			if (chunkBeingDone.size() < 10)
-			{
-				std::lock_guard<std::mutex> lock { resultMutex };
 				std::cerr << "corrected kmer skipped chunk with coverage " << chunkBeingDone.size() << std::endl;
-				chunksDoneProcessing.emplace_back();
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
@@ -1390,15 +1424,16 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 			covered.resize(matrix[0].size(), false);
 			size_t columnsInCovered = 0;
 			std::vector<RankBitvector> columns;
+			columns.resize(matrix[0].size());
 			for (size_t j = 0; j < matrix[0].size(); j++)
 			{
-				columns.emplace_back();
+				columns[j].resize(matrix.size());
 				size_t zeros = 0;
 				size_t ones = 0;
 				for (size_t k = 0; k < matrix.size(); k++)
 				{
 					assert(matrix[k].size() == matrix[0].size());
-					columns.back().push_back(matrix[k].get(j));
+					columns[j].set(k, matrix[k].get(j));
 					if (matrix[k].get(j))
 					{
 						ones += 1;
@@ -1470,24 +1505,70 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 			std::vector<RankBitvector> correctedMatrix = getCorrectedMatrix(matrix, countNeighbors);
 			assert(correctedMatrix.size() == matrix.size());
 			assert(correctedMatrix.size() == chunkBeingDone.size());
+			if (correctedMatrix.size() >= 1024)
+			{
+				std::vector<RankBitvector> columnMatrix = correctedMatrix;
+				sortAndInterleave(columnMatrix);
+				for (size_t j = 0; j < columnMatrix[0].size(); j++)
+				{
+					for (size_t k = 0; k < columnMatrix.size(); k++)
+					{
+						assert(columnMatrix[k].size() == columnMatrix[0].size());
+						columns[j].set(k, columnMatrix[k].get(j));
+					}
+				}
+			}
 			std::vector<bool> phasingSite;
 			phasingSite.resize(matrix[0].size(), false);
-			for (size_t j = 0; j < matrix[0].size(); j++)
+			std::vector<size_t> phasedSoFar;
+			std::vector<size_t> notPhasedSoFar;
+			notPhasedSoFar.emplace_back(0);
+			for (size_t j = 1; j < matrix[0].size(); j++)
 			{
-				for (size_t k = 0; k < j; k++)
+				for (auto k : phasedSoFar)
 				{
 					if (kmerLocation[j].first < kmerLocation[k].second+1 && kmerLocation[j].second + 1 > kmerLocation[k].first) continue;
-					if (phasingSite[j] && phasingSite[k]) continue;
 					if (siteIsPerfectlyPhased(columns, j, k))
 					{
 						phasingSite[j] = true;
 						phasingSite[k] = true;
+						break;
 					}
 					else if (siteIsPhasedTwoVariantsThreeHaps(columns, j, k))
 					{
 						phasingSite[j] = true;
 						phasingSite[k] = true;
+						break;
 					}
+				}
+				for (size_t kindex = notPhasedSoFar.size()-1; kindex < notPhasedSoFar.size(); kindex--)
+				{
+					size_t k = notPhasedSoFar[kindex];
+					if (kmerLocation[j].first < kmerLocation[k].second+1 && kmerLocation[j].second + 1 > kmerLocation[k].first) continue;
+					if (siteIsPerfectlyPhased(columns, j, k))
+					{
+						phasingSite[j] = true;
+						phasingSite[k] = true;
+						phasedSoFar.emplace_back(k);
+						std::swap(notPhasedSoFar[kindex], notPhasedSoFar.back());
+						notPhasedSoFar.pop_back();
+					}
+					else if (siteIsPhasedTwoVariantsThreeHaps(columns, j, k))
+					{
+						phasingSite[j] = true;
+						phasingSite[k] = true;
+						phasedSoFar.emplace_back(k);
+						std::swap(notPhasedSoFar[kindex], notPhasedSoFar.back());
+						notPhasedSoFar.pop_back();
+					}
+				}
+				if (phasingSite[j])
+				{
+					phasedSoFar.emplace_back(j);
+				}
+				else
+				{
+					notPhasedSoFar.emplace_back(j);
 				}
 			}
 			filterMatrix(correctedMatrix, phasingSite);
