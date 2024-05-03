@@ -3666,6 +3666,26 @@ start:
 	return greedyChosenPath;
 }
 
+std::string pickMostCentralString(const std::vector<std::string>& options, const phmap::flat_hash_map<std::string, size_t>& pieceCounts)
+{
+	std::vector<size_t> editSum;
+	editSum.resize(options.size(), 0);
+	for (size_t i = 0; i < options.size(); i++)
+	{
+		for (const auto& pair : pieceCounts)
+		{
+			size_t edits = getNumMismatches(options[i], pair.first, std::max(options[i].size(), pair.first.size()));
+			editSum[i] += edits * pair.second;
+		}
+	}
+	size_t minIndex = 0;
+	for (size_t i = 1; i < editSum.size(); i++)
+	{
+		if (editSum[i] < editSum[minIndex]) minIndex = i;
+	}
+	return options[minIndex];
+}
+
 std::string getConsensusFromSolidKmers(const phmap::flat_hash_map<std::string, size_t>& sequenceCount, const size_t totalCount)
 {
 	const size_t kmerSize = 11;
@@ -3733,13 +3753,19 @@ std::string getConsensusFromSolidKmers(const phmap::flat_hash_map<std::string, s
 			maxCount = std::max(maxCount, pair.second);
 		}
 		assert(maxCount >= 1);
+		std::vector<std::string> stringsWithMaxCount;
 		for (const auto& pair : pieceCounts[i])
 		{
-			if (pair.second == maxCount)
-			{
-				result += pair.first;
-				break;
-			}
+			if (pair.second == maxCount) stringsWithMaxCount.emplace_back(pair.first);
+		}
+		assert(stringsWithMaxCount.size() >= 1);
+		if (stringsWithMaxCount.size() == 1)
+		{
+			result += stringsWithMaxCount[0];
+		}
+		else
+		{
+			result += pickMostCentralString(stringsWithMaxCount, pieceCounts[i]);
 		}
 	}
 	return result;
