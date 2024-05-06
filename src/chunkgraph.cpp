@@ -5621,6 +5621,227 @@ void resolveSemiAmbiguousUnitigs(std::vector<std::vector<std::tuple<size_t, size
 	std::cerr << "semiambiguously resolvable unitig resolution resolved " << countUnitigsReplaced << " unitigs, " << countChunksReplaced << " chunks" << std::endl;
 }
 
+void resolveBetweenLongUnitigs(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t longNodeThreshold, const size_t maxDistance)
+{
+	const uint64_t noNodeWithinDistance = (std::numeric_limits<size_t>::max() ^ (firstBitUint64_t>>1)) - 1;
+	std::cerr << "resolving between long unitigs" << std::endl;
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage);
+	phmap::flat_hash_set<size_t> chunkInsideLongUnitig;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (graph.unitigLengths[i] < longNodeThreshold) continue;
+		for (uint64_t node : graph.chunksInUnitig[i])
+		{
+			chunkInsideLongUnitig.emplace(node & maskUint64_t);
+		}
+	}
+	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> longNodesInReads;
+	longNodesInReads.resize(readPaths.size());
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				if (graph.unitigLengths[readPaths[i][j].path[k] & maskUint64_t] < longNodeThreshold) continue;
+				longNodesInReads[i].emplace_back(readPaths[i][j].readPartInPathnode[k].first, readPaths[i][j].readPartInPathnode[k].second, readPaths[i][j].path[k]);
+			}
+		}
+		for (size_t j = 1; j < longNodesInReads[i].size(); j++)
+		{
+			assert(std::get<0>(longNodesInReads[i][j]) > std::get<0>(longNodesInReads[i][j-1]));
+			assert(std::get<1>(longNodesInReads[i][j]) > std::get<1>(longNodesInReads[i][j-1]));
+		}
+	}
+	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
+			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
+			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
+		}
+	}
+	size_t nextNum = 0;
+	std::mutex resultMutex;
+	size_t countSplitted = 0;
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&chunksPerRead, &occurrencesPerChunk, &longNodesInReads, &rawReadLengths, &nextNum, &resultMutex, &chunkInsideLongUnitig, &countSplitted, maxDistance, noNodeWithinDistance](const size_t chunki)
+	{
+		if (chunkInsideLongUnitig.count(chunki) == 1 || occurrencesPerChunk[chunki].size() < 4)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < occurrencesPerChunk[chunki].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[chunki][j].first][occurrencesPerChunk[chunki][j].second]) = nextNum + (std::get<2>(chunksPerRead[occurrencesPerChunk[chunki][j].first][occurrencesPerChunk[chunki][j].second]) & firstBitUint64_t);
+			}
+			nextNum += 1;
+			return;
+		}
+		std::vector<std::tuple<uint64_t, uint64_t, size_t, size_t>> predecessorsAndSuccessors;
+		for (auto t : occurrencesPerChunk[chunki])
+		{
+			size_t read = t.first;
+			size_t offset = t.second;
+			bool fw = std::get<2>(chunksPerRead[read][offset]) & firstBitUint64_t;
+			size_t chunkstartpos = std::get<0>(chunksPerRead[read][offset]);
+			size_t chunkendpos = std::get<1>(chunksPerRead[read][offset]);
+			uint64_t predecessor = std::numeric_limits<size_t>::max();
+			uint64_t successor = std::numeric_limits<size_t>::max();
+			uint64_t prevUnitig = std::numeric_limits<size_t>::max();
+			uint64_t nextUnitig = std::numeric_limits<size_t>::max();
+			for (size_t j = 0; j < longNodesInReads[read].size(); j++)
+			{
+				if (std::get<1>(longNodesInReads[read][j]) < chunkendpos && std::get<1>(longNodesInReads[read][j])+maxDistance > chunkstartpos)
+				{
+					predecessor = std::get<2>(longNodesInReads[read][j]);
+				}
+				if (std::get<0>(longNodesInReads[read][j]) > chunkstartpos && std::get<0>(longNodesInReads[read][j]) < chunkendpos+maxDistance && successor == std::numeric_limits<size_t>::max())
+				{
+					successor = std::get<2>(longNodesInReads[read][j]);
+				}
+			}
+			if (chunkstartpos > maxDistance && predecessor == std::numeric_limits<size_t>::max()) predecessor = noNodeWithinDistance;
+			if (chunkendpos + maxDistance < rawReadLengths[read] && successor == std::numeric_limits<size_t>::max()) successor = noNodeWithinDistance;
+			if (!fw)
+			{
+				std::swap(predecessor, successor);
+				if (predecessor != std::numeric_limits<size_t>::max() && predecessor != noNodeWithinDistance) predecessor ^= firstBitUint64_t;
+				if (successor != std::numeric_limits<size_t>::max() && successor != noNodeWithinDistance) successor ^= firstBitUint64_t;
+			}
+			predecessorsAndSuccessors.emplace_back(predecessor, successor, read, offset);
+		}
+		assert(predecessorsAndSuccessors.size() == occurrencesPerChunk[chunki].size());
+		bool hasAny = false;
+		phmap::flat_hash_set<uint64_t> mergedSomewhere;
+		phmap::flat_hash_map<uint64_t, uint64_t> parent;
+		for (auto t : predecessorsAndSuccessors)
+		{
+			assert(std::get<1>(t) == std::numeric_limits<size_t>::max() || ((std::get<1>(t) & (firstBitUint64_t>>1)) == 0));
+			if (std::get<0>(t) != std::numeric_limits<size_t>::max() && parent.count(std::get<0>(t)) == 0)
+			{
+				hasAny = true;
+				parent[std::get<0>(t)] = std::get<0>(t);
+			}
+			if (std::get<1>(t) != std::numeric_limits<size_t>::max() && parent.count(std::get<1>(t) + (firstBitUint64_t>>1)) == 0)
+			{
+				hasAny = true;
+				parent[std::get<1>(t) + (firstBitUint64_t>>1)] = std::get<1>(t) + (firstBitUint64_t>>1);
+			}
+			if (std::get<0>(t) != std::numeric_limits<size_t>::max() && std::get<1>(t) != std::numeric_limits<size_t>::max())
+			{
+				mergedSomewhere.insert(std::get<0>(t));
+				mergedSomewhere.insert(std::get<1>(t) + (firstBitUint64_t>>1));
+				merge(parent, std::get<0>(t), std::get<1>(t) + (firstBitUint64_t>>1));
+			}
+		}
+		if (!hasAny)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+//			std::cerr << "chunk " << chunki << " doesn't have any" << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[chunki].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[chunki][j].first][occurrencesPerChunk[chunki][j].second]) = nextNum + (std::get<2>(chunksPerRead[occurrencesPerChunk[chunki][j].first][occurrencesPerChunk[chunki][j].second]) & firstBitUint64_t);
+			}
+			nextNum += 1;
+			return;
+		}
+		bool canSplit = true;
+		for (auto pair : parent)
+		{
+			if (mergedSomewhere.count(pair.first) == 0)
+			{
+				canSplit = false;
+				break;
+			}
+		}
+		if (!canSplit)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+//			std::cerr << "can't split chunk " << chunki << " because of missing merge" << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[chunki].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[chunki][j].first][occurrencesPerChunk[chunki][j].second]) = nextNum + (std::get<2>(chunksPerRead[occurrencesPerChunk[chunki][j].first][occurrencesPerChunk[chunki][j].second]) & firstBitUint64_t);
+			}
+			nextNum += 1;
+			return;
+		}
+		phmap::flat_hash_map<uint64_t, size_t> clusterToNode;
+		size_t nextId = 0;
+		for (uint64_t node : mergedSomewhere)
+		{
+			uint64_t found = find(parent, node);
+			if (clusterToNode.count(found) == 1)
+			{
+				continue;
+			}
+			clusterToNode[found] = nextId;
+			nextId += 1;
+		}
+		phmap::flat_hash_map<uint64_t, size_t> clusterCoverage;
+		for (auto t : predecessorsAndSuccessors)
+		{
+			if (std::get<0>(t) != std::numeric_limits<size_t>::max())
+			{
+				clusterCoverage[clusterToNode.at(find(parent, std::get<0>(t)))] += 1;
+			}
+			else if (std::get<1>(t) != std::numeric_limits<size_t>::max())
+			{
+				clusterCoverage[clusterToNode.at(find(parent, std::get<1>(t) + (firstBitUint64_t>>1)))] += 1;
+			}
+		}
+		for (auto pair : clusterCoverage)
+		{
+			if (pair.second < 2)
+			{
+				canSplit = false;
+			}
+		}
+		if (!canSplit)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+//			std::cerr << "can't split chunk " << chunki << " because of low coverage" << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[chunki].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[chunki][j].first][occurrencesPerChunk[chunki][j].second]) = nextNum + (std::get<2>(chunksPerRead[occurrencesPerChunk[chunki][j].first][occurrencesPerChunk[chunki][j].second]) & firstBitUint64_t);
+			}
+			nextNum += 1;
+			return;
+		}
+		assert(clusterToNode.size() >= 1);
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			if (clusterToNode.size() >= 2) countSplitted += 1;
+//			std::cerr << "chunk " << chunki << " split to " << clusterToNode.size() << " chunks" << std::endl;
+			for (auto t : predecessorsAndSuccessors)
+			{
+				if (std::get<0>(t) == std::numeric_limits<size_t>::max() && std::get<1>(t) == std::numeric_limits<size_t>::max())
+				{
+					std::get<2>(chunksPerRead[std::get<2>(t)][std::get<3>(t)]) = std::numeric_limits<size_t>::max();
+					continue;
+				}
+				size_t cluster;
+				if (std::get<0>(t) != std::numeric_limits<size_t>::max())
+				{
+					cluster = clusterToNode.at(find(parent, std::get<0>(t)));
+				}
+				else
+				{
+					assert(std::get<1>(t) != std::numeric_limits<size_t>::max());
+					cluster = clusterToNode.at(find(parent, std::get<1>(t) + (firstBitUint64_t>>1)));
+				}
+				std::get<2>(chunksPerRead[std::get<2>(t)][std::get<3>(t)]) = nextNum + cluster + (std::get<2>(chunksPerRead[std::get<2>(t)][std::get<3>(t)]) & firstBitUint64_t);
+			}
+			nextNum += clusterToNode.size();
+			return;
+		}
+	});
+	std::cerr << "between long unitigs resolved " << countSplitted << " chunks" << std::endl;
+}
+
 void resolveUnambiguouslyResolvableUnitigs(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage)
 {
 	std::cerr << "resolving unambiguously resolvable unitigs" << std::endl;
@@ -6116,6 +6337,11 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> readChunksFromFak
 	std::cerr << "reading chunks from file " << filename << std::endl;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
 	std::ifstream file { filename };
+	if (!file.good())
+	{
+		std::cerr << "file " << filename << " could not be opened!" << std::endl;
+		std::abort();
+	}
 	size_t countChunks = 0;
 	while (file.good())
 	{
@@ -6313,8 +6539,19 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeReadChunkSequences("sequences-chunk19.txt", chunksPerRead, sequenceIndex);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+			writeUnitigGraph("graph-dbg-final.gfa", "paths-dbg-final.gaf", "unitigs-dbg-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeReadUnitigSequences("sequences-dbg-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			[[fallthrough]];
 		case 19:
+			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 30000, 60000);
+			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 30000, 60000);
+			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 50000, 100000);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+			[[fallthrough]];
+		case 20:
 			writeUnitigGraph("graph-final.gfa", "paths-final.gaf", "unitigs-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeReadUnitigSequences("sequences-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage);
