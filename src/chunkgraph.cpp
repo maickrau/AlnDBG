@@ -5164,7 +5164,7 @@ double estimateCoverage(const ChunkUnitigGraph& graph)
 	return div/sum;
 }
 
-void cleanTips(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage)
+void cleanTips(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage, const double maxRemoveCoverage)
 {
 	std::cerr << "cleaning tips" << std::endl;
 	ChunkUnitigGraph graph;
@@ -5183,7 +5183,7 @@ void cleanTips(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& c
 	size_t removeUnitigCount = 0;
 	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
 	{
-		if (graph.coverages[i] >= approxOneHapCoverage*0.5) continue;
+		if (graph.coverages[i] >= maxRemoveCoverage) continue;
 		if (graph.unitigLengths[i] >= 50000) continue;
 		if (graph.edges.getEdges(std::make_pair(i, true)).size() >= 1)
 		{
@@ -6501,8 +6501,9 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(14, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 14:
-			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage);
-			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage);
+			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, 2);
+			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, approxOneHapCoverage*0.25);
+			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, approxOneHapCoverage*0.5);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(15, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
