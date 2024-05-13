@@ -704,11 +704,16 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 {
 	assert(chunkSequences.size() < (size_t)std::numeric_limits<uint32_t>::max());
 	assert(chunkSequences.size() >= 1);
+	// if one sequence is too small then don't do anything even if theoretically other sequences could have solid kmers
+	for (size_t i = 0; i < chunkSequences.size(); i++)
+	{
+		if (chunkSequences[i].size() < kmerSize+1) return phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> {};
+	}
 	std::vector<size_t> currentPosPerOccurrence;
 	// 40 blocks so it advances 2.5% of sequence every block so kmers seen before block cannot cluster with kmers seen after block if no kmers in block
 	size_t numBlocks = 40;
 	// unless the strings are small, then no blocks
-	if (chunkSequences[0].size() < 1000)
+	if (chunkSequences[0].size() < 1000 || chunkSequences[0].size() < 40*kmerSize*2)
 	{
 		numBlocks = 1;
 	}
@@ -2706,10 +2711,9 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 	});
 }
 
-void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const size_t kmerSize)
 {
 	std::cerr << "splitting by interchunk phasing kmers" << std::endl;
-	const size_t kmerSize = 11;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -4238,10 +4242,9 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUniti
 	return std::make_tuple(std::get<0>(result), std::get<1>(result));
 }
 
-void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage)
+void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize)
 {
 	std::cerr << "splitting by diploid chunk with neighbors" << std::endl;
-	const size_t kmerSize = 11;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	size_t maxChunk = 0;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -4861,6 +4864,27 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 					merge(parent, j, k);
 				}
 			}
+		}
+		phmap::flat_hash_map<size_t, size_t> groupCoverage;
+		for (size_t i = 0; i < parent.size(); i++)
+		{
+			groupCoverage[find(parent, i)] += 1;
+		}
+		bool valid = true;
+		if (groupCoverage.size() != 2) valid = false;
+		for (auto pair : groupCoverage)
+		{
+			if (pair.second < 3) valid = false;
+		}
+		if (!valid)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = nextNum + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
+			}
+			nextNum += 1;
+			return;
 		}
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
@@ -6480,19 +6504,19 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 11:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads);
+			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads);
+			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads, 31);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(12, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 12:
-			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage);
+			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(13, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 13:
-			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage);
+			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage, 31);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
@@ -6509,23 +6533,23 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 15:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads);
+			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(16, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 16:
-			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage);
+			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads);
+			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads, 31);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(17, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 17:
-			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage);
+			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage, 31);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
