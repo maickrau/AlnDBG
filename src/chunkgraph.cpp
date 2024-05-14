@@ -2585,7 +2585,8 @@ std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, co
 void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
 {
 	assert(kmerSize <= 31);
-	std::vector<std::tuple<size_t, size_t, uint64_t, uint64_t, bool>> indexWithFirstLastKmers;
+	size_t nextNum = 0;
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> endKmersToNumber;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
@@ -2632,27 +2633,17 @@ void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequen
 						assert(false);
 				}
 			}
-			indexWithFirstLastKmers.emplace_back(i, j, std::min(firstKmer, lastKmer), std::max(firstKmer, lastKmer), firstKmer < lastKmer);
+			size_t first = std::min(firstKmer, lastKmer);
+			size_t last = std::max(firstKmer, lastKmer);
+			bool fw = (firstKmer < lastKmer);
+			auto key = std::make_pair(first, last);
+			if (endKmersToNumber.count(key) == 0)
+			{
+				endKmersToNumber[key] = nextNum;
+				nextNum += 1;
+			}
+			std::get<2>(chunksPerRead[i][j]) = endKmersToNumber.at(key) + (fw ? firstBitUint64_t : 0);
 		}
-	}
-	std::sort(indexWithFirstLastKmers.begin(), indexWithFirstLastKmers.end(), [](auto left, auto right)
-	{
-		if (std::get<2>(left) < std::get<2>(right)) return true;
-		if (std::get<2>(left) > std::get<2>(right)) return false;
-		if (std::get<3>(left) < std::get<3>(right)) return true;
-		if (std::get<3>(left) > std::get<3>(right)) return false;
-		return false;
-	});
-	size_t nextNum = 0;
-	for (size_t iii = 0; iii < indexWithFirstLastKmers.size(); iii++)
-	{
-		if (iii > 0 && (std::get<2>(indexWithFirstLastKmers[iii]) != std::get<2>(indexWithFirstLastKmers[iii-1]) || std::get<3>(indexWithFirstLastKmers[iii]) != std::get<3>(indexWithFirstLastKmers[iii-1])))
-		{
-			nextNum += 1;
-		}
-		size_t i = std::get<0>(indexWithFirstLastKmers[iii]);
-		size_t j = std::get<1>(indexWithFirstLastKmers[iii]);
-		std::get<2>(chunksPerRead[i][j]) = nextNum + (std::get<4>(indexWithFirstLastKmers[iii]) ? firstBitUint64_t : 0);
 	}
 }
 
