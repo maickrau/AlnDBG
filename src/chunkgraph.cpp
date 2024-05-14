@@ -2589,16 +2589,19 @@ void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequen
 	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> endKmersToNumber;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
+		if (chunksPerRead[i].size() == 0) continue;
+		std::string readseq = sequenceIndex.getSequence(i);
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			auto seq = sequenceIndex.getSubstring(i, std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j])-std::get<0>(chunksPerRead[i][j])+1);
+			assert(std::get<0>(chunksPerRead[i][j]) < std::get<1>(chunksPerRead[i][j]));
+			assert(std::get<1>(chunksPerRead[i][j]) < readseq.size());
 			uint64_t firstKmer = 0;
 			uint64_t lastKmer = 0;
 			for (size_t k = 0; k < kmerSize; k++)
 			{
 				firstKmer <<= 2;
 				lastKmer <<= 2;
-				switch(seq[k])
+				switch(readseq[std::get<0>(chunksPerRead[i][j])+k])
 				{
 					case 'A':
 						firstKmer += 0;
@@ -2615,7 +2618,7 @@ void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequen
 					default:
 						assert(false);
 				}
-				switch(seq[seq.size()-1-k])
+				switch(readseq[std::get<1>(chunksPerRead[i][j])-k])
 				{
 					case 'A':
 						lastKmer += 3;
