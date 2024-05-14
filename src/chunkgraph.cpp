@@ -705,15 +705,17 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 	assert(chunkSequences.size() < (size_t)std::numeric_limits<uint32_t>::max());
 	assert(chunkSequences.size() >= 1);
 	// if one sequence is too small then don't do anything even if theoretically other sequences could have solid kmers
+	size_t smallestSequence = chunkSequences[0].size();
 	for (size_t i = 0; i < chunkSequences.size(); i++)
 	{
 		if (chunkSequences[i].size() < kmerSize+1) return phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> {};
+		smallestSequence = std::min(smallestSequence, chunkSequences[i].size());
 	}
 	std::vector<size_t> currentPosPerOccurrence;
 	// 40 blocks so it advances 2.5% of sequence every block so kmers seen before block cannot cluster with kmers seen after block if no kmers in block
 	size_t numBlocks = 40;
 	// unless the strings are small, then no blocks
-	if (chunkSequences[0].size() < 1000 || chunkSequences[0].size() < 40*kmerSize*2)
+	if (smallestSequence < 1000 || smallestSequence < 40*kmerSize*2)
 	{
 		numBlocks = 1;
 	}
