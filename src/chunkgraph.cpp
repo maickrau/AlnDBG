@@ -373,65 +373,92 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(con
 	return edgeCoverage;
 }
 
-void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+size_t findBiggestSmallerIndex(const std::vector<size_t>& nums, const size_t value)
+{
+	if (nums.size() < 5)
+	{
+		assert(nums[0] < value);
+		for (size_t i = 1; i < nums.size(); i++)
+		{
+			if (nums[i] > value) return i-1;
+		}
+		return nums.size()-1;
+	}
+	size_t low = 0;
+	size_t high = nums.size();
+	while (high > low)
+	{
+		size_t mid = (low + high) / 2;
+		assert(nums[mid] != value);
+		if (nums[mid] < value)
+		{
+			low = mid+1;
+		}
+		else if (nums[mid] > value)
+		{
+			high = mid;
+		}
+	}
+	assert(low == high);
+	assert(low <= nums.size());
+	assert(low == nums.size() || nums[low] > value);
+	assert(low > 0);
+	assert(nums[low-1] < value);
+	return low-1;
+}
+
+void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting by length" << std::endl;
 	const double differenceFraction = 0.02;
 	const size_t differenceConstant = 50;
-	phmap::flat_hash_map<size_t, std::vector<size_t>> lengthsPerChunk;
+	std::vector<std::vector<size_t>> lengthsPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (auto t : chunksPerRead[i])
 		{
 			if (NonexistantChunk(std::get<2>(t))) continue;
+			while ((std::get<2>(t) & maskUint64_t) >= lengthsPerChunk.size()) lengthsPerChunk.emplace_back();
 			lengthsPerChunk[std::get<2>(t) & maskUint64_t].emplace_back(std::get<1>(t) - std::get<0>(t));
 		}
 	}
-	phmap::flat_hash_map<size_t, std::vector<size_t>> splitters;
-	for (auto& pair : lengthsPerChunk)
+	std::vector<std::vector<size_t>> splitters;
+	splitters.resize(lengthsPerChunk.size());
+	iterateMultithreaded(0, lengthsPerChunk.size(), numThreads, [&lengthsPerChunk, &splitters, differenceFraction, differenceConstant](const size_t i)
 	{
-		std::sort(pair.second.begin(), pair.second.end());
-		splitters[pair.first].emplace_back(0);
-		for (size_t i = 1; i < pair.second.size(); i++)
+		std::sort(lengthsPerChunk[i].begin(), lengthsPerChunk[i].end());
+		splitters[i].emplace_back(0);
+		for (size_t j = 1; j < lengthsPerChunk[i].size(); j++)
 		{
-			size_t distance = pair.second[i] - pair.second[i-1];
-			if (distance < std::max((size_t)(pair.second[i] * differenceFraction), (size_t)differenceConstant)) continue;
-			splitters[pair.first].emplace_back((pair.second[i] + pair.second[i-1])/2);
+			size_t distance = lengthsPerChunk[i][j] - lengthsPerChunk[i][j-1];
+			if (distance < std::max((size_t)(lengthsPerChunk[i][j] * differenceFraction), (size_t)differenceConstant)) continue;
+			splitters[i].emplace_back((lengthsPerChunk[i][j] + lengthsPerChunk[i][j-1])/2);
 		}
-	}
-	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> splitterToNode;
+	});
+	std::vector<std::vector<size_t>> splitterToNode;
+	splitterToNode.resize(lengthsPerChunk.size());
 	size_t nextNum = 0;
-	for (const auto& pair : splitters)
+	for (size_t i = 0; i < splitters.size(); i++)
 	{
-		for (const size_t len : pair.second)
+		for (size_t j = 0; j < splitters[i].size(); j++)
 		{
-			auto key = std::make_pair(pair.first, len);
-			assert(splitterToNode.count(key) == 0);
-			assert(nextNum == splitterToNode.size());
-			splitterToNode[key] = nextNum;
+			splitterToNode[i].emplace_back(nextNum);
 			nextNum += 1;
 		}
 	}
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	iterateMultithreaded(0, chunksPerRead.size(), numThreads, [&splitters, &splitterToNode, &chunksPerRead](const size_t i)
 	{
 		for (auto& t : chunksPerRead[i])
 		{
 			if (NonexistantChunk(std::get<2>(t))) continue;
 			assert(std::get<1>(t) > std::get<0>(t));
 			size_t distance = std::get<1>(t) - std::get<0>(t);
-			size_t dist = std::numeric_limits<size_t>::max();
-			for (size_t len : splitters[std::get<2>(t) & maskUint64_t])
-			{
-				if (len >= distance) break;
-				dist = len;
-			}
-			assert(dist != std::numeric_limits<size_t>::max());
-			assert(dist < distance);
-			auto key = std::make_pair(std::get<2>(t) & maskUint64_t, dist);
-			assert(splitterToNode.count(key) == 1);
-			std::get<2>(t) = (std::get<2>(t) & firstBitUint64_t) + splitterToNode.at(key);
+			assert((std::get<2>(t) & maskUint64_t) < splitters.size());
+			size_t index = findBiggestSmallerIndex(splitters[std::get<2>(t) & maskUint64_t], distance);
+			assert(index < splitterToNode[std::get<2>(t) & maskUint64_t].size());
+			std::get<2>(t) = (std::get<2>(t) & firstBitUint64_t) + splitterToNode[std::get<2>(t) & maskUint64_t][index];
 		}
-	}
+	});
 }
 
 size_t getNumMismatches(const std::string& leftSequence, const std::string& rightSequence, const size_t maxMismatches)
@@ -6441,7 +6468,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			}
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, k);
-			splitPerLength(chunksPerRead);
+			splitPerLength(chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(1, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
