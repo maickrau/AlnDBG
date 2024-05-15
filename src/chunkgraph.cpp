@@ -72,6 +72,26 @@ public:
 class ConsensusString
 {
 public:
+	size_t size() const
+	{
+		return bases.size();
+	}
+	std::string substr(const size_t start, const size_t length) const
+	{
+		return toString().substr(start, length);
+	}
+	std::string toString() const
+	{
+		std::string str = bases.toString();
+		for (auto pair : Nchunks)
+		{
+			for (size_t j = pair.first; j < pair.first+pair.second; j++)
+			{
+				str[j] = 'N';
+			}
+		}
+		return str;
+	}
 	TwobitString bases;
 	std::vector<std::pair<size_t, size_t>> Nchunks;
 };
@@ -766,6 +786,10 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 		{
 			size_t nextOffset = (double)(offsetBreakpoint+1)/(double)numBlocks * (chunkSequences[j].size()-1);
 			assert(offsetBreakpoint != (numBlocks-1) || nextOffset == chunkSequences[j].size()-1);
+			if (!(nextOffset > currentPosPerOccurrence[j] + kmerSize))
+			{
+				std::cerr << "!! -> " <<  currentPosPerOccurrence[j] << " " << nextOffset << " " << kmerSize << " " << chunkSequences[j].size() << " " << smallestSequence << " " << numBlocks << " <- !!" << std::endl;
+			}
 			assert(nextOffset > currentPosPerOccurrence[j] + kmerSize);
 			size_t startPos, endPos;
 			startPos = currentPosPerOccurrence[j];
@@ -2415,6 +2439,16 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 	iterateMultithreaded(firstSmall, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &iterationOrder, mismatchFloor](const size_t iterationIndex)
 	{
 		const size_t i = iterationOrder[iterationIndex];
+		if (occurrencesPerChunk[i].size() <= 1)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + nextNum;
+			}
+			nextNum += 1;
+			return;
+		}
 //		{
 //			std::lock_guard<std::mutex> lock { resultMutex };
 //			std::cerr << "sequence identity split chunk " << i << " coverage " << occurrencesPerChunk[i].size() << std::endl;
@@ -2580,6 +2614,33 @@ std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, co
 		queue.pop();
 	}
 	return result;
+}
+
+void orientPalindromes(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+{
+	std::cerr << "orienting palindromes" << std::endl;
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&chunksPerRead, &sequenceIndex, kmerSize](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	{
+		assert(occurrencesPerChunk[i].size() >= 1);
+		if (occurrencesPerChunk[i].size() < 2) return;
+		auto t = chunksPerRead[occurrencesPerChunk[i][0].first][occurrencesPerChunk[i][0].second];
+		std::string exampleSeq = sequenceIndex.getSubstring(occurrencesPerChunk[i][0].first, std::get<0>(t), std::get<1>(t)-std::get<0>(t)+1);
+		std::string startKmer = exampleSeq.substr(0, kmerSize);
+		std::string endKmer = MBG::revCompRaw(exampleSeq.substr(exampleSeq.size()-kmerSize, kmerSize));
+		if (endKmer != startKmer) return;
+		std::string firstSeq = sequenceIndex.getSubstring(occurrencesPerChunk[i][0].first, std::get<0>(t), std::get<1>(t)-std::get<0>(t)+1);
+		size_t maxMismatches = firstSeq.size() * mismatchFraction + 50;
+		for (size_t j = 1; j < occurrencesPerChunk[i].size(); j++)
+		{
+			t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			std::string chunkSeq = sequenceIndex.getSubstring(occurrencesPerChunk[i][j].first, std::get<0>(t), std::get<1>(t)-std::get<0>(t)+1);
+			size_t fwMismatches = getNumMismatches(firstSeq, chunkSeq, maxMismatches);
+			std::string revChunkSeq = MBG::revCompRaw(chunkSeq);
+			size_t bwMismatches = getNumMismatches(firstSeq, revChunkSeq, std::min(maxMismatches, fwMismatches+2));
+			if (fwMismatches < bwMismatches) continue;
+			std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) ^= firstBitUint64_t;
+		}
+	});
 }
 
 void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
@@ -4937,14 +4998,7 @@ void writeUnitigSequences(const std::string& filename, const std::vector<Consens
 	for (size_t i = 0; i < sequences.size(); i++)
 	{
 		file << ">unitig_" << i << std::endl;
-		std::string str = sequences[i].bases.toString();
-		for (auto pair : sequences[i].Nchunks)
-		{
-			for (size_t j = pair.first; j < pair.first+pair.second; j++)
-			{
-				str[j] = 'N';
-			}
-		}
+		std::string str = sequences[i].toString();
 		file << str << std::endl;
 	}
 }
@@ -6169,7 +6223,214 @@ void writeReadUnitigSequences(const std::string& filename, const std::vector<std
 	}
 }
 
-std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPerRead(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t k, const size_t windowSize, const size_t middleSkip)
+size_t reverseKmer(size_t kmer, const size_t kmerSize)
+{
+	kmer = ~kmer;
+	kmer = ((kmer >> 2) & 0x3333333333333333ull) + ((kmer << 2) & 0xCCCCCCCCCCCCCCCCull);
+	kmer = ((kmer >> 4) & 0x0F0F0F0F0F0F0F0Full) + ((kmer << 4) & 0xF0F0F0F0F0F0F0F0ull);
+	kmer = ((kmer >> 8) & 0x00FF00FF00FF00FFull) + ((kmer << 8) & 0xFF00FF00FF00FF00ull);
+	kmer = ((kmer >> 16) & 0x0000FFFF0000FFFFull) + ((kmer << 16) & 0xFFFF0000FFFF0000ull);
+	kmer = ((kmer >> 32) & 0x00000000FFFFFFFFull) + ((kmer << 32) & 0xFFFFFFFF00000000ull);
+	kmer >>= (32ull-kmerSize)*2ull;
+	return kmer;
+}
+
+// https://naml.us/post/inverse-of-a-hash-function/
+size_t rawhash(size_t key)
+{
+	key = (~key) + (key << 21); // key = (key << 21) - key - 1;
+	key = key ^ (key >> 24);
+	key = (key + (key << 3)) + (key << 8); // key * 265
+	key = key ^ (key >> 14);
+	key = (key + (key << 2)) + (key << 4); // key * 21
+	key = key ^ (key >> 28);
+	key = key + (key << 31);
+	return key;
+}
+
+size_t getHash(size_t kmer, const size_t kmerSize, const bool fw, const std::vector<double>* weights)
+{
+	if (!fw)
+	{
+		size_t rev = reverseKmer(kmer, kmerSize);
+		assert(rev != kmer);
+		assert(reverseKmer(rev, kmerSize) == kmer);
+		kmer = rev;
+	}
+	if (weights->size() > 0)
+	{
+		assert(kmer < weights->size());
+		size_t result = (*weights)[kmer] * std::numeric_limits<size_t>::max();
+		result += rawhash(kmer) * 0.02;
+		return result;
+	}
+	return rawhash(kmer);
+}
+
+class WeightedMinimizerIterator
+{
+public:
+	WeightedMinimizerIterator() = default;
+	WeightedMinimizerIterator(size_t k, bool fw, const std::vector<double>& weights) :
+		weights(&weights),
+		mask((1ull << (2ull*k)) - 1),
+		k(k),
+		windowSize(0),
+		windowKmers(),
+		lastKmer(0),
+		pos(0),
+		fw(fw)
+	{
+	}
+	void init(const std::string& start, size_t posOffset)
+	{
+		assert(start.size() >= k);
+		for (size_t i = 0; i < k; i++)
+		{
+			lastKmer <<= 2;
+			switch(start[i])
+			{
+				case 'A':
+					lastKmer += 0;
+					break;
+				case 'C':
+					lastKmer += 1;
+					break;
+				case 'G':
+					lastKmer += 2;
+					break;
+				case 'T':
+					lastKmer += 3;
+					break;
+				default:
+					assert(false);
+					break;
+			}
+		}
+		windowSize = start.size() - k + 1;
+		windowKmers.emplace_back(posOffset, getHash(lastKmer, k, fw, weights));
+		for (size_t i = k; i < start.size(); i++)
+		{
+			lastKmer <<= 2;
+			lastKmer &= mask;
+			switch(start[i])
+			{
+				case 'A':
+					lastKmer += 0;
+					break;
+				case 'C':
+					lastKmer += 1;
+					break;
+				case 'G':
+					lastKmer += 2;
+					break;
+				case 'T':
+					lastKmer += 3;
+					break;
+				default:
+					assert(false);
+					break;
+			}
+			uint64_t hash = getHash(lastKmer, k, fw, weights);
+			while (windowKmers.size() > 0 && windowKmers.back().second > hash) windowKmers.pop_back();
+			windowKmers.emplace_back(i-k+1+posOffset, hash);
+		}
+		pos = start.size()-k+1+posOffset;
+	}
+	void moveChar(uint8_t added, uint8_t removed)
+	{
+		lastKmer <<= 2;
+		lastKmer &= mask;
+		switch(added)
+		{
+			case 'A':
+				lastKmer += 0;
+				break;
+			case 'C':
+				lastKmer += 1;
+				break;
+			case 'G':
+				lastKmer += 2;
+				break;
+			case 'T':
+				lastKmer += 3;
+				break;
+			default:
+				assert(false);
+				break;
+		}
+		uint64_t hash = getHash(lastKmer, k, fw, weights);
+		// comparison rearranged, really first <= pos - windowSize but move windowSize because of underflow
+		while (windowKmers.size() > 0 && windowKmers.front().first + windowSize <= pos) windowKmers.erase(windowKmers.begin());
+		while (windowKmers.size() > 0 && windowKmers.back().second > hash) windowKmers.pop_back();
+		if (fw)
+		{
+			// forward iteration favors latest minimizers to be consistent with reverse iteration favoring earliest
+			while (windowKmers.size() > 0 && windowKmers.back().second == hash) windowKmers.pop_back();
+		}
+		windowKmers.emplace_back(pos, hash);
+		pos += 1;
+	}
+	size_t minimizerPosition() const
+	{
+		assert(windowKmers.size() >= 1);
+		return windowKmers[0].first;
+	}
+	uint64_t minimizerHash() const
+	{
+		assert(windowKmers.size() >= 1);
+		return windowKmers[0].second;
+	}
+private:
+	const std::vector<double>* weights;
+	size_t mask;
+	size_t k;
+	size_t windowSize;
+	std::vector<std::pair<size_t, uint64_t>> windowKmers;
+	size_t lastKmer;
+	size_t pos;
+	bool fw;
+};
+
+template <typename F>
+void iterateWindowchunksWeighted(const std::string& seq, const size_t k, const size_t windowSize, const size_t middleSkip, const std::vector<double>& kmerCorrectnessMeasure, F callback)
+{
+	const size_t numWindows = 2;
+	if (seq.size() < numWindows * windowSize + k + middleSkip) return;
+	std::vector<WeightedMinimizerIterator> windowIterators;
+	for (size_t i = 0; i < numWindows; i++)
+	{
+		windowIterators.emplace_back(k, i < numWindows / 2, kmerCorrectnessMeasure);
+		std::string startWindow { seq.begin() + i * windowSize + i * middleSkip, seq.begin() + (i+1) * windowSize + i * middleSkip + k };
+		windowIterators[i].init(startWindow, i * windowSize + i * middleSkip);
+	}
+	std::vector<uint64_t> positionsHere;
+	positionsHere.resize(numWindows);
+	for (size_t i = 0; i < numWindows; i++)
+	{
+		positionsHere[i] = windowIterators[i].minimizerPosition();
+	}
+	callback(positionsHere);
+	for (size_t i = 0; i + numWindows * windowSize + middleSkip + k < seq.size(); i++)
+	{
+		bool changed = false;
+		for (size_t j = 0; j < numWindows; j++)
+		{
+			windowIterators[j].moveChar(seq[(j+1)*windowSize + j * middleSkip + k + i], seq[(j+1)*windowSize+i + j * middleSkip]);
+			if (windowIterators[j].minimizerPosition() != positionsHere[j])
+			{
+				changed = true;
+				positionsHere[j] = windowIterators[j].minimizerPosition();
+			}
+		}
+		if (changed)
+		{
+			callback(positionsHere);
+		}
+	}
+}
+
+std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPerRead(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t k, const size_t windowSize, const size_t middleSkip, const std::vector<double>& kmerCorrectnessMeasure)
 {
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
 	result.resize(sequenceIndex.size());
@@ -6178,36 +6439,23 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 	phmap::flat_hash_map<uint64_t, size_t> hashToNode;
 	phmap::flat_hash_set<MBG::HashType> removedHashes;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&result, &sequenceIndex, &partIterator, &hashToNode, &resultMutex, &removedHashes, k, windowSize, middleSkip](const size_t i)
+	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&result, &sequenceIndex, &partIterator, &hashToNode, &resultMutex, &removedHashes, &kmerCorrectnessMeasure, k, windowSize, middleSkip](const size_t i)
 	{
 		std::string readSequence = sequenceIndex.getSequence(i);
 		std::vector<std::tuple<size_t, size_t, MBG::HashType>> hashes;
-		partIterator.iteratePartsOfRead("", readSequence, [&hashToNode, &hashes, &resultMutex, i, k, windowSize, middleSkip](const MBG::ReadInfo& read, const MBG::SequenceCharType& seq, const MBG::SequenceLengthType& poses, const std::string& raw)
+		iterateWindowchunksWeighted(readSequence, k, windowSize, middleSkip, kmerCorrectnessMeasure, [&hashes, &readSequence, i, k](const std::vector<uint64_t>& hashPositions)
 		{
-			iterateWindowchunks(seq, k, windowSize, middleSkip, [&hashToNode, &hashes, &resultMutex, &poses, &seq, i, k](const std::vector<uint64_t>& hashPositions)
-			{
-				assert(hashPositions.size() == 2);
-				size_t startPos = hashPositions[0];
-				size_t endPos = hashPositions.back() + k - 1;
-				size_t realStartPos = poses[startPos];
-				size_t realEndPos = poses[endPos+1]-1;
-				MBG::SequenceCharType hashableSequence;
-				for (size_t i = 0; i < hashPositions.size()/2; i++)
-				{
-					size_t pos = hashPositions[i];
-					hashableSequence.insert(hashableSequence.end(), seq.begin() + pos, seq.begin() + pos + k);
-				}
-				hashableSequence.emplace_back(10);
-				for (size_t i = hashPositions.size()/2; i < hashPositions.size(); i++)
-				{
-					size_t pos = hashPositions[i];
-					MBG::SequenceCharType insertSubstr { seq.begin() + pos, seq.begin() + pos + k };
-					//insertSubstr = MBG::revCompRLE(insertSubstr);
-					hashableSequence.insert(hashableSequence.end(), insertSubstr.begin(), insertSubstr.end());
-				}
-				MBG::HashType totalhashfw = MBG::hash(hashableSequence);
-				hashes.emplace_back(realStartPos, realEndPos, totalhashfw);
-			});
+			assert(hashPositions.size() == 2);
+			size_t startPos = hashPositions[0];
+			size_t endPos = hashPositions.back() + k - 1;
+			std::string startkmer = readSequence.substr(hashPositions[0], k);
+			std::string endkmer = readSequence.substr(hashPositions[1], k);
+			endkmer = MBG::revCompRaw(endkmer);
+			if (startkmer == endkmer) return;
+			size_t starthash = std::hash<std::string>{}(startkmer);
+			size_t endhash = std::hash<std::string>{}(endkmer);
+			MBG::HashType totalhashfw = ((__uint128_t)starthash << (__uint128_t)64) + (__uint128_t)endhash;
+			hashes.emplace_back(startPos, endPos, totalhashfw);
 		});
 		std::vector<bool> removeHash;
 		removeHash.resize(hashes.size(), false);
@@ -6281,10 +6529,10 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 			removedHashes.insert(removeHashesHere.begin(), removeHashesHere.end());
 			MBG::HashType totalhashfw = std::get<2>(hashes[j]);
 			MBG::HashType totalhashbw = (totalhashfw << (MBG::HashType)64) + (totalhashfw >> (MBG::HashType)64);
-			if (totalhashfw == totalhashbw) continue;
+			//if (totalhashfw == totalhashbw) continue;
 			uint64_t hash;
 			bool fw;
-			if (totalhashfw < totalhashbw)
+			if (totalhashfw <= totalhashbw)
 			{
 				hash = totalhashfw + 3*(totalhashfw >> 64);
 				fw = true;
@@ -6312,7 +6560,7 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 	{
 		MBG::HashType totalhashbw = (totalhashfw << (MBG::HashType)64) + (totalhashfw >> (MBG::HashType)64);
 		uint64_t hash;
-		if (totalhashfw < totalhashbw)
+		if (totalhashfw <= totalhashbw)
 		{
 			hash = totalhashfw + 3*(totalhashfw >> 64);
 		}
@@ -6436,6 +6684,307 @@ void writeStage(const size_t stage, const std::vector<std::vector<std::tuple<siz
 	writeGraph("fakegraph" + std::to_string(stage) + ".gfa", "fakepaths" + std::to_string(stage) + ".txt", chunksPerRead);
 }
 
+size_t countCorrectKmers = 0;
+size_t countWrongKmers = 0;
+size_t countForcedWrong = 0;
+
+void addCorrectnessKmer(const std::string& read, const std::string& unitig, const size_t readpos, const size_t unitigpos, const size_t k, std::vector<size_t>& countCorrect, std::vector<size_t>& countMutatedToElsewhere, std::vector<size_t>& countMutatedToHere, const bool forceMismatch)
+{
+	size_t readKmer = 0;
+	size_t unitigKmer = 0;
+	bool valid = true;
+	for (size_t i = 0; i < k; i++)
+	{
+		readKmer <<= 2;
+		unitigKmer <<= 2;
+		switch(read[readpos+i])
+		{
+			case 'A':
+				readKmer += 0;
+				break;
+			case 'C':
+				readKmer += 1;
+				break;
+			case 'G':
+				readKmer += 2;
+				break;
+			case 'T':
+				readKmer += 3;
+				break;
+			default:
+				valid = false;
+				break;
+		}
+		switch(unitig[unitigpos+i])
+		{
+			case 'A':
+				unitigKmer += 0;
+				break;
+			case 'C':
+				unitigKmer += 1;
+				break;
+			case 'G':
+				unitigKmer += 2;
+				break;
+			case 'T':
+				unitigKmer += 3;
+				break;
+			default:
+				valid = false;
+				break;
+		}
+	}
+	if (!valid) return;
+	if (readKmer == unitigKmer && !forceMismatch)
+	{
+		countCorrect[readKmer] += 1;
+		countCorrectKmers += 1;
+	}
+	else
+	{
+		if (readKmer == unitigKmer) countForcedWrong += 1;
+		countMutatedToHere[unitigKmer] += 1;
+		countMutatedToElsewhere[readKmer] += 1;
+		countWrongKmers += 1;
+	}
+}
+
+std::string revComp(const std::string& raw)
+{
+	std::string result { raw.rbegin(), raw.rend() };
+	for (size_t i = 0; i < result.size(); i++)
+	{
+		switch (result[i])
+		{
+			case 'a':
+			case 'A':
+				result[i] = 'T';
+				break;
+			case 'c':
+			case 'C':
+				result[i] = 'G';
+				break;
+			case 'g':
+			case 'G':
+				result[i] = 'C';
+				break;
+			case 't':
+			case 'T':
+				result[i] = 'A';
+				break;
+			default:
+				result[i] = 'N';
+				break;
+		}
+	}
+	return result;
+}
+
+void addMutatedKmerCounts(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage, std::vector<size_t>& countCorrect, std::vector<size_t>& countMutatedToElsewhere, std::vector<size_t>& countMutatedToHere, const size_t kmerSize)
+{
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::vector<ConsensusString> unitigSequences;
+	std::tie(graph, readPaths, unitigSequences) = getChunkUnitigGraphWithConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage, numThreads);
+	std::cerr << "begin counting" << std::endl;
+	std::cerr << "total unitigs for counting: " << unitigSequences.size() << std::endl;
+	size_t totalBp = 0;
+	for (size_t i = 0; i < unitigSequences.size(); i++)
+	{
+		totalBp += unitigSequences[i].size();
+	}
+	std::cerr << "total graph bp for counting: " << totalBp << std::endl;
+	iterateMultithreaded(0, readPaths.size(), numThreads, [&readPaths, &unitigSequences, &sequenceIndex, &countCorrect, &countMutatedToElsewhere, &countMutatedToHere, kmerSize](const size_t readi)
+	{
+		if (readPaths[readi].size() == 0) return;
+		std::string readSequence = sequenceIndex.getSequence(readi);
+		for (size_t j = 0; j < readPaths[readi].size(); j++)
+		{
+			assert(readPaths[readi][j].readPartInPathnode.size() == readPaths[readi][j].path.size());
+			for (size_t k = 0; k < readPaths[readi][j].path.size(); k++)
+			{
+				assert(readPaths[readi][j].readPartInPathnode[k].second > readPaths[readi][j].readPartInPathnode[k].first);
+				std::string readSubstring = readSequence.substr(readPaths[readi][j].readPartInPathnode[k].first, readPaths[readi][j].readPartInPathnode[k].second-readPaths[readi][j].readPartInPathnode[k].first+1);
+				std::string unitigSubstring;
+				size_t unitigStartPos = 0;
+				size_t unitigEndPos = unitigSequences[readPaths[readi][j].path[k] & maskUint64_t].size();
+				if (k == 0) unitigStartPos = readPaths[readi][j].pathLeftClip;
+				if (k+1 == readPaths[readi][j].path.size()) unitigEndPos -= readPaths[readi][j].pathRightClip;
+				assert(unitigEndPos > unitigStartPos);
+				if (readPaths[readi][j].path[k] & firstBitUint64_t)
+				{
+					assert((readPaths[readi][j].path[k] & maskUint64_t) < unitigSequences.size());
+					unitigSubstring = unitigSequences[readPaths[readi][j].path[k] & maskUint64_t].substr(unitigStartPos, unitigEndPos - unitigStartPos);
+				}
+				else
+				{
+					assert((readPaths[readi][j].path[k] & maskUint64_t) < unitigSequences.size());
+					unitigSubstring = unitigSequences[readPaths[readi][j].path[k] & maskUint64_t].substr(unitigSequences[readPaths[readi][j].path[k] & maskUint64_t].size() - unitigEndPos, unitigEndPos - unitigStartPos);
+					unitigSubstring = revComp(unitigSubstring);
+				}
+				EdlibAlignResult edlibresult = edlibAlign(readSubstring.data(), readSubstring.size(), unitigSubstring.data(), unitigSubstring.size(), edlibNewAlignConfig(readSubstring.size(), EDLIB_MODE_NW, EDLIB_TASK_PATH, NULL, 0));
+				if (edlibresult.status != EDLIB_STATUS_OK)
+				{
+					std::cerr << "couldn't align read " << readi << " to unitig " << (readPaths[readi][j].path[k] & maskUint64_t) << std::endl;
+					edlibFreeAlignResult(edlibresult);
+					continue;
+				}
+				size_t readPos = 0;
+				size_t unitigPos = 0;
+				for (size_t l = 0; l < edlibresult.alignmentLength; l++)
+				{
+					if (edlibresult.alignment[l] == 0 || true)
+					{
+						if (readPos+kmerSize <= readSubstring.size() && unitigPos+kmerSize <= unitigSubstring.size())
+						{
+							bool forceMismatch = false;
+							assert(l + kmerSize <= edlibresult.alignmentLength);
+							for (size_t m = 0; m < kmerSize; m++)
+							{
+								if (edlibresult.alignment[l+m] != 0) forceMismatch = true;
+							}
+							addCorrectnessKmer(readSubstring, unitigSubstring, readPos, unitigPos, kmerSize, countCorrect, countMutatedToElsewhere, countMutatedToHere, forceMismatch);
+						}
+					}
+					switch(edlibresult.alignment[l])
+					{
+						case 0:
+							readPos += 1;
+							unitigPos += 1;
+							break;
+						case 1:
+							readPos += 1;
+							break;
+						case 2:
+							unitigPos += 1;
+							break;
+						case 3:
+							readPos += 1;
+							unitigPos += 1;
+							break;
+						default:
+							assert(false);
+					}
+				}
+				assert(readPos == readSubstring.size());
+				assert(unitigPos == unitigSubstring.size());
+				edlibFreeAlignResult(edlibresult);
+			}
+		}
+	});
+	std::cerr << "done counting" << std::endl;
+	std::cerr << "correct: " << countCorrectKmers << " wrong: " << countWrongKmers << " forced wrong: " << countForcedWrong << std::endl;
+}
+
+void eraseWrongCoverageChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t minCoverage, const size_t maxCoverage)
+{
+	std::vector<size_t> coverage;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			while (chunk >= coverage.size()) coverage.emplace_back(0);
+			coverage[chunk] += 1;
+		}
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			if (coverage[chunk] < minCoverage || coverage[chunk] > maxCoverage) std::get<2>(chunksPerRead[i][j]) = std::numeric_limits<uint64_t>::max();
+		}
+	}
+}
+
+std::vector<double> getKmerCorrectnessMeasure(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t k, const size_t windowSize, const size_t middleSkip, const double approxOneHapCoverage)
+{
+	const double priorAssumptionGoodness = 0.5;
+	const size_t priorAssumptionStrength = 3;
+	std::cerr << "getting kmer correctness measure" << std::endl;
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	std::vector<double> fake;
+	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead = getBetterChunksPerRead(sequenceIndex, rawReadLengths, numThreads, k, windowSize, middleSkip, fake);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	addMissingPiecesBetweenChunks(chunksPerRead, k);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerFirstLastKmers(sequenceIndex, chunksPerRead, k);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerLength(chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	orientPalindromes(sequenceIndex, chunksPerRead, k, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerBaseCounts(sequenceIndex, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerMinHashes(sequenceIndex, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	resolveVerySmallNodes(chunksPerRead, rawReadLengths, middleSkip, numThreads, approxOneHapCoverage);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	eraseWrongCoverageChunks(chunksPerRead, approxOneHapCoverage * 0.5, approxOneHapCoverage * 5);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerSequenceIdentity(sequenceIndex, chunksPerRead, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	eraseWrongCoverageChunks(chunksPerRead, approxOneHapCoverage * 0.5, approxOneHapCoverage * 2.5);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	std::vector<size_t> countCorrect;
+	std::vector<size_t> countMutatedToElsewhere;
+	std::vector<size_t> countMutatedToHere;
+	countCorrect.resize(pow(4, k), 0);
+	countMutatedToHere.resize(pow(4, k), 0);
+	countMutatedToElsewhere.resize(pow(4, k), 0);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	addMutatedKmerCounts(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage, countCorrect, countMutatedToElsewhere, countMutatedToHere, k);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	std::vector<double> result;
+	result.resize(pow(4, k), -1);
+	std::vector<double> bestkmers;
+	for (size_t i = 0; i < result.size(); i++)
+	{
+		// A = observed this kmer
+		// B = kmer is in fact this kmer
+		// P(B|A) = P(A|B) * P(B) / P(A)
+		// B = (correct_count + mutated_to_elsewhere) / count_kmers
+		// A = (correct_count + mutated_to_here) / count_kmers
+		// P(A|B) = probability kmer did NOT mutate = 1.0 - (mutated_to_elsewhere) / (correct_count + mutated_to_elsewhere)
+		// P(B|A) = (1.0 - mutated_to_elsewhere / (correct_count + mutated_to_elsewhere)) * (correct_count + mutated_to_elsewhere)/count_kmers / (correct_count + mutated_to_here)/count_kmers
+		// P(B|A) = (1.0 - mutated_to_elsewhere / (correct_count + mutated_to_elsewhere)) * (correct_count + mutated_to_elsewhere) / (correct_count + mutated_to_here)
+		// take the score of a kmer as P(B|A) * P(A|B), so a high score kmer has both low false positive and low false negative
+		// and then also include the reverse k-mers score similarly, so it has to be good both fw and revcomp
+		// which reduces to this:
+		size_t otherKmer = reverseKmer(i, k);
+		if (i < otherKmer)
+		{
+			double mutatedToScore = (double)(countCorrect[i] + priorAssumptionGoodness * priorAssumptionStrength) / (double)(countCorrect[i] + countMutatedToElsewhere[i] + priorAssumptionStrength);
+			double mutatedHereScore = (double)(countCorrect[i] + priorAssumptionGoodness * priorAssumptionStrength) / (double)(countCorrect[i] + countMutatedToHere[i] + priorAssumptionStrength);
+			double mutatedToScoreBw = (double)(countCorrect[otherKmer] + priorAssumptionGoodness * priorAssumptionStrength) / (double)(countCorrect[otherKmer] + countMutatedToElsewhere[otherKmer] + priorAssumptionStrength);
+			double mutatedHereScoreBw = (double)(countCorrect[otherKmer] + priorAssumptionGoodness * priorAssumptionStrength) / (double)(countCorrect[otherKmer] + countMutatedToHere[otherKmer] + priorAssumptionStrength);
+			double score = mutatedToScore * mutatedHereScore * mutatedToScoreBw * mutatedHereScoreBw;
+			assert(score >= 0.0);
+			assert(score <= 1.0);
+			// lower result is better, leads to smaller hash so more likely to pick
+			result[i] = 0.95 - 0.9 * score;
+		}
+		else
+		{
+			assert(otherKmer < i);
+			assert(result[otherKmer] != -1);
+			result[i] = result[otherKmer];
+		}
+	}
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	bestkmers = result;
+	std::sort(bestkmers.begin(), bestkmers.end());
+	for (size_t i = 0; i < 100; i++)
+	{
+		std::cerr << "percentile " << i << " index " << bestkmers.size()/100*i << " result: " << bestkmers[bestkmers.size()/100*i] << std::endl;
+	}
+	std::cerr << "percentile " << 100 << " index " << bestkmers.size()-1 << " result: " << bestkmers.back() << std::endl;
+	return result;
+}
+
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t k, const size_t windowSize, const size_t middleSkip, const size_t startStage)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
@@ -6449,8 +6998,11 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	switch(startStage)
 	{
 		case 0:
-			std::cerr << "getting chunks from reads" << std::endl;
-			chunksPerRead = getBetterChunksPerRead(sequenceIndex, rawReadLengths, numThreads, k, windowSize, middleSkip);
+			{
+				auto kmerCorrectnessMeasure = getKmerCorrectnessMeasure(sequenceIndex, rawReadLengths, numThreads, k, windowSize, middleSkip, approxOneHapCoverage);
+				std::cerr << "getting chunks from reads" << std::endl;
+				chunksPerRead = getBetterChunksPerRead(sequenceIndex, rawReadLengths, numThreads, k, windowSize, middleSkip, kmerCorrectnessMeasure);
+			}
 			addMissingPiecesBetweenChunks(chunksPerRead, k);
 			{
 				size_t numChunks = 0;
@@ -6461,8 +7013,14 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 				std::cerr << numChunks << " chunks" << std::endl;
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			}
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, k);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerLength(chunksPerRead, numThreads);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			orientPalindromes(sequenceIndex, chunksPerRead, k, numThreads);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			resolveVerySmallNodes(chunksPerRead, rawReadLengths, middleSkip, numThreads, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(1, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
@@ -6487,6 +7045,8 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		case 4:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerSequenceIdentity(sequenceIndex, chunksPerRead, numThreads);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			resolveVerySmallNodes(chunksPerRead, rawReadLengths, middleSkip, numThreads, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(5, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
