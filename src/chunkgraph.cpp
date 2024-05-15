@@ -735,7 +735,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 	size_t smallestSequence = chunkSequences[0].size();
 	for (size_t i = 0; i < chunkSequences.size(); i++)
 	{
-		if (chunkSequences[i].size() < kmerSize+1) return phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> {};
+		if (chunkSequences[i].size() < kmerSize+2) return phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> {};
 		smallestSequence = std::min(smallestSequence, chunkSequences[i].size());
 	}
 	std::vector<size_t> currentPosPerOccurrence;
