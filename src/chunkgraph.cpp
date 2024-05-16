@@ -6822,8 +6822,8 @@ void addMutatedKmerCounts(const FastaCompressor::CompressedStringIndex& sequence
 					unitigSubstring = unitigSequences[readPaths[readi][j].path[k] & maskUint64_t].substr(unitigSequences[readPaths[readi][j].path[k] & maskUint64_t].size() - unitigEndPos, unitigEndPos - unitigStartPos);
 					unitigSubstring = revComp(unitigSubstring);
 				}
-				EdlibAlignResult edlibresult = edlibAlign(readSubstring.data(), readSubstring.size(), unitigSubstring.data(), unitigSubstring.size(), edlibNewAlignConfig(readSubstring.size(), EDLIB_MODE_NW, EDLIB_TASK_PATH, NULL, 0));
-				if (edlibresult.status != EDLIB_STATUS_OK)
+				EdlibAlignResult edlibresult = edlibAlign(readSubstring.data(), readSubstring.size(), unitigSubstring.data(), unitigSubstring.size(), edlibNewAlignConfig(std::max(readSubstring.size(), unitigSubstring.size()), EDLIB_MODE_NW, EDLIB_TASK_PATH, NULL, 0));
+				if (edlibresult.status != EDLIB_STATUS_OK || edlibresult.alignmentLength < readSubstring.size() || edlibresult.alignmentLength < unitigSubstring.size() || edlibresult.alignmentLength <= 0)
 				{
 					std::cerr << "couldn't align read " << readi << " to unitig " << (readPaths[readi][j].path[k] & maskUint64_t) << std::endl;
 					edlibFreeAlignResult(edlibresult);
