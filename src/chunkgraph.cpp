@@ -5364,85 +5364,80 @@ void resolveVerySmallNodes(std::vector<std::vector<std::tuple<size_t, size_t, ui
 		resolvableTinies.insert(graph.chunksInUnitig[i][0] & maskUint64_t);
 	}
 	size_t nextNum = 0;
+	for (size_t chunk : resolvableTinies)
+	{
+		std::cerr << "try to resolve tiny chunk " << chunk << std::endl;
+	}
+	phmap::flat_hash_map<size_t, phmap::flat_hash_map<size_t, size_t>> tinyNodeParent;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			if (!NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) nextNum = std::max(nextNum, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
 			if (resolvableTinies.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 0) continue;
-			if (std::get<0>(chunksPerRead[i][j]) == 0)
+			assert(j > 0);
+			assert(j+1 < chunksPerRead[i].size());
+			uint64_t prev = std::get<2>(chunksPerRead[i][j-1]);
+			uint64_t next = std::get<2>(chunksPerRead[i][j+1]);
+			if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t)
 			{
-				resolvableTinies.erase(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
 			}
-			if (std::get<1>(chunksPerRead[i][j])+1 == rawReadLengths[i])
+			else
 			{
-				resolvableTinies.erase(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+				std::swap(prev, next);
+				prev ^= firstBitUint64_t;
+				next ^= firstBitUint64_t;
 			}
-			if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1])+1)
-			{
-				resolvableTinies.erase(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			}
-			if (j+1 < chunksPerRead[i].size() && std::get<1>(chunksPerRead[i][j])+1 == std::get<1>(chunksPerRead[i][j-1]))
-			{
-				resolvableTinies.erase(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
-			}
+			assert((prev & (firstBitUint64_t >> 1)) == 0);
+			prev |= firstBitUint64_t >> 1;
+			uint64_t tinyNode = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			if (tinyNodeParent[tinyNode].count(prev) == 0) tinyNodeParent[tinyNode][prev] = prev;
+			if (tinyNodeParent[tinyNode].count(next) == 0) tinyNodeParent[tinyNode][next] = next;
+			merge(tinyNodeParent[tinyNode], prev, next);
 		}
-	}
-	for (size_t chunk : resolvableTinies)
-	{
-		std::cerr << "resolve tiny chunk " << chunk << std::endl;
 	}
 	nextNum += 1;
-	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeToNumber;
+	phmap::flat_hash_map<size_t, phmap::flat_hash_map<size_t, size_t>> nodeToCluster;
+	for (auto& pair : tinyNodeParent)
+	{
+		for (const auto pair2 : pair.second)
+		{
+			if (pair2.first != pair2.second) continue;
+			nodeToCluster[pair.first][pair2.second] = nextNum;
+			nextNum += 1;
+		}
+		if (nodeToCluster.count(pair.first) == 1 && nodeToCluster.at(pair.first).size() >= 2)
+		{
+			std::cerr << "resolve tiny chunk " << pair.first << " to " << nodeToCluster.at(pair.first).size() << " chunks" << std::endl;
+		}
+	}
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
-		std::vector<size_t> eraseIndices;
-		std::vector<std::tuple<size_t, size_t, uint64_t>> newChunks;
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
+			if (!NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) nextNum = std::max(nextNum, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
 			if (resolvableTinies.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 0) continue;
-			eraseIndices.emplace_back(j);
-			if (j > 0)
+			uint64_t tinyNode = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			if (nodeToCluster.count(tinyNode) == 0) continue;
+			if (nodeToCluster.at(tinyNode).size() < 2) continue;
+			assert(j > 0);
+			assert(j+1 < chunksPerRead[i].size());
+			uint64_t prev = std::get<2>(chunksPerRead[i][j-1]);
+			uint64_t next = std::get<2>(chunksPerRead[i][j+1]);
+			if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t)
 			{
-				uint64_t here = std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t;
-				uint64_t neighbor = std::get<2>(chunksPerRead[i][j-1]) ^ firstBitUint64_t;
-				if (!NonexistantChunk(neighbor))
-				{
-					std::pair<uint64_t, uint64_t> key { here, neighbor };
-					if (edgeToNumber.count(key) == 0)
-					{
-						edgeToNumber[key] = nextNum;
-						nextNum += 1;
-					}
-					uint64_t node = edgeToNumber.at(key);
-					newChunks.emplace_back(std::get<0>(chunksPerRead[i][j])-1, std::get<1>(chunksPerRead[i][j]), node);
-				}
 			}
-			if (j+1 < chunksPerRead[i].size())
+			else
 			{
-				uint64_t here = std::get<2>(chunksPerRead[i][j]);
-				uint64_t neighbor = std::get<2>(chunksPerRead[i][j+1]);
-				if (!NonexistantChunk(neighbor))
-				{
-					std::pair<uint64_t, uint64_t> key { here, neighbor };
-					if (edgeToNumber.count(key) == 0)
-					{
-						edgeToNumber[key] = nextNum;
-						nextNum += 1;
-					}
-					uint64_t node = edgeToNumber.at(key) + firstBitUint64_t;
-					newChunks.emplace_back(std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j])+1, node);
-				}
+				std::swap(prev, next);
+				prev ^= firstBitUint64_t;
+				next ^= firstBitUint64_t;
 			}
+			assert((prev & (firstBitUint64_t >> 1)) == 0);
+			prev |= firstBitUint64_t >> 1;
+			assert(find(tinyNodeParent.at(tinyNode), prev) == find(tinyNodeParent.at(tinyNode), next));
+			std::get<2>(chunksPerRead[i][j]) = (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) + nodeToCluster.at(tinyNode).at(find(tinyNodeParent.at(tinyNode), prev));
 		}
-		if (eraseIndices.size() == 0 && newChunks.size() == 0) continue;
-		for (size_t j = eraseIndices.size()-1; j < eraseIndices.size(); j--)
-		{
-			size_t index = eraseIndices[j];
-			chunksPerRead[i].erase(chunksPerRead[i].begin()+index);
-		}
-		chunksPerRead[i].insert(chunksPerRead[i].end(), newChunks.begin(), newChunks.end());
-		std::sort(chunksPerRead[i].begin(), chunksPerRead[i].end());
 	}
 }
 
