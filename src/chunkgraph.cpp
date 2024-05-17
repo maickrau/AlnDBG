@@ -5388,12 +5388,21 @@ void resolveVerySmallNodes(std::vector<std::vector<std::tuple<size_t, size_t, ui
 				prev ^= firstBitUint64_t;
 				next ^= firstBitUint64_t;
 			}
-			assert((prev & (firstBitUint64_t >> 1)) == 0);
-			prev |= firstBitUint64_t >> 1;
+			assert(NonexistantChunk(prev) || ((prev & (firstBitUint64_t >> 1)) == 0));
 			uint64_t tinyNode = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
-			if (tinyNodeParent[tinyNode].count(prev) == 0) tinyNodeParent[tinyNode][prev] = prev;
-			if (tinyNodeParent[tinyNode].count(next) == 0) tinyNodeParent[tinyNode][next] = next;
-			merge(tinyNodeParent[tinyNode], prev, next);
+			if (!NonexistantChunk(prev))
+			{
+				prev |= firstBitUint64_t >> 1;
+				if (tinyNodeParent[tinyNode].count(prev) == 0) tinyNodeParent[tinyNode][prev] = prev;
+			}
+			if (!NonexistantChunk(next))
+			{
+				if (tinyNodeParent[tinyNode].count(next) == 0) tinyNodeParent[tinyNode][next] = next;
+			}
+			if (!NonexistantChunk(prev) && !NonexistantChunk(next))
+			{
+				merge(tinyNodeParent[tinyNode], prev, next);
+			}
 		}
 	}
 	nextNum += 1;
@@ -5433,10 +5442,24 @@ void resolveVerySmallNodes(std::vector<std::vector<std::tuple<size_t, size_t, ui
 				prev ^= firstBitUint64_t;
 				next ^= firstBitUint64_t;
 			}
-			assert((prev & (firstBitUint64_t >> 1)) == 0);
-			prev |= firstBitUint64_t >> 1;
-			assert(find(tinyNodeParent.at(tinyNode), prev) == find(tinyNodeParent.at(tinyNode), next));
-			std::get<2>(chunksPerRead[i][j]) = (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) + nodeToCluster.at(tinyNode).at(find(tinyNodeParent.at(tinyNode), prev));
+			if (!NonexistantChunk(prev))
+			{
+				assert((prev & (firstBitUint64_t >> 1)) == 0);
+				prev |= firstBitUint64_t >> 1;
+			}
+			assert(NonexistantChunk(prev) || NonexistantChunk(next) || find(tinyNodeParent.at(tinyNode), prev) == find(tinyNodeParent.at(tinyNode), next));
+			if (!NonexistantChunk(prev))
+			{
+				std::get<2>(chunksPerRead[i][j]) = (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) + nodeToCluster.at(tinyNode).at(find(tinyNodeParent.at(tinyNode), prev));
+			}
+			else if (!NonexistantChunk(next))
+			{
+				std::get<2>(chunksPerRead[i][j]) = (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) + nodeToCluster.at(tinyNode).at(find(tinyNodeParent.at(tinyNode), next));
+			}
+			else
+			{
+				std::get<2>(chunksPerRead[i][j]) = std::numeric_limits<size_t>::max();
+			}
 		}
 	}
 }
