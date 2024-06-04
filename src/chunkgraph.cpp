@@ -5725,16 +5725,16 @@ void resolveSemiAmbiguousUnitigs(std::vector<std::vector<std::tuple<size_t, size
 			size_t allele = std::numeric_limits<size_t>::max();
 			if ((node & maskUint64_t) < chunkBelongsToUnitig.size() && chunkBelongsToUnitig[node & maskUint64_t] != std::numeric_limits<size_t>::max())
 			{
-				if (readsAllowedToDiscard.count(i) == 1)
-				{
-					assert(readPaths[i].size() == 1);
-					assert(readPaths[i][0].path.size() == 1);
-					std::get<2>(chunksPerRead[i][j]) = std::numeric_limits<size_t>::max();
-					continue;
-				}
 				size_t unitig = chunkBelongsToUnitig[node & maskUint64_t];
 				if (canResolveUnitig[unitig])
 				{
+					if (readsAllowedToDiscard.count(i) == 1)
+					{
+						assert(readPaths[i].size() == 1);
+						assert(readPaths[i][0].path.size() == 1);
+						std::get<2>(chunksPerRead[i][j]) = std::numeric_limits<size_t>::max();
+						continue;
+					}
 					for (auto t : unitigAllelesInThisRead)
 					{
 						if (std::get<2>(t) != unitig) continue;
@@ -6692,9 +6692,9 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> readChunksFromFak
 
 void writeStage(const size_t stage, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage)
 {
-	writeBidirectedUnitigGraph("graph-round" + std::to_string(stage) + ".gfa", "paths" + std::to_string(stage) + ".gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 	writeUnitigGraph("digraph-round" + std::to_string(stage) + ".gfa", "dipaths" + std::to_string(stage) + ".gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 	writeGraph("fakegraph" + std::to_string(stage) + ".gfa", "fakepaths" + std::to_string(stage) + ".txt", chunksPerRead);
+	writeBidirectedUnitigGraph("graph-round" + std::to_string(stage) + ".gfa", "paths" + std::to_string(stage) + ".gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 }
 
 void removeSmallProblemNodes(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
