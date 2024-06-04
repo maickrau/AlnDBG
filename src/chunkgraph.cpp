@@ -2691,16 +2691,13 @@ void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequen
 						assert(false);
 				}
 			}
-			size_t first = std::min(firstKmer, lastKmer);
-			size_t last = std::max(firstKmer, lastKmer);
-			bool fw = (firstKmer <= lastKmer);
-			auto key = std::make_pair(first, last);
+			auto key = std::make_pair(firstKmer, lastKmer);
 			if (endKmersToNumber.count(key) == 0)
 			{
 				endKmersToNumber[key] = nextNum;
 				nextNum += 1;
 			}
-			std::get<2>(chunksPerRead[i][j]) = endKmersToNumber.at(key) + (fw ? firstBitUint64_t : 0);
+			std::get<2>(chunksPerRead[i][j]) = endKmersToNumber.at(key) + firstBitUint64_t;
 		}
 	}
 }
