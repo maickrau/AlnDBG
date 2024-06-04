@@ -76,18 +76,42 @@ public:
 	std::vector<std::pair<size_t, size_t>> Nchunks;
 };
 
-std::string getChunkSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t read, const size_t index)
+std::string getReadSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t index)
 {
-	auto t = chunksPerRead[read][index];
-	std::string result = sequenceIndex.getSubstring(read, std::get<0>(t), std::get<1>(t)-std::get<0>(t)+1);
-	if (std::get<2>(t) & firstBitUint64_t)
+	if (index < sequenceIndex.size())
 	{
+		return sequenceIndex.getSequence(index);
+	}
+	assert(index < sequenceIndex.size()*2);
+	return MBG::revCompRaw(sequenceIndex.getSequence(index - sequenceIndex.size()));
+}
+
+std::string getChunkSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t read, const size_t index)
+{
+	if (read < sequenceIndex.size())
+	{
+		auto t = chunksPerRead[read][index];
+		std::string result = sequenceIndex.getSubstring(read, std::get<0>(t), std::get<1>(t)-std::get<0>(t)+1);
+		if (std::get<2>(t) & firstBitUint64_t)
+		{
+		}
+		else
+		{
+			result = MBG::revCompRaw(result);
+		}
+		return result;
 	}
 	else
 	{
-		result = MBG::revCompRaw(result);
+		assert(read < sequenceIndex.size()*2);
+		auto t = chunksPerRead[read][index];
+		std::string result = sequenceIndex.getSubstring(read - sequenceIndex.size(), rawReadLengths[read-sequenceIndex.size()] - 1 - std::get<1>(t), std::get<1>(t) - std::get<0>(t) + 1);
+		if (std::get<2>(t) & firstBitUint64_t)
+		{
+			result = MBG::revCompRaw(result);
+		}
+		return result;
 	}
-	return result;
 }
 
 void writeUnitigPaths(const std::string& filename, const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths)
@@ -112,7 +136,19 @@ void writeUnitigPaths(const std::string& filename, const ChunkUnitigGraph& uniti
 					pathLength -= unitigGraph.edgeOverlaps.at(key);
 				}
 			}
-			file << sequenceIndex.getName(i) << "\t" << rawReadLengths[i] << "\t" << readPaths[i][j].readPartInPathnode[0].first << "\t" << readPaths[i][j].readPartInPathnode.back().second << "\t+\t" << pathstr << "\t" << pathLength << "\t" << readPaths[i][j].pathLeftClip << "\t" << (pathLength - readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t60" << std::endl;
+			std::string name;
+			size_t length;
+			if (i < sequenceIndex.size())
+			{
+				name = sequenceIndex.getName(i);
+				length = rawReadLengths[i];
+			}
+			else
+			{
+				name = sequenceIndex.getName(i - sequenceIndex.size()) + "_bw";
+				length = rawReadLengths[i - sequenceIndex.size()];
+			}
+			file << name << "\t" << length << "\t" << readPaths[i][j].readPartInPathnode[0].first << "\t" << readPaths[i][j].readPartInPathnode.back().second << "\t+\t" << pathstr << "\t" << pathLength << "\t" << readPaths[i][j].pathLeftClip << "\t" << (pathLength - readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t60" << std::endl;
 		}
 	}
 }
@@ -336,10 +372,10 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeOverlaps(cons
 			assert(std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
 			auto prev = std::get<2>(chunksPerRead[i][j-1]);
 			auto curr = std::get<2>(chunksPerRead[i][j]);
-			auto pairkey = MBG::canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
-			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 			size_t overlap = 0;
 			if (std::get<1>(chunksPerRead[i][j-1]) > std::get<0>(chunksPerRead[i][j])) overlap = std::get<1>(chunksPerRead[i][j-1]) - std::get<0>(chunksPerRead[i][j]);
+			auto pairkey = MBG::canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
+			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 			overlaps[key].push_back(overlap);
 		}
 	}
@@ -1364,7 +1400,7 @@ void sortAndInterleave(std::vector<RankBitvector>& correctedMatrix)
 	assert(pos == 65);
 }
 
-void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by corrected kmer phasing" << std::endl;
 	const size_t countNeighbors = 5;
@@ -1384,7 +1420,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
-	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, countNeighbors, kmerSize](size_t dummy)
+	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, countNeighbors, kmerSize](size_t dummy)
 	{
 		while (true)
 		{
@@ -1411,7 +1447,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 			std::vector<TwobitString> chunkSequences;
 			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
-				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
+				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
 			}
 			auto validClusters = iterateSolidKmers(chunkSequences, kmerSize, 5, true, true, [&kmerClusterToColumn, &clusters, &matrix](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 			{
@@ -1673,7 +1709,7 @@ private:
 	std::atomic<size_t>& counter;
 };
 
-void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by nearest neighbor phasing" << std::endl;
 	const size_t countNeighbors = 5;
@@ -1696,7 +1732,7 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
-	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, countNeighbors, countDifferences, kmerSize, &threadsRunning](size_t dummy)
+	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, countNeighbors, countDifferences, kmerSize](size_t dummy)
 	{
 		while (true)
 		{
@@ -1736,7 +1772,7 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 			std::vector<TwobitString> chunkSequences;
 			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
-				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
+				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
 			}
 			auto validClusters = iterateSolidKmers(chunkSequences, kmerSize, 5, true, true, [&kmerClusterToColumn, &clusters, &matrix](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 			{
@@ -1913,7 +1949,7 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 	std::cerr << "nearest neighbor phasing splitted " << countSplitted << " chunks" << std::endl;
 }
 
-void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by allele phasing" << std::endl;
 	size_t countSplitted = 0;
@@ -1933,7 +1969,7 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
-	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &countSplittedTo, kmerSize](size_t dummy)
+	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &countSplittedTo, &rawReadLengths, kmerSize](size_t dummy)
 	{
 		while (true)
 		{
@@ -1960,7 +1996,7 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 			std::vector<TwobitString> chunkSequences;
 			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
-				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
+				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
 			}
 			iterateSolidKmers(chunkSequences, kmerSize, chunkBeingDone.size(), false, false, [&chunkBeingDone, &chunkSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 			{
@@ -2073,7 +2109,7 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 	std::cerr << "allele phasing splitted " << countSplitted << " chunks to " << countSplittedTo << std::endl;
 }
 
-void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by phasing kmers" << std::endl;
 	size_t countSplitted = 0;
@@ -2092,7 +2128,7 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
-	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, kmerSize](size_t dummy)
+	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, kmerSize](size_t dummy)
 	{
 		while (true)
 		{
@@ -2120,7 +2156,7 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 			std::vector<TwobitString> chunkSequences;
 			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
-				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
+				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
 			}
 			auto validClusters = iterateSolidKmers(chunkSequences, kmerSize, chunkBeingDone.size() * 0.95, false, true, [&fwForks, &bwForks, &lastOccurrenceID, &lastKmer, &lastKmerPos, &lastCluster, &chunkBeingDone, &chunkSequences, &chunksPerRead, kmerSize](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 			{
@@ -2238,7 +2274,7 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 	std::cerr << "phasing kmers splitted " << countSplitted << " chunks" << std::endl;
 }
 
-void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting by sequence identity" << std::endl;
 	const size_t mismatchFloor = 10;
@@ -2279,7 +2315,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 			sequencesPerOccurrence.back().second = j;
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 			assert(!NonexistantChunk(std::get<2>(t)));
-			sequencesPerOccurrence.back().first = getChunkSequence(sequenceIndex, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
+			sequencesPerOccurrence.back().first = getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
 		}
 		std::sort(sequencesPerOccurrence.begin(), sequencesPerOccurrence.end(), [](const auto& left, const auto& right) {
 			if (left.first.size() < right.first.size()) return true;
@@ -2412,7 +2448,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 		}
 	}
 	std::mutex resultMutex;
-	iterateMultithreaded(firstSmall, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &iterationOrder, mismatchFloor](const size_t iterationIndex)
+	iterateMultithreaded(firstSmall, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &iterationOrder, &rawReadLengths, mismatchFloor](const size_t iterationIndex)
 	{
 		const size_t i = iterationOrder[iterationIndex];
 //		{
@@ -2432,7 +2468,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 			sequencesPerOccurrence.back().second = j;
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 			assert(!NonexistantChunk(std::get<2>(t)));
-			sequencesPerOccurrence.back().first = getChunkSequence(sequenceIndex, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
+			sequencesPerOccurrence.back().first = getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
 		}
 		std::sort(sequencesPerOccurrence.begin(), sequencesPerOccurrence.end(), [](const auto& left, const auto& right) {
 			if (left.first.size() < right.first.size()) return true;
@@ -2513,6 +2549,25 @@ uint64_t hash(uint64_t key) {
 	return key;
 }
 
+uint64_t reverseKmer(uint64_t kmer, const size_t kmerSize)
+{
+	kmer = ~kmer;
+	kmer = ((kmer >> 2) & 0x3333333333333333ull) + ((kmer << 2) & 0xCCCCCCCCCCCCCCCCull);
+	kmer = ((kmer >> 4) & 0x0F0F0F0F0F0F0F0Full) + ((kmer << 4) & 0xF0F0F0F0F0F0F0F0ull);
+	kmer = ((kmer >> 8) & 0x00FF00FF00FF00FFull) + ((kmer << 8) & 0xFF00FF00FF00FF00ull);
+	kmer = ((kmer >> 16) & 0x0000FFFF0000FFFFull) + ((kmer << 16) & 0xFFFF0000FFFF0000ull);
+	kmer = ((kmer >> 32) & 0x00000000FFFFFFFFull) + ((kmer << 32) & 0xFFFFFFFF00000000ull);
+	kmer >>= (32ull-kmerSize)*2ull;
+	return kmer;
+}
+
+uint64_t hashFwAndBw(const uint64_t kmer, const size_t kmerSize)
+{
+	uint64_t fwHash = hash(kmer);
+	uint64_t bwHash = hash(reverseKmer(kmer, kmerSize));
+	return std::min(fwHash, bwHash);
+}
+
 std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, const size_t count)
 {
 	assert(sequence.size() > k + count);
@@ -2590,7 +2645,7 @@ void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequen
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		if (chunksPerRead[i].size() == 0) continue;
-		std::string readseq = sequenceIndex.getSequence(i);
+		std::string readseq = getReadSequence(sequenceIndex, i);
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			assert(std::get<0>(chunksPerRead[i][j]) < std::get<1>(chunksPerRead[i][j]));
@@ -2638,7 +2693,7 @@ void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequen
 			}
 			size_t first = std::min(firstKmer, lastKmer);
 			size_t last = std::max(firstKmer, lastKmer);
-			bool fw = (firstKmer < lastKmer);
+			bool fw = (firstKmer <= lastKmer);
 			auto key = std::make_pair(first, last);
 			if (endKmersToNumber.count(key) == 0)
 			{
@@ -2650,13 +2705,13 @@ void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequen
 	}
 }
 
-void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	const size_t mismatchFloor = 10;
 	std::cerr << "splitting by base counts" << std::endl;
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		std::vector<std::vector<size_t>> countsPerOccurrence;
 		countsPerOccurrence.resize(occurrencesPerChunk[i].size());
@@ -2664,7 +2719,7 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 			assert(!NonexistantChunk(std::get<2>(t)));
-			std::string chunkSequence = getChunkSequence(sequenceIndex, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
+			std::string chunkSequence = getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
 			assert(chunkSequence.size() == std::get<1>(t)-std::get<0>(t)+1);
 			countsPerOccurrence[j].resize(4);
 			for (size_t k = 0; k < chunkSequence.size(); k++)
@@ -2734,7 +2789,7 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 	});
 }
 
-void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const size_t kmerSize)
+void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const size_t kmerSize)
 {
 	std::cerr << "splitting by interchunk phasing kmers" << std::endl;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
@@ -2881,7 +2936,7 @@ void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex&
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &repetitive, &maybePhaseGroups, &countSplitted, kmerSize](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &repetitive, &maybePhaseGroups, &countSplitted, &rawReadLengths, kmerSize](const size_t i)
 	{
 		std::vector<size_t> applicablePhasingGroups;
 		std::vector<size_t> readsHere;
@@ -2926,7 +2981,7 @@ void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex&
 		std::vector<TwobitString> chunkSequences;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
-			chunkSequences.emplace_back(getChunkSequence(sequenceIndex, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
+			chunkSequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
 		}
 		iterateSolidKmers(chunkSequences, kmerSize, occurrencesPerChunk[i].size(), true, false, [&solidKmersPerOccurrence, &kmerClusterToNumber](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 		{
@@ -3315,22 +3370,40 @@ void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex&
 	std::cerr << "interchunk phasing kmers splitted " << countSplitted << " chunks" << std::endl;
 }
 
-void splitPerMinHashes(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+void splitPerMinHashes(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
+	const size_t kmerSize = 11;
+	const size_t hashCount = 10;
 	std::cerr << "splitting by minhash" << std::endl;
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, kmerSize, hashCount](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		phmap::flat_hash_map<size_t, size_t> parent;
 		std::vector<size_t> oneHashPerLocation;
+		size_t smallestSequence = std::numeric_limits<size_t>::max();
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			smallestSequence = std::min(smallestSequence, std::get<1>(t)-std::get<0>(t)+1);
+		}
+		if (smallestSequence <= kmerSize + hashCount + 1)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = nextNum + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
+			}
+			nextNum += 1;
+			return;
+		}
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 			assert(!NonexistantChunk(std::get<2>(t)));
 			std::vector<uint64_t> minHashes;
-			auto chunkSequence = getChunkSequence(sequenceIndex, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
-			minHashes = getMinHashes(chunkSequence, 11, 10);
+			auto chunkSequence = getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
+			minHashes = getMinHashes(chunkSequence, kmerSize, hashCount);
 			assert(minHashes.size() >= 1);
 			for (auto hash : minHashes)
 			{
@@ -4265,7 +4338,7 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUniti
 	return std::make_tuple(std::get<0>(result), std::get<1>(result));
 }
 
-void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize)
+void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize)
 {
 	std::cerr << "splitting by diploid chunk with neighbors" << std::endl;
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
@@ -4430,7 +4503,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &hasFwFork, &hasBwFork, &fwForksPerUnitigSet, &bwForksPerUnitigSet,  &countSplitted, &chunkBelongsToUnitig, kmerSize](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &hasFwFork, &hasBwFork, &fwForksPerUnitigSet, &bwForksPerUnitigSet,  &countSplitted, &chunkBelongsToUnitig, &rawReadLengths, kmerSize](const size_t i)
 	{
 		if (chunkBelongsToUnitig[i] == std::numeric_limits<size_t>::max())
 		{
@@ -4520,7 +4593,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 		std::vector<TwobitString> chunkSequences;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
-			chunkSequences.emplace_back(getChunkSequence(sequenceIndex, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
+			chunkSequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
 		}
 		iterateSolidKmers(chunkSequences, kmerSize, occurrencesPerChunk[i].size(), true, false, [&solidKmersPerOccurrence, &kmerClusterToNumber](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 		{
@@ -6127,7 +6200,7 @@ void countReadRepetitiveUnitigs(const std::vector<std::vector<std::tuple<size_t,
 	std::cerr << countRepetitive << " read-repetitive unitigs" << std::endl;
 }
 
-void writeReadChunkSequences(const std::string& filename, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex)
+void writeReadChunkSequences(const std::string& filename, const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex)
 {
 	std::ofstream file { filename };
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -6137,7 +6210,16 @@ void writeReadChunkSequences(const std::string& filename, const std::vector<std:
 			auto t = chunksPerRead[i][j];
 			size_t chunk = std::get<2>(t) & maskUint64_t;
 			bool fw = std::get<2>(t) & firstBitUint64_t;
-			std::string seq = getChunkSequence(sequenceIndex, chunksPerRead, i, j);
+			std::string seq = getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, i, j);
+			std::string name;
+			if (i < sequenceIndex.size())
+			{
+				name = sequenceIndex.getName(i);
+			}
+			else
+			{
+				name = sequenceIndex.getName(i - sequenceIndex.size()) + "_bw";
+			}
 			file << chunk << " " << sequenceIndex.getName(i) << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << seq << std::endl;
 		}
 	}
@@ -6169,6 +6251,135 @@ void writeReadUnitigSequences(const std::string& filename, const std::vector<std
 	}
 }
 
+size_t charToInt(const unsigned char c)
+{
+	switch(c)
+	{
+	case 'A':
+		return 0;
+	case 'C':
+		return 1;
+	case 'G':
+		return 2;
+	case 'T':
+		return 3;
+	}
+	assert(false);
+	return 0;
+}
+
+template <typename CallbackF>
+void iterateMinimizers(const std::string& str, const size_t kmerSize, const size_t windowSize, CallbackF callback)
+{
+	assert(kmerSize * 2 <= sizeof(size_t) * 8);
+	assert(kmerSize <= windowSize);
+	if (str.size() < kmerSize + windowSize) return;
+	const size_t mask = ~(0xFFFFFFFFFFFFFFFF << (kmerSize * 2));
+	assert(mask == pow(4, kmerSize)-1);
+	thread_local std::vector<std::tuple<size_t, size_t>> window;
+	window.clear();
+	size_t kmer = 0;
+	for (size_t i = 0; i < kmerSize; i++)
+	{
+		kmer <<= 2;
+		kmer |= charToInt(str[i]);
+	}
+	window.clear();
+	window.emplace_back(0, hashFwAndBw(kmer, kmerSize));
+	for (size_t i = kmerSize; i < kmerSize + windowSize; i++)
+	{
+		kmer <<= 2;
+		kmer &= mask;
+		kmer |= charToInt(str[i]);
+		size_t hashHere = hashFwAndBw(kmer, kmerSize);
+		while (!window.empty() && std::get<1>(window.back()) > hashHere) window.pop_back();
+		window.emplace_back(i-kmerSize+1, hashHere);
+	}
+	callback(std::get<0>(window[0]));
+	size_t lastCallbackPos = std::get<0>(window[0]);
+	for (size_t i = kmerSize+windowSize; i < str.size(); i++)
+	{
+		kmer <<= 2;
+		kmer &= mask;
+		kmer |= charToInt(str[i]);
+		auto hashHere = hashFwAndBw(kmer, kmerSize);
+		assert(window.size() >= 1);
+		bool frontPopped = false;
+		if (std::get<0>(window[0]) <= i - windowSize - kmerSize)
+		{
+			frontPopped = true;
+			window.erase(window.begin());
+		}
+		assert(window.size() == 0 || std::get<0>(window[0]) > i - windowSize - kmerSize);
+		if (hashHere < std::get<1>(window[0]))
+		{
+			for (size_t j = 1; j < window.size(); j++)
+			{
+				if (std::get<1>(window[j]) == std::get<1>(window[0]))
+				{
+					assert(std::get<0>(window[j]) > lastCallbackPos);
+					callback(std::get<0>(window[j]));
+					lastCallbackPos = std::get<0>(window[j]);
+				}
+			}
+		}
+		while (window.size() >= 1 && std::get<1>(window.back()) > hashHere) window.pop_back();
+		if (window.size() == 0) frontPopped = true;
+		window.emplace_back(i-kmerSize+1, hashHere);
+		assert(window.size() >= 1);
+		if (frontPopped)
+		{
+			assert(std::get<0>(window[0]) > lastCallbackPos);
+			callback(std::get<0>(window[0]));
+			lastCallbackPos = std::get<0>(window[0]);
+		}
+		else
+		{
+			assert(std::get<0>(window[0]) == lastCallbackPos);
+		}
+	}
+	assert(window.size() >= 1);
+	assert(lastCallbackPos == std::get<0>(window[0]));
+	for (size_t j = 1; j < window.size(); j++)
+	{
+		if (std::get<1>(window[j]) == std::get<0>(window[j]))
+		{
+			assert(std::get<0>(window[j]) > lastCallbackPos);
+			callback(std::get<0>(window[j]));
+			lastCallbackPos = std::get<0>(window[j]);
+		}
+	}
+}
+
+std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getMinimizerBoundedChunksPerRead(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t k, const size_t windowSize)
+{
+	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
+	result.resize(sequenceIndex.size()*2);
+	const size_t backwardOffset = sequenceIndex.size();
+	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&result, &sequenceIndex, backwardOffset, k, windowSize](const size_t readIndex)
+	{
+		std::string readSequence = sequenceIndex.getSequence(readIndex);
+		std::vector<size_t> minimizerPositions;
+		iterateMinimizers(readSequence, k, windowSize, [&minimizerPositions](const size_t pos)
+		{
+			assert(minimizerPositions.size() == 0 || pos > minimizerPositions.back());
+			minimizerPositions.emplace_back(pos);
+		});
+		for (size_t i = 1; i < minimizerPositions.size(); i++)
+		{
+			result[readIndex].emplace_back(minimizerPositions[i-1], minimizerPositions[i]+k-1, 0);
+		};
+		for (size_t i = 0; i < result[readIndex].size(); i++)
+		{
+			result[readIndex+backwardOffset].emplace_back(result[readIndex][result[readIndex].size()-1-i]);
+			std::swap(std::get<0>(result[readIndex+backwardOffset].back()), std::get<1>(result[readIndex+backwardOffset].back()));
+			std::get<0>(result[readIndex+backwardOffset].back()) = readSequence.size()-1-std::get<0>(result[readIndex+backwardOffset].back());
+			std::get<1>(result[readIndex+backwardOffset].back()) = readSequence.size()-1-std::get<1>(result[readIndex+backwardOffset].back());
+		}
+	});
+	return result;
+}
+
 std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPerRead(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t k, const size_t windowSize, const size_t middleSkip)
 {
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
@@ -6178,19 +6389,23 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 	phmap::flat_hash_map<uint64_t, size_t> hashToNode;
 	phmap::flat_hash_set<MBG::HashType> removedHashes;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&result, &sequenceIndex, &partIterator, &hashToNode, &resultMutex, &removedHashes, k, windowSize, middleSkip](const size_t i)
+	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&result, &sequenceIndex, &partIterator, &hashToNode, &resultMutex, &removedHashes, k, windowSize, middleSkip](const size_t readIndex)
 	{
-		std::string readSequence = sequenceIndex.getSequence(i);
+		std::string readSequence = sequenceIndex.getSequence(readIndex);
 		std::vector<std::tuple<size_t, size_t, MBG::HashType>> hashes;
-		partIterator.iteratePartsOfRead("", readSequence, [&hashToNode, &hashes, &resultMutex, i, k, windowSize, middleSkip](const MBG::ReadInfo& read, const MBG::SequenceCharType& seq, const MBG::SequenceLengthType& poses, const std::string& raw)
+		partIterator.iteratePartsOfRead("", readSequence, [&hashToNode, &hashes, &resultMutex, readIndex, k, windowSize, middleSkip](const MBG::ReadInfo& read, const MBG::SequenceCharType& seq, const MBG::SequenceLengthType& poses, const std::string& raw)
 		{
-			iterateWindowchunks(seq, k, windowSize, middleSkip, [&hashToNode, &hashes, &resultMutex, &poses, &seq, i, k](const std::vector<uint64_t>& hashPositions)
+			iterateWindowchunks(seq, k, windowSize, middleSkip, [&hashToNode, &hashes, &resultMutex, &poses, &seq, readIndex, k](const std::vector<uint64_t>& hashPositions)
 			{
 				assert(hashPositions.size() == 2);
 				size_t startPos = hashPositions[0];
 				size_t endPos = hashPositions.back() + k - 1;
 				size_t realStartPos = poses[startPos];
 				size_t realEndPos = poses[endPos+1]-1;
+				if (readIndex == 58059)
+				{
+					std::cerr << "!!! " << readIndex << " " << startPos << " " << endPos << " " << realStartPos << " " << realEndPos << " !!!" << std::endl;
+				}
 				MBG::SequenceCharType hashableSequence;
 				for (size_t i = 0; i < hashPositions.size()/2; i++)
 				{
@@ -6240,11 +6455,19 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 			}
 			if (prevDistFromMid < currDistFromMid)
 			{
+				if (readIndex == 58059)
+				{
+					std::cerr << "remove " << std::get<0>(hashes[i]) << " " << std::get<1>(hashes[i]) << " due to prev" << std::endl;
+				}
 				removeHash[i] = true;
 				removeHashesHere.insert(std::get<2>(hashes[i]));
 			}
 			if (currDistFromMid < prevDistFromMid)
 			{
+				if (readIndex == 58059)
+				{
+					std::cerr << "remove " << std::get<0>(hashes[i-1]) << " " << std::get<1>(hashes[i-1]) << " due to next" << std::endl;
+				}
 				removeHash[i-1] = true;
 				removeHashesHere.insert(std::get<2>(hashes[i-1]));
 			}
@@ -6281,10 +6504,10 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 			removedHashes.insert(removeHashesHere.begin(), removeHashesHere.end());
 			MBG::HashType totalhashfw = std::get<2>(hashes[j]);
 			MBG::HashType totalhashbw = (totalhashfw << (MBG::HashType)64) + (totalhashfw >> (MBG::HashType)64);
-			if (totalhashfw == totalhashbw) continue;
+//			if (totalhashfw == totalhashbw) continue;
 			uint64_t hash;
 			bool fw;
-			if (totalhashfw < totalhashbw)
+			if (totalhashfw <= totalhashbw)
 			{
 				hash = totalhashfw + 3*(totalhashfw >> 64);
 				fw = true;
@@ -6304,7 +6527,7 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 			{
 				node = hashToNode.at(hash);
 			}
-			result[i].emplace_back(std::get<0>(hashes[j]), std::get<1>(hashes[j]), node + (fw ? firstBitUint64_t : 0));
+			result[readIndex].emplace_back(std::get<0>(hashes[j]), std::get<1>(hashes[j]), node + (fw ? firstBitUint64_t : 0));
 		}
 	});
 	phmap::flat_hash_set<uint64_t> removedNodes;
@@ -6312,7 +6535,7 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 	{
 		MBG::HashType totalhashbw = (totalhashfw << (MBG::HashType)64) + (totalhashfw >> (MBG::HashType)64);
 		uint64_t hash;
-		if (totalhashfw < totalhashbw)
+		if (totalhashfw <= totalhashbw)
 		{
 			hash = totalhashfw + 3*(totalhashfw >> 64);
 		}
@@ -6329,6 +6552,10 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 		if (result[i].size() == 0) continue;
 		if (std::get<1>(result[i].back()) + windowSize >= rawReadLengths[i])
 		{
+			if (i == 58059)
+			{
+				std::cerr << "end remove " << std::get<0>(result[i].back()) << " " << std::get<1>(result[i].back()) << " end" << std::endl;
+			}
 			if (removedNodes.count(std::get<2>(result[i].back()) & maskUint64_t) == 1)
 			{
 				result[i].pop_back();
@@ -6337,6 +6564,10 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPe
 		if (result[i].size() == 0) continue;
 		if (std::get<0>(result[i][0]) < windowSize)
 		{
+			if (i == 58059)
+			{
+				std::cerr << "end remove " << std::get<0>(result[i][0]) << " " << std::get<1>(result[i][0]) << " start" << std::endl;
+			}
 			if (removedNodes.count(std::get<2>(result[i][0]) & maskUint64_t) == 1)
 			{
 				result[i].erase(result[i].begin());
@@ -6450,8 +6681,8 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	{
 		case 0:
 			std::cerr << "getting chunks from reads" << std::endl;
-			chunksPerRead = getBetterChunksPerRead(sequenceIndex, rawReadLengths, numThreads, k, windowSize, middleSkip);
-			addMissingPiecesBetweenChunks(chunksPerRead, k);
+			chunksPerRead = getMinimizerBoundedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, k, windowSize);
+			//addMissingPiecesBetweenChunks(chunksPerRead, k);
 			{
 				size_t numChunks = 0;
 				for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -6468,13 +6699,13 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 1:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerBaseCounts(sequenceIndex, chunksPerRead, numThreads);
+			splitPerBaseCounts(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 2:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerMinHashes(sequenceIndex, chunksPerRead, numThreads);
+			splitPerMinHashes(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(3, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
@@ -6486,60 +6717,60 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 4:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerSequenceIdentity(sequenceIndex, chunksPerRead, numThreads);
+			splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(5, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 5:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerAllelePhasingWithinChunk(sequenceIndex, chunksPerRead, 11, numThreads);
+			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(6, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 6:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerPhasingKmersWithinChunk(sequenceIndex, chunksPerRead, 11, numThreads);
+			splitPerPhasingKmersWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(7, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 7:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerNearestNeighborPhasing(sequenceIndex, chunksPerRead, 11, numThreads);
+			splitPerNearestNeighborPhasing(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(8, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 8:
-			splitPerCorrectedKmerPhasing(sequenceIndex, chunksPerRead, 11, numThreads);
+//			splitPerCorrectedKmerPhasing(sequenceIndex, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 9:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerAllelePhasingWithinChunk(sequenceIndex, chunksPerRead, 11, numThreads);
+			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(10, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 10:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerPhasingKmersWithinChunk(sequenceIndex, chunksPerRead, 11, numThreads);
+			splitPerPhasingKmersWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(11, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 11:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads, 11);
+			splitPerInterchunkPhasedKmers(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads, 31);
+//			splitPerInterchunkPhasedKmers(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, 31);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(12, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 12:
-			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage, 11);
+			splitPerDiploidChunkWithNeighbors(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(13, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 13:
-			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage, 31);
+//			splitPerDiploidChunkWithNeighbors(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 31);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
@@ -6556,23 +6787,23 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 15:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads, 11);
+			splitPerInterchunkPhasedKmers(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(16, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 16:
-			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage, 11);
+			splitPerDiploidChunkWithNeighbors(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerInterchunkPhasedKmers(sequenceIndex, chunksPerRead, numThreads, 31);
+//			splitPerInterchunkPhasedKmers(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, 31);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(17, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 17:
-			splitPerDiploidChunkWithNeighbors(sequenceIndex, chunksPerRead, numThreads, approxOneHapCoverage, 31);
+//			splitPerDiploidChunkWithNeighbors(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 31);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
@@ -6584,7 +6815,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			countReadRepetitiveUnitigs(chunksPerRead, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeReadChunkSequences("sequences-chunk19.txt", chunksPerRead, sequenceIndex);
+			writeReadChunkSequences("sequences-chunk19.txt", rawReadLengths, chunksPerRead, sequenceIndex);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			writeUnitigGraph("graph-dbg-final.gfa", "paths-dbg-final.gaf", "unitigs-dbg-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads);
