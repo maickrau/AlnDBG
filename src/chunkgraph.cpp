@@ -5033,9 +5033,43 @@ void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile
 	writeUnitigSequences(unitigSequencesFile, unitigSequences);
 }
 
-void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage)
+void writeBidirectedUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage)
 {
 	std::cerr << "writing unitig graph " << graphFile << std::endl;
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> fixedChunksPerRead;
+	fixedChunksPerRead.resize(chunksPerRead.size()/2);
+	for (size_t i = 0; i < chunksPerRead.size()/2; i++)
+	{
+		size_t other = i + chunksPerRead.size()/2;
+		fixedChunksPerRead[i] = chunksPerRead[i];
+		assert(chunksPerRead[i].size() == chunksPerRead[other].size());
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
+			{
+				assert(NonexistantChunk(std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j])));
+				continue;
+			}
+			assert(!NonexistantChunk(std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j])));
+			assert((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) == firstBitUint64_t);
+			assert((std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) & firstBitUint64_t) == firstBitUint64_t);
+			if ((std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) & maskUint64_t) < (std::get<2>(chunksPerRead[i][j]) & maskUint64_t))
+			{
+				std::get<2>(fixedChunksPerRead[i][j]) = (std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) & maskUint64_t);
+			}
+		}
+	}
+	std::tie(graph, readPaths) = getChunkUnitigGraph(fixedChunksPerRead, approxOneHapCoverage);
+	writeUnitigGraph(graphFile, graph);
+	std::cerr << "writing unitig paths " << pathsFile << std::endl;
+	writeUnitigPaths(pathsFile, graph, readPaths, sequenceIndex, rawReadLengths);
+}
+
+void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage)
+{
+	std::cerr << "writing unitig digraph " << graphFile << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
 	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage);
@@ -6660,7 +6694,8 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> readChunksFromFak
 
 void writeStage(const size_t stage, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage)
 {
-	writeUnitigGraph("graph-round" + std::to_string(stage) + ".gfa", "paths" + std::to_string(stage) + ".gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+	writeBidirectedUnitigGraph("graph-round" + std::to_string(stage) + ".gfa", "paths" + std::to_string(stage) + ".gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
+	writeUnitigGraph("digraph-round" + std::to_string(stage) + ".gfa", "dipaths" + std::to_string(stage) + ".gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 	writeGraph("fakegraph" + std::to_string(stage) + ".gfa", "fakepaths" + std::to_string(stage) + ".txt", chunksPerRead);
 }
 
