@@ -5842,8 +5842,6 @@ void resolveBetweenLongUnitigs(std::vector<std::vector<std::tuple<size_t, size_t
 			size_t chunkendpos = std::get<1>(chunksPerRead[read][offset]);
 			uint64_t predecessor = std::numeric_limits<size_t>::max();
 			uint64_t successor = std::numeric_limits<size_t>::max();
-			uint64_t prevUnitig = std::numeric_limits<size_t>::max();
-			uint64_t nextUnitig = std::numeric_limits<size_t>::max();
 			for (size_t j = 0; j < longNodesInReads[read].size(); j++)
 			{
 				if (std::get<1>(longNodesInReads[read][j]) < chunkendpos && std::get<1>(longNodesInReads[read][j])+maxDistance > chunkstartpos)
@@ -6699,6 +6697,157 @@ void writeStage(const size_t stage, const std::vector<std::vector<std::tuple<siz
 	writeGraph("fakegraph" + std::to_string(stage) + ".gfa", "fakepaths" + std::to_string(stage) + ".txt", chunksPerRead);
 }
 
+void removeSmallProblemNodes(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
+{
+	size_t maxChunk = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (auto t : chunksPerRead[i])
+		{
+			if (NonexistantChunk(std::get<2>(t))) continue;
+			assert(std::get<2>(t) & firstBitUint64_t);
+			maxChunk = std::max(maxChunk, std::get<2>(t) & maskUint64_t);
+		}
+	}
+	std::vector<size_t> uniquePredecessor;
+	std::vector<size_t> uniqueSuccessor;
+	uniquePredecessor.resize(maxChunk+1, std::numeric_limits<size_t>::max());
+	uniqueSuccessor.resize(maxChunk+1, std::numeric_limits<size_t>::max());
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j-1]))) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t prev = std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t;
+			size_t curr = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			assert(prev < uniqueSuccessor.size());
+			assert(curr < uniquePredecessor.size());
+			if (uniqueSuccessor[prev] == std::numeric_limits<size_t>::max())
+			{
+				uniqueSuccessor[prev] = curr;
+			}
+			else if (uniqueSuccessor[prev] != curr)
+			{
+				uniqueSuccessor[prev] = std::numeric_limits<size_t>::max()-1;
+			}
+			if (uniquePredecessor[curr] == std::numeric_limits<size_t>::max())
+			{
+				uniquePredecessor[curr] = prev;
+			}
+			else if (uniquePredecessor[curr] != prev)
+			{
+				uniquePredecessor[curr] = std::numeric_limits<size_t>::max()-1;
+			}
+		}
+	}
+	std::vector<bool> canBeRemoved;
+	canBeRemoved.resize(maxChunk+1, true);
+	for (size_t i = 0; i < uniquePredecessor.size(); i++)
+	{
+		if (uniquePredecessor[i] != std::numeric_limits<size_t>::max()-1 && uniqueSuccessor[i] != std::numeric_limits<size_t>::max()-1)
+		{
+			canBeRemoved[i] = false;
+		}
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		if (chunksPerRead[i].size() == 0) continue;
+		if (!NonexistantChunk(std::get<2>(chunksPerRead[i][0])) && std::get<1>(chunksPerRead[i][0]) - std::get<0>(chunksPerRead[i][0]) >= 2*kmerSize) canBeRemoved[std::get<2>(chunksPerRead[i][0]) & maskUint64_t] = false;
+		if (!NonexistantChunk(std::get<2>(chunksPerRead[i].back())) && std::get<1>(chunksPerRead[i].back()) - std::get<0>(chunksPerRead[i].back()) >= 2*kmerSize) canBeRemoved[std::get<2>(chunksPerRead[i].back()) & maskUint64_t] = false;
+		for (size_t j = 1; j+1 < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (!canBeRemoved[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
+			if (std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) >= 2*kmerSize)
+			{
+				canBeRemoved[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+				continue;
+			}
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j-1])))
+			{
+				canBeRemoved[std::get<2>(chunksPerRead[i][j])] = false;
+				continue;
+			}
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j+1])))
+			{
+				canBeRemoved[std::get<2>(chunksPerRead[i][j])] = false;
+				continue;
+			}
+			if (canBeRemoved[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t])
+			{
+				canBeRemoved[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+				continue;
+			}
+			if (canBeRemoved[std::get<2>(chunksPerRead[i][j+1]) & maskUint64_t])
+			{
+				canBeRemoved[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+				continue;
+			}
+			if (std::get<1>(chunksPerRead[i][j-1])+1 <= std::get<0>(chunksPerRead[i][j+1]))
+			{
+				canBeRemoved[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+				continue;
+			}
+		}
+	}
+	for (size_t i = 0; i < chunksPerRead.size()/2; i++)
+	{
+		size_t other = i + chunksPerRead.size()/2;
+		assert(chunksPerRead[i].size() == chunksPerRead[other].size());
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			assert(std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) - std::get<0>(chunksPerRead[other][chunksPerRead[other].size()-1-j]));
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
+			{
+				assert(NonexistantChunk(std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j])));
+				continue;
+			}
+			if (NonexistantChunk(std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j])))
+			{
+				std::cerr << i << " " << other << std::endl;
+				std::cerr << j << " " << chunksPerRead[i].size() << std::endl;
+				std::cerr << std::get<2>(chunksPerRead[i][j]) << " " << ((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(chunksPerRead[i][j]) & maskUint64_t) << std::endl;
+				std::cerr << std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) << " " << ((std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) & maskUint64_t) << std::endl;
+			}
+			assert(!NonexistantChunk(std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j])));
+			if (!canBeRemoved[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
+			{
+				canBeRemoved[std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) & maskUint64_t] = false;
+			}
+			if (!canBeRemoved[std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) & maskUint64_t])
+			{
+				canBeRemoved[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+			}
+		}
+	}
+	size_t countRemovableChunks = 0;
+	for (size_t i = 0; i < canBeRemoved.size(); i++)
+	{
+		if (!canBeRemoved[i]) continue;
+		countRemovableChunks += 1;
+	}
+	size_t countRemoved = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = chunksPerRead[i].size()-1; j < chunksPerRead[i].size(); j--)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (!canBeRemoved[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
+			std::swap(chunksPerRead[i][j], chunksPerRead[i].back());
+			chunksPerRead[i].pop_back();
+			countRemoved += 1;
+		}
+		std::sort(chunksPerRead[i].begin(), chunksPerRead[i].end());
+		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
+		{
+			assert(std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
+			assert(std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
+		}
+	}
+	std::cerr << countRemovableChunks << " distinct removable chunks, removed " << countRemoved << " total chunks" << std::endl;
+}
+
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t k, const size_t windowSize, const size_t middleSkip, const size_t startStage)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
@@ -6735,6 +6884,10 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 1000, 3000);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			removeSmallProblemNodes(chunksPerRead, k);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 2:
@@ -6754,6 +6907,10 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 1000, 3000);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			removeSmallProblemNodes(chunksPerRead, k);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(5, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
@@ -6966,6 +7123,11 @@ int main(int argc, char** argv)
 		readFilesAndAddToSequenceIndex(file, sequenceIndex, readBasepairLengths, numThreads);
 	}
 	sequenceIndex.removeConstructionVariables();
+	size_t lastReal = readBasepairLengths.size();
+	for (size_t i = 0; i < lastReal; i++)
+	{
+		readBasepairLengths.emplace_back(readBasepairLengths[i]);
+	}
 	std::cerr << sequenceIndex.size() << " reads" << std::endl;
 	makeGraph(sequenceIndex, readBasepairLengths, numThreads, approxOneHapCoverage, k, windowSize, middleSkip, startStage);
 }
