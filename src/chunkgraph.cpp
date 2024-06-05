@@ -7024,6 +7024,10 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			resolveTinyNodesRecklessly(chunksPerRead, numThreads, k);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(6, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 6:
@@ -7035,6 +7039,10 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		case 7:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerNearestNeighborPhasing(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			resolveTinyNodesRecklessly(chunksPerRead, numThreads, k);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(8, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
