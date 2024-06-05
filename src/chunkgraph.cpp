@@ -6396,6 +6396,7 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getMinimizerBound
 		});
 		for (size_t i = 1; i < minimizerPositions.size(); i++)
 		{
+			assert(minimizerPositions[i] > minimizerPositions[i-1]);
 			result[readIndex].emplace_back(minimizerPositions[i-1], minimizerPositions[i]+k-1, 0);
 		};
 		for (size_t i = 0; i < result[readIndex].size(); i++)
@@ -6697,7 +6698,108 @@ void writeStage(const size_t stage, const std::vector<std::vector<std::tuple<siz
 	writeBidirectedUnitigGraph("graph-round" + std::to_string(stage) + ".gfa", "paths" + std::to_string(stage) + ".gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 }
 
-void removeSmallProblemNodes(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
+void resolveTinyNodesRecklessly(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const size_t kmerSize)
+{
+	size_t nextNum = 0;
+	std::mutex resultMutex;
+	size_t countResolved = 0;
+	size_t countResolvedTo = 0;
+	std::vector<std::tuple<size_t, size_t, size_t>> replacements;
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &countResolved, &countResolvedTo, &replacements, kmerSize](const size_t chunki, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	{
+		if (occurrencesPerChunk[chunki].size() <= 2)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < occurrencesPerChunk[chunki].size(); j++)
+			{
+				replacements.emplace_back(occurrencesPerChunk[chunki][j].first, occurrencesPerChunk[chunki][j].second, nextNum);
+			}
+			nextNum += 1;
+			return;
+		}
+		bool isSmall = true;
+		for (auto pair : occurrencesPerChunk[chunki])
+		{
+			auto t = chunksPerRead[pair.first][pair.second];
+			if (std::get<1>(t) - std::get<0>(t) >= kmerSize*2)
+			{
+				isSmall = false;
+				break;
+			}
+		}
+		if (!isSmall)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < occurrencesPerChunk[chunki].size(); j++)
+			{
+				replacements.emplace_back(occurrencesPerChunk[chunki][j].first, occurrencesPerChunk[chunki][j].second, nextNum);
+			}
+			nextNum += 1;
+			return;
+		}
+		phmap::flat_hash_map<size_t, size_t> parent;
+		for (auto pair : occurrencesPerChunk[chunki])
+		{
+			size_t prev = std::numeric_limits<size_t>::max();
+			size_t next = std::numeric_limits<size_t>::max();
+			if (pair.second > 0 && !NonexistantChunk(std::get<2>(chunksPerRead[pair.first][pair.second-1])))
+			{
+				prev = std::get<2>(chunksPerRead[pair.first][pair.second-1]);
+				if (parent.count(prev) == 0) parent[prev] = prev;
+			}
+			if (pair.second+1 < chunksPerRead[pair.first].size() && !NonexistantChunk(std::get<2>(chunksPerRead[pair.first][pair.second+1])))
+			{
+				next = std::get<2>(chunksPerRead[pair.first][pair.second+1]) + (firstBitUint64_t >> 1);
+				if (parent.count(next) == 0) parent[next] = next;
+			}
+			if (prev != std::numeric_limits<size_t>::max() && next != std::numeric_limits<size_t>::max())
+			{
+				merge(parent, prev, next);
+			}
+		}
+		phmap::flat_hash_map<size_t, size_t> clusterToNode;
+		size_t nextClusterNum = 1;
+		for (auto pair : parent)
+		{
+			if (pair.second != pair.first) continue;
+			clusterToNode[pair.second] = nextClusterNum;
+			nextClusterNum += 1;
+		}
+		size_t zeroOffset = 0;
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			zeroOffset = nextNum;
+			nextNum += nextClusterNum;
+			if (nextClusterNum > 2)
+			{
+				countResolved += 1;
+				countResolvedTo += nextClusterNum-1;
+			}
+			for (auto pair : occurrencesPerChunk[chunki])
+			{
+				size_t clusterNum = 0;
+				if (pair.second > 0 && !NonexistantChunk(std::get<2>(chunksPerRead[pair.first][pair.second-1])))
+				{
+					clusterNum = clusterToNode.at(find(parent, std::get<2>(chunksPerRead[pair.first][pair.second-1])));
+				}
+				if (pair.second+1 < chunksPerRead[pair.first].size() && !NonexistantChunk(std::get<2>(chunksPerRead[pair.first][pair.second+1])))
+				{
+					size_t foundClusterNum = clusterToNode.at(find(parent, std::get<2>(chunksPerRead[pair.first][pair.second+1]) + (firstBitUint64_t >> 1)));
+					assert(clusterNum == 0 || foundClusterNum == clusterNum);
+					clusterNum = foundClusterNum;
+				}
+				replacements.emplace_back(pair.first, pair.second, zeroOffset + clusterNum);
+			}
+		}
+	});
+	for (auto t : replacements)
+	{
+		std::get<2>(chunksPerRead[std::get<0>(t)][std::get<1>(t)]) = std::get<2>(t) + (std::get<2>(chunksPerRead[std::get<0>(t)][std::get<1>(t)]) & firstBitUint64_t);
+	}
+	std::cerr << "tiny node resolution resolved " << countResolved << " chunks to " << countResolvedTo << " chunks" << std::endl;
+}
+
+void removeTinyProblemNodes(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
 {
 	size_t maxChunk = 0;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -6884,7 +6986,9 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 1000, 3000);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			removeSmallProblemNodes(chunksPerRead, k);
+			resolveTinyNodesRecklessly(chunksPerRead, numThreads, k);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			removeTinyProblemNodes(chunksPerRead, k);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -6908,7 +7012,9 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 1000, 3000);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			removeSmallProblemNodes(chunksPerRead, k);
+			resolveTinyNodesRecklessly(chunksPerRead, numThreads, k);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			removeTinyProblemNodes(chunksPerRead, k);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
