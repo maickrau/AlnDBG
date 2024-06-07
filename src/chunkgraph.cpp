@@ -2631,7 +2631,7 @@ std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, co
 		}
 	}
 	std::priority_queue<size_t> queue;
-	queue.emplace(hash(kmer));
+	queue.emplace(hashFwAndBw(kmer, k));
 	for (size_t i = k; i < sequence.size(); i++)
 	{
 		kmer <<= 2;
@@ -2653,7 +2653,7 @@ std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, co
 				assert(false);
 		}
 		kmer &= mask;
-		size_t h = hash(kmer);
+		size_t h = hashFwAndBw(kmer, k);
 		if (queue.size() < count)
 		{
 			queue.emplace(h);
