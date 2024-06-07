@@ -685,6 +685,7 @@ std::vector<std::vector<std::vector<size_t>>> getAlleleOccurrences(const std::ve
 			assert(alleleMap.at(std::get<5>(alleles[j])) < result.back().size());
 			result.back()[alleleMap.at(std::get<5>(alleles[j]))].emplace_back(std::get<4>(alleles[j]));
 		}
+		clusterStart = i;
 	}
 	for (size_t i = 0; i < result.size(); i++)
 	{
@@ -757,9 +758,15 @@ std::string getAlleleStr(const TwobitString& readSequence, const size_t readStar
 	return str;
 }
 
-size_t getAllele(const TwobitString& readSequence, const size_t readStart, const size_t readEnd, const bool fw)
+size_t getAllele(const TwobitString& readSequence, const size_t readStart, const size_t readEnd, phmap::flat_hash_map<std::string, size_t>& alleleNumbers, const bool fw)
 {
-	return std::hash<std::string>{}(getAlleleStr(readSequence, readStart, readEnd, fw));
+	std::string allele = getAlleleStr(readSequence, readStart, readEnd, fw);
+	if (alleleNumbers.count(allele) == 0)
+	{
+		size_t result = alleleNumbers.size();
+		alleleNumbers[allele] = result;
+	}
+	return alleleNumbers.at(allele);
 }
 
 template <typename KmerType, typename F>
@@ -1984,6 +1991,7 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 			if (chunkBeingDone.size() < 10)
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
+//				std::cerr << "skip chunk with coverage " << chunkBeingDone.size() << std::endl;
 				chunksDoneProcessing.emplace_back();
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
@@ -1998,7 +2006,8 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 			{
 				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
 			}
-			iterateSolidKmers(chunkSequences, kmerSize, chunkBeingDone.size(), false, false, [&chunkBeingDone, &chunkSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+			phmap::flat_hash_map<std::string, size_t> alleleNumbers;
+			iterateSolidKmers(chunkSequences, kmerSize, chunkBeingDone.size(), false, false, [&chunkBeingDone, &chunkSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, &alleleNumbers, kmerSize](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 			{
 				if (occurrenceID != lastOccurrence || lastKmer == std::numeric_limits<size_t>::max())
 				{
@@ -2009,7 +2018,7 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 					return;
 				}
 				size_t allele;
-				allele = getAllele(chunkSequences[occurrenceID], lastKmerPos, pos + kmerSize, true);
+				allele = getAllele(chunkSequences[occurrenceID], lastKmerPos, pos + kmerSize, alleleNumbers, true);
 				alleles.emplace_back(lastKmer, lastCluster, kmer, clusterIndex, occurrenceID, allele);
 				lastOccurrence = occurrenceID;
 				lastKmer = kmer;
@@ -2079,6 +2088,8 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 			if (chunkResult.size() == 1)
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
+//				std::cerr << "chunk with coverage " << chunkBeingDone.size() << " not split" << std::endl;
+//				std::cerr << "alleles " << alleles.size() << " occurrences " << occurrencesPerAlleleSite.size() << " occurrenceAlleles " << occurrenceAlleles.size() << " informative sites " << occurrenceAlleles[0].size() << std::endl;
 				chunksDoneProcessing.emplace_back();
 				std::swap(chunksDoneProcessing.back(), chunkResult[0]);
 				continue;
@@ -2088,6 +2099,8 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 			std::sort(chunkResult.begin(), chunkResult.end(), [](const auto& left, const auto& right) { return left.size() > right.size(); });
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
+//				std::cerr << "chunk with coverage " << chunkBeingDone.size() << " split to " << chunkResult.size() << std::endl;
+//				std::cerr << "alleles " << alleles.size() << " occurrences " << occurrencesPerAlleleSite.size() << " occurrenceAlleles " << occurrenceAlleles.size() << " informative sites " << occurrenceAlleles[0].size() << std::endl;
 				countSplittedTo += chunkResult.size();
 				countSplitted += 1;
 				while (chunkResult.size() > 0)
@@ -2181,6 +2194,14 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 				lastKmerPos = pos;
 				lastKmer = kmer;
 			});
+			if (lastOccurrenceID != std::numeric_limits<size_t>::max())
+			{
+				if (lastKmerPos + kmerSize < chunkSequences[lastOccurrenceID].size())
+				{
+					assert(fwForks.count(std::make_pair(lastKmer, lastCluster)) == 0 || fwForks.at(std::make_pair(lastKmer, lastCluster)).count(lastOccurrenceID) == 0);
+					fwForks[std::make_pair(lastKmer, lastCluster)][lastOccurrenceID] = chunkSequences[lastOccurrenceID].get(lastKmerPos + kmerSize);
+				}
+			}
 			size_t checkedPairs = 0;
 			std::vector<std::vector<size_t>> phaseIdentities;
 			phaseIdentities.resize(chunkBeingDone.size());
@@ -3026,7 +3047,8 @@ void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex&
 			size_t lastKmer = std::numeric_limits<size_t>::max();
 			size_t lastCluster = std::numeric_limits<size_t>::max();
 			size_t lastKmerPos = std::numeric_limits<size_t>::max();
-			iterateSolidKmers(chunkSequences, kmerSize, occurrencesPerChunk[i].size(), false, false, [&occurrencesPerChunk, &chunkSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+			phmap::flat_hash_map<std::string, size_t> alleleNumbers;
+			iterateSolidKmers(chunkSequences, kmerSize, occurrencesPerChunk[i].size(), false, false, [&occurrencesPerChunk, &chunkSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, &alleleNumbers, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 			{
 				if (occurrenceID != lastOccurrence || lastKmer == std::numeric_limits<size_t>::max())
 				{
@@ -3037,7 +3059,7 @@ void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex&
 					return;
 				}
 				size_t allele;
-				allele = getAllele(chunkSequences[occurrenceID], lastKmerPos, pos + kmerSize, true);
+				allele = getAllele(chunkSequences[occurrenceID], lastKmerPos, pos + kmerSize, alleleNumbers, true);
 				alleles.emplace_back(lastKmer, lastCluster, kmer, clusterIndex, occurrenceID, allele);
 				lastOccurrence = occurrenceID;
 				lastKmer = kmer;
@@ -4638,7 +4660,8 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			size_t lastKmer = std::numeric_limits<size_t>::max();
 			size_t lastCluster = std::numeric_limits<size_t>::max();
 			size_t lastKmerPos = std::numeric_limits<size_t>::max();
-			iterateSolidKmers(chunkSequences, kmerSize, occurrencesPerChunk[i].size(), false, false, [&occurrencesPerChunk, &chunkSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+			phmap::flat_hash_map<std::string, size_t> alleleNumbers;
+			iterateSolidKmers(chunkSequences, kmerSize, occurrencesPerChunk[i].size(), false, false, [&occurrencesPerChunk, &chunkSequences, &alleles, &lastOccurrence, &lastKmer, &lastCluster, &lastKmerPos, &alleleNumbers, kmerSize, i](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
 			{
 				if (occurrenceID != lastOccurrence || lastKmer == std::numeric_limits<size_t>::max())
 				{
@@ -4649,7 +4672,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 					return;
 				}
 				size_t allele;
-				allele = getAllele(chunkSequences[occurrenceID], lastKmerPos, pos + kmerSize, true);
+				allele = getAllele(chunkSequences[occurrenceID], lastKmerPos, pos + kmerSize, alleleNumbers, true);
 				alleles.emplace_back(lastKmer, lastCluster, kmer, clusterIndex, occurrenceID, allele);
 				lastOccurrence = occurrenceID;
 				lastKmer = kmer;
@@ -5019,13 +5042,71 @@ void writeUnitigSequences(const std::string& filename, const std::vector<Consens
 	}
 }
 
-void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::string& unitigSequencesFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t numThreads)
+std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBidirectedChunks(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& rawChunksPerRead)
+{
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, uint64_t> pairToNode;
+	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> fixedChunksPerRead;
+	fixedChunksPerRead.resize(rawChunksPerRead.size()/2);
+	for (size_t i = 0; i < rawChunksPerRead.size()/2; i++)
+	{
+		size_t other = i + rawChunksPerRead.size()/2;
+		fixedChunksPerRead[i] = rawChunksPerRead[i];
+		if (!(rawChunksPerRead[i].size() == rawChunksPerRead[other].size()))
+		{
+			std::cerr << i << " " << other << std::endl;
+		}
+		assert(rawChunksPerRead[i].size() == rawChunksPerRead[other].size());
+		for (size_t j = 0; j < rawChunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(rawChunksPerRead[i][j])))
+			{
+				if (!NonexistantChunk(std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j])))
+				{
+					std::cerr << i << " " << other << std::endl;
+					std::cerr << j << " " << rawChunksPerRead[other].size()-1-j << std::endl;
+					std::cerr << ((std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j]) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j]) & maskUint64_t) << std::endl;
+				}
+				assert(NonexistantChunk(std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j])));
+				continue;
+			}
+			assert(!NonexistantChunk(std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j])));
+			assert((std::get<2>(rawChunksPerRead[i][j]) & firstBitUint64_t) == firstBitUint64_t);
+			assert((std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j]) & firstBitUint64_t) == firstBitUint64_t);
+			if ((std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j]) & maskUint64_t) < (std::get<2>(rawChunksPerRead[i][j]) & maskUint64_t))
+			{
+				std::get<2>(fixedChunksPerRead[i][j]) = (std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j]) & maskUint64_t);
+			}
+			/*
+			uint64_t fwnode = std::get<2>(rawChunksPerRead[i][j]);
+			uint64_t bwnode = std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j]) ^ firstBitUint64_t;
+			std::pair<uint64_t, uint64_t> fwpair { fwnode, bwnode };
+			std::pair<uint64_t, uint64_t> bwpair { bwnode ^ firstBitUint64_t, fwnode ^ firstBitUint64_t };
+			bool fw = true;
+			if (bwpair < fwpair)
+			{
+				std::swap(bwpair, fwpair);
+				fw = false;
+			}
+			if (pairToNode.count(fwpair) == 0)
+			{
+				uint64_t next = pairToNode.size();
+				pairToNode[fwpair] = next;
+			}
+			std::get<2>(fixedChunksPerRead[i][j]) = pairToNode.at(fwpair) + (fw ? firstBitUint64_t : 0);
+			*/
+		}
+	}
+	return fixedChunksPerRead;
+}
+
+void writeBidirectedUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::string& unitigSequencesFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& rawChunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t numThreads)
 {
 	std::cerr << "writing unitig graph " << graphFile << std::endl;
+	auto fixedChunksPerRead = getBidirectedChunks(rawChunksPerRead);
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
 	std::vector<ConsensusString> unitigSequences;
-	std::tie(graph, readPaths, unitigSequences) = getChunkUnitigGraphWithConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage, numThreads);
+	std::tie(graph, readPaths, unitigSequences) = getChunkUnitigGraphWithConsensuses(fixedChunksPerRead, sequenceIndex, approxOneHapCoverage, numThreads);
 	writeUnitigGraph(graphFile, graph);
 	std::cerr << "writing unitig paths " << pathsFile << std::endl;
 	writeUnitigPaths(pathsFile, graph, readPaths, sequenceIndex, rawReadLengths);
@@ -5038,29 +5119,7 @@ void writeBidirectedUnitigGraph(const std::string& graphFile, const std::string&
 	std::cerr << "writing unitig graph " << graphFile << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> fixedChunksPerRead;
-	fixedChunksPerRead.resize(chunksPerRead.size()/2);
-	for (size_t i = 0; i < chunksPerRead.size()/2; i++)
-	{
-		size_t other = i + chunksPerRead.size()/2;
-		fixedChunksPerRead[i] = chunksPerRead[i];
-		assert(chunksPerRead[i].size() == chunksPerRead[other].size());
-		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
-			{
-				assert(NonexistantChunk(std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j])));
-				continue;
-			}
-			assert(!NonexistantChunk(std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j])));
-			assert((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) == firstBitUint64_t);
-			assert((std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) & firstBitUint64_t) == firstBitUint64_t);
-			if ((std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) & maskUint64_t) < (std::get<2>(chunksPerRead[i][j]) & maskUint64_t))
-			{
-				std::get<2>(fixedChunksPerRead[i][j]) = (std::get<2>(chunksPerRead[other][chunksPerRead[other].size()-1-j]) & maskUint64_t);
-			}
-		}
-	}
+	auto fixedChunksPerRead = getBidirectedChunks(chunksPerRead);
 	std::tie(graph, readPaths) = getChunkUnitigGraph(fixedChunksPerRead, approxOneHapCoverage);
 	writeUnitigGraph(graphFile, graph);
 	std::cerr << "writing unitig paths " << pathsFile << std::endl;
@@ -6231,6 +6290,7 @@ void countReadRepetitiveUnitigs(const std::vector<std::vector<std::tuple<size_t,
 
 void writeReadChunkSequences(const std::string& filename, const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex)
 {
+	std::cerr << "writing read chunk sequences" << std::endl;
 	std::ofstream file { filename };
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -6249,13 +6309,15 @@ void writeReadChunkSequences(const std::string& filename, const std::vector<size
 			{
 				name = sequenceIndex.getName(i - sequenceIndex.size()) + "_bw";
 			}
-			file << chunk << " " << sequenceIndex.getName(i) << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << seq << std::endl;
+			file << chunk << " " << name << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << seq << std::endl;
 		}
 	}
 }
 
-void writeReadUnitigSequences(const std::string& filename, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage)
+void writeReadUnitigSequences(const std::string& filename, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& rawChunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage)
 {
+	std::cerr << "writing read unitig sequences" << std::endl;
+	auto chunksPerRead = getBidirectedChunks(rawChunksPerRead);
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
 	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage);
@@ -6958,6 +7020,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	if (startStage > 0)
 	{
 		chunksPerRead = readChunksFromFakePathsFile("fakepaths" + std::to_string(startStage) + ".txt");
+		while (chunksPerRead.size() < sequenceIndex.size()*2) chunksPerRead.emplace_back();
 		std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	}
 	switch(startStage)
@@ -6987,8 +7050,8 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 1000, 3000);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveTinyNodesRecklessly(chunksPerRead, numThreads, k);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			removeTinyProblemNodes(chunksPerRead, k);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			removeTinyProblemNodes(chunksPerRead, k);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -7013,8 +7076,8 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 1000, 3000);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveTinyNodesRecklessly(chunksPerRead, numThreads, k);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			removeTinyProblemNodes(chunksPerRead, k);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			removeTinyProblemNodes(chunksPerRead, k);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -7125,7 +7188,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeReadChunkSequences("sequences-chunk19.txt", rawReadLengths, chunksPerRead, sequenceIndex);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
-			writeUnitigGraph("graph-dbg-final.gfa", "paths-dbg-final.gaf", "unitigs-dbg-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads);
+			writeBidirectedUnitigGraph("graph-dbg-final.gfa", "paths-dbg-final.gaf", "unitigs-dbg-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeReadUnitigSequences("sequences-dbg-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -7138,7 +7201,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 20:
-			writeUnitigGraph("graph-final.gfa", "paths-final.gaf", "unitigs-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads);
+			writeBidirectedUnitigGraph("graph-final.gfa", "paths-final.gaf", "unitigs-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeReadUnitigSequences("sequences-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
