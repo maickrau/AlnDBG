@@ -522,7 +522,7 @@ void iterateKmers(const TwobitString& baseSequence, const size_t start, const si
 			kmer += baseSequence.get(m);
 			kmer &= mask;
 			if (m < start+k-1) continue;
-			callback(kmer, m - start + 1 - k);
+			callback(kmer, m - (start+k-1));
 		}
 	}
 	else
@@ -813,10 +813,12 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 			size_t startPos, endPos;
 			startPos = currentPosPerOccurrence[j];
 			endPos = nextOffset;
-			iterateKmers(chunkSequences[j], startPos, endPos, true, kmerSize, [&kmers, &nextCluster, &kmerToIndex, &inContext, &currentPosPerOccurrence, &validClusters, &actualKmer, &chunkSequences, j, offsetBreakpoint](const size_t kmer, const size_t pos)
+			iterateKmers(chunkSequences[j], startPos, endPos, true, kmerSize, [&kmers, &nextCluster, &kmerToIndex, &inContext, &currentPosPerOccurrence, &validClusters, &actualKmer, &chunkSequences, kmerSize, j, offsetBreakpoint, startPos, endPos](const size_t kmer, const size_t pos)
 			{
-				double extrapolatedPos = 100.0 * (double)(pos+currentPosPerOccurrence[j]) / (double)chunkSequences[j].size();
-				assert((size_t)(pos+currentPosPerOccurrence[j]) < (size_t)std::numeric_limits<uint16_t>::max());
+				assert(pos < endPos-startPos);
+				assert(pos + currentPosPerOccurrence[j] < chunkSequences[j].size());
+				assert((size_t)(pos+currentPosPerOccurrence[j]+(int)(kmerSize/2)) < (size_t)std::numeric_limits<uint16_t>::max());
+				double extrapolatedPos = 100.0 * (double)(pos+currentPosPerOccurrence[j]+(int)(kmerSize/2)) / (double)chunkSequences[j].size();
 				size_t index = kmerToIndex.size();
 				auto found = kmerToIndex.find(kmer);
 				if (found != kmerToIndex.end())
@@ -923,6 +925,8 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 								for (size_t k = clusterStart; k < j; k++)
 								{
 									assert((size_t)std::get<2>(kmers[index][k]) < (size_t)std::numeric_limits<uint16_t>::max());
+									assert(std::get<0>(kmers[index][k]) >= minPos);
+									assert(std::get<0>(kmers[index][k]) <= maxPos);
 									assert(clusterNum < (size_t)std::numeric_limits<uint16_t>::max());
 									solidKmers[std::get<1>(kmers[index][k])].emplace_back(std::get<2>(kmers[index][k]), clusterNum, index);
 								}
@@ -2156,6 +2160,7 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 			if (chunkBeingDone.size() < 10)
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
+				std::cerr << "skip chunk with coverage " << chunkBeingDone.size() << std::endl;
 				chunksDoneProcessing.emplace_back();
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
@@ -2205,12 +2210,16 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 			size_t checkedPairs = 0;
 			std::vector<std::vector<size_t>> phaseIdentities;
 			phaseIdentities.resize(chunkBeingDone.size());
+			size_t checkedFwBw = 0;
+			size_t checkedBwBw = 0;
+			size_t checkedFwFw = 0;
 			for (const auto& bwFork : bwForks)
 			{
 				for (const auto& fwFork : fwForks)
 				{
 					if (validClusters.at(bwFork.first.first)[bwFork.first.second].second > validClusters.at(fwFork.first.first)[fwFork.first.second].first) continue;
 					checkedPairs += 1;
+					checkedFwBw += 1;
 					checkPhasablePair(bwFork.second, fwFork.second, phaseIdentities);
 				}
 			}
@@ -2218,8 +2227,9 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 			{
 				for (const auto& bwFork2 : bwForks)
 				{
-					if (validClusters.at(bwFork.first.first)[bwFork.first.second].second+1 > validClusters.at(bwFork2.first.first)[bwFork2.first.second].first) continue;
+					if (validClusters.at(bwFork.first.first)[bwFork.first.second].second+1 > validClusters.at(bwFork2.first.first)[bwFork2.first.second].first && validClusters.at(bwFork2.first.first)[bwFork2.first.second].second+1 > validClusters.at(bwFork.first.first)[bwFork.first.second].first) continue;
 					checkedPairs += 1;
+					checkedBwBw += 1;
 					checkPhasablePair(bwFork.second, bwFork2.second, phaseIdentities);
 				}
 			}
@@ -2227,8 +2237,9 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 			{
 				for (const auto& fwFork2 : fwForks)
 				{
-					if (validClusters.at(fwFork.first.first)[fwFork.first.second].second+1 > validClusters.at(fwFork2.first.first)[fwFork2.first.second].first) continue;
+					if (validClusters.at(fwFork.first.first)[fwFork.first.second].second+1 > validClusters.at(fwFork2.first.first)[fwFork2.first.second].first && validClusters.at(fwFork2.first.first)[fwFork2.first.second].second+1 > validClusters.at(fwFork.first.first)[fwFork.first.second].first) continue;
 					checkedPairs += 1;
+					checkedFwFw += 1;
 					checkPhasablePair(fwFork.second, fwFork2.second, phaseIdentities);
 				}
 			}
@@ -2259,6 +2270,8 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 				std::lock_guard<std::mutex> lock { resultMutex };
 				auto endTime = getTime();
 				std::cerr << "phasing kmer splitted chunk with coverage " << chunkBeingDone.size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
+//				std::cerr << "bwforks " << bwForks.size() << " fwforks " << fwForks.size() << std::endl;
+//				std::cerr << "bwfw " << checkedFwBw << " bwbw " << checkedBwBw << " fwfw " << checkedFwFw << std::endl;
 				chunksDoneProcessing.emplace_back();
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
@@ -2276,6 +2289,8 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 				auto endTime = getTime();
 				if (keyToNode.size() >= 2) countSplitted += 1;
 				std::cerr << "phasing kmer splitted chunk with coverage " << chunkBeingDone.size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
+//				std::cerr << "bwforks " << bwForks.size() << " fwforks " << fwForks.size() << std::endl;
+//				std::cerr << "bwfw " << checkedFwBw << " bwbw " << checkedBwBw << " fwfw " << checkedFwFw << std::endl;
 				while (chunkResult.size() > 0)
 				{
 					chunksNeedProcessing.emplace_back();
