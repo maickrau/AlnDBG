@@ -774,6 +774,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 {
 	assert(chunkSequences.size() < (size_t)std::numeric_limits<uint32_t>::max());
 	assert(chunkSequences.size() >= 1);
+	double repetitiveClusteringDistance = 1.0;
 	// if one sequence is too small then don't do anything even if theoretically other sequences could have solid kmers
 	size_t smallestSequence = chunkSequences[0].size();
 	for (size_t i = 0; i < chunkSequences.size(); i++)
@@ -785,7 +786,11 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 	// 40 blocks so it advances 2.5% of sequence every block so kmers seen before block cannot cluster with kmers seen after block if no kmers in block
 	size_t numBlocks = 40;
 	// unless the strings are small, then no blocks
-	if (smallestSequence < 1000 || smallestSequence < 40*kmerSize*2)
+	if (smallestSequence < 2000)
+	{
+		repetitiveClusteringDistance = 20.0/(double)smallestSequence;
+	}
+	if (smallestSequence < 2000 || smallestSequence < 40*kmerSize*2)
 	{
 		numBlocks = 1;
 	}
@@ -817,7 +822,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 			{
 				assert(pos < endPos-startPos);
 				assert(pos + currentPosPerOccurrence[j] < chunkSequences[j].size());
-				assert((size_t)(pos+currentPosPerOccurrence[j]+(int)(kmerSize/2)) < (size_t)std::numeric_limits<uint16_t>::max());
+				assert((size_t)(pos+currentPosPerOccurrence[j]) < (size_t)std::numeric_limits<uint16_t>::max());
 				double extrapolatedPos = 100.0 * (double)(pos+currentPosPerOccurrence[j]+(int)(kmerSize/2)) / (double)chunkSequences[j].size();
 				size_t index = kmerToIndex.size();
 				auto found = kmerToIndex.find(kmer);
@@ -859,7 +864,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 				size_t clusterNum = nextCluster[index];
 				for (size_t j = 1; j <= kmers[index].size(); j++)
 				{
-					if (j < kmers[index].size() && std::get<0>(kmers[index][j]) < std::get<0>(kmers[index][j-1])+1)
+					if (j < kmers[index].size() && std::get<0>(kmers[index][j]) < std::get<0>(kmers[index][j-1])+repetitiveClusteringDistance)
 					{
 						if (occurrencesHere[std::get<1>(kmers[index][j])])
 						{
@@ -872,7 +877,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 					{
 						double minPos = std::get<0>(kmers[index][clusterStart]);
 						double maxPos = std::get<0>(kmers[index][j-1]);
-						if (minPos + 1.0 > maxPos)
+						if (minPos + repetitiveClusteringDistance > maxPos)
 						{
 							if (!currentlyNonrepetitive && allowTwoAlleleRepeats)
 							{
@@ -2270,8 +2275,8 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 				std::lock_guard<std::mutex> lock { resultMutex };
 				auto endTime = getTime();
 				std::cerr << "phasing kmer splitted chunk with coverage " << chunkBeingDone.size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
-//				std::cerr << "bwforks " << bwForks.size() << " fwforks " << fwForks.size() << std::endl;
-//				std::cerr << "bwfw " << checkedFwBw << " bwbw " << checkedBwBw << " fwfw " << checkedFwFw << std::endl;
+				// std::cerr << "bwforks " << bwForks.size() << " fwforks " << fwForks.size() << std::endl;
+				// std::cerr << "bwfw " << checkedFwBw << " bwbw " << checkedBwBw << " fwfw " << checkedFwFw << std::endl;
 				chunksDoneProcessing.emplace_back();
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
@@ -2289,8 +2294,8 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 				auto endTime = getTime();
 				if (keyToNode.size() >= 2) countSplitted += 1;
 				std::cerr << "phasing kmer splitted chunk with coverage " << chunkBeingDone.size() << " forkpairs " << phaseIdentities[0].size() << " checked " << checkedPairs << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
-//				std::cerr << "bwforks " << bwForks.size() << " fwforks " << fwForks.size() << std::endl;
-//				std::cerr << "bwfw " << checkedFwBw << " bwbw " << checkedBwBw << " fwfw " << checkedFwFw << std::endl;
+				// std::cerr << "bwforks " << bwForks.size() << " fwforks " << fwForks.size() << std::endl;
+				// std::cerr << "bwfw " << checkedFwBw << " bwbw " << checkedBwBw << " fwfw " << checkedFwFw << std::endl;
 				while (chunkResult.size() > 0)
 				{
 					chunksNeedProcessing.emplace_back();
