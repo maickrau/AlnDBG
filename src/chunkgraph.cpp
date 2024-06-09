@@ -788,7 +788,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 	// unless the strings are small, then no blocks
 	if (smallestSequence < 2000)
 	{
-		repetitiveClusteringDistance = 20.0/(double)smallestSequence;
+		repetitiveClusteringDistance = 100 * 20.0/(double)smallestSequence;
 	}
 	if (smallestSequence < 2000 || smallestSequence < 40*kmerSize*2)
 	{
@@ -1777,6 +1777,7 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 			if (chunkBeingDone.size() < 10)
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
+				std::cerr << "skip chunk with size " << chunkBeingDone.size() << std::endl;
 				chunksDoneProcessing.emplace_back();
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
@@ -1843,7 +1844,7 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 				}
 				if (zeros < 5 || ones < 5)
 				{
-					for (size_t k = int(columns[j].size()/64)*64; k < columns[j].size(); k++)
+					for (size_t k = ((int)(columns[j].size()/64))*64; k < columns[j].size(); k++)
 					{
 						if (columns[j].get(k))
 						{
