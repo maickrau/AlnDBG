@@ -320,6 +320,23 @@ std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const 
 		assert(node < allowedNode.size());
 		allowedNode[node] = true;
 	}
+	for (size_t i = 0; i < allowedEdges.size(); i++)
+	{
+		std::pair<size_t, bool> fw { i, true };
+		for (auto edge : allowedEdges.getEdges(fw))
+		{
+			assert(edge.first < allowedNode.size());
+			assert(allowedNode[i]);
+			assert(allowedNode[edge.first]);
+		}
+		std::pair<size_t, bool> bw { i, false };
+		for (auto edge : allowedEdges.getEdges(bw))
+		{
+			assert(edge.first < allowedNode.size());
+			assert(allowedNode[i]);
+			assert(allowedNode[edge.first]);
+		}
+	}
 	return std::make_pair(allowedNode, allowedEdges);
 }
 
@@ -5089,6 +5106,12 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBidirectedChun
 				}
 				assert(NonexistantChunk(std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j])));
 				continue;
+			}
+			if (NonexistantChunk(std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j])))
+			{
+				std::cerr << i << " " << other << std::endl;
+				std::cerr << j << " " << rawChunksPerRead[other].size()-1-j << std::endl;
+				std::cerr << ((std::get<2>(rawChunksPerRead[i][j]) & firstBitUint64_t) ? ">" : "<") << (std::get<2>(rawChunksPerRead[i][j]) & maskUint64_t) << std::endl;
 			}
 			assert(!NonexistantChunk(std::get<2>(rawChunksPerRead[other][rawChunksPerRead[other].size()-1-j])));
 			assert((std::get<2>(rawChunksPerRead[i][j]) & firstBitUint64_t) == firstBitUint64_t);
