@@ -7232,7 +7232,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(18, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 18:
-			resolveVerySmallNodes(chunksPerRead, rawReadLengths, middleSkip, numThreads, approxOneHapCoverage);
+			resolveTinyNodesRecklessly(chunksPerRead, numThreads, k);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			countReadRepetitiveUnitigs(chunksPerRead, approxOneHapCoverage);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
