@@ -1022,11 +1022,18 @@ size_t getHammingdistance(const RankBitvector& left, const RankBitvector& right,
 	assert(leftbits.size() == rightbits.size());
 	assert(left.size() <= leftbits.size()*64);
 	size_t result = 0;
-	for (size_t i = 0; i*64 < left.size(); i++)
+	for (size_t i = 0; i*64+64 < left.size(); i++)
 	{
 		uint64_t notEqual = leftbits[i] ^ rightbits[i];
 		result += popcount(notEqual);
 		if (result > maxEdits) return result;
+	}
+	for (size_t i = ((size_t)(left.size()/64))*64; i < left.size(); i++)
+	{
+		if (left.get(i) != right.get(i))
+		{
+			result += 1;
+		}
 	}
 	return result;
 }
