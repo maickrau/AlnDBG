@@ -840,7 +840,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 				assert(pos < endPos-startPos);
 				assert(pos + currentPosPerOccurrence[j] < chunkSequences[j].size());
 				assert((size_t)(pos+currentPosPerOccurrence[j]) < (size_t)std::numeric_limits<uint16_t>::max());
-				double extrapolatedPos = 100.0 * (double)(pos+currentPosPerOccurrence[j]+(int)(kmerSize/2)) / (double)chunkSequences[j].size();
+				double extrapolatedPos = 100.0 * (double)(pos+currentPosPerOccurrence[j]+((double)kmerSize/2.0)) / (double)chunkSequences[j].size();
 				size_t index = kmerToIndex.size();
 				auto found = kmerToIndex.find(kmer);
 				if (found != kmerToIndex.end())
@@ -7161,7 +7161,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(8, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 8:
-//			splitPerCorrectedKmerPhasing(sequenceIndex, chunksPerRead, 11, numThreads);
+			splitPerCorrectedKmerPhasing(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
