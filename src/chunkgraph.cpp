@@ -1017,6 +1017,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 size_t getHammingdistance(const RankBitvector& left, const RankBitvector& right, const size_t maxEdits)
 {
 	assert(left.size() == right.size());
+	if (left.size() == 0) return 0;
 	const std::vector<uint64_t>& leftbits = left.getBits();
 	const std::vector<uint64_t>& rightbits = right.getBits();
 	assert(leftbits.size() == rightbits.size());
@@ -1028,7 +1029,7 @@ size_t getHammingdistance(const RankBitvector& left, const RankBitvector& right,
 		result += popcount(notEqual);
 		if (result > maxEdits) return result;
 	}
-	for (size_t i = ((size_t)(left.size()/64))*64; i < left.size(); i++)
+	for (size_t i = ((size_t)((left.size()-1)/64))*64; i < left.size(); i++)
 	{
 		if (left.get(i) != right.get(i))
 		{
