@@ -2616,6 +2616,33 @@ uint64_t hash(uint64_t key) {
 	return key;
 }
 
+bool hasHomopolymerWithLengthThreeOrMore(uint64_t kmer, const size_t kmerSize)
+{
+	kmer ^= kmer >> 2;
+	kmer = (~(kmer | (kmer >> 1))) & 0x5555555555555555ull;
+	kmer &= kmer >> 2;
+	kmer &= (1ull << (2ull * (kmerSize-2)))-1;
+	return kmer != 0;
+}
+
+bool hasMicrosatelliteMotifLengthTwo(uint64_t kmer, const size_t kmerSize)
+{
+	kmer ^= kmer >> 4;
+	kmer = (~(kmer | (kmer >> 1))) & 0x5555555555555555ull;
+	kmer &= kmer >> 2;
+	kmer &= (1ull << (2ull * (kmerSize-3)))-1;
+	return kmer != 0;
+}
+
+uint64_t weightedHash(uint64_t kmer, const size_t kmerSize)
+{
+	const size_t hashmask = 0x1FFFFFFFFFFFFFFFull;
+	uint64_t result = hash(kmer) & hashmask;
+	if (hasHomopolymerWithLengthThreeOrMore(kmer, kmerSize)) result |= 0x8000000000000000ull;
+	if (hasMicrosatelliteMotifLengthTwo(kmer, kmerSize)) result |= 0x4000000000000000ull;
+	return result;
+}
+
 uint64_t reverseKmer(uint64_t kmer, const size_t kmerSize)
 {
 	kmer = ~kmer;
@@ -2630,8 +2657,8 @@ uint64_t reverseKmer(uint64_t kmer, const size_t kmerSize)
 
 uint64_t hashFwAndBw(const uint64_t kmer, const size_t kmerSize)
 {
-	uint64_t fwHash = hash(kmer);
-	uint64_t bwHash = hash(reverseKmer(kmer, kmerSize));
+	uint64_t fwHash = weightedHash(kmer, kmerSize);
+	uint64_t bwHash = weightedHash(reverseKmer(kmer, kmerSize), kmerSize);
 	return std::min(fwHash, bwHash);
 }
 
