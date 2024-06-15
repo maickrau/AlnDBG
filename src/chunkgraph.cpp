@@ -2341,6 +2341,71 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 	std::cerr << "phasing kmers splitted " << countSplitted << " chunks" << std::endl;
 }
 
+void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+{
+	std::cerr << "splitting roughly by sequence identity" << std::endl;
+	const size_t mismatchFloor = 10;
+	size_t nextNum = 0;
+	size_t totalSplitted = 0;
+	size_t totalSplittedTo = 0;
+	std::mutex resultMutex;
+	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &totalSplitted, &totalSplittedTo, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	{
+		if (occurrencesPerChunk[i].size() < 1000)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			// std::cerr << "skip chunk with coverage " << occurrencesPerChunk[i].size() << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = nextNum + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
+			}
+			nextNum += 1;
+			return;
+		}
+		auto startTime = getTime();
+		std::vector<std::string> sequences;
+		sequences.reserve(occurrencesPerChunk[i].size());
+		size_t longestLength = 0;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
+			sequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
+			longestLength = std::max(longestLength, sequences.back().size());
+		}
+		std::vector<size_t> parent = getFastTransitiveClosure(sequences.size(), std::max(longestLength * mismatchFraction, mismatchFraction), [&sequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[i], sequences[j], maxDist); });
+		phmap::flat_hash_map<size_t, size_t> parentToCluster;
+		for (size_t j = 0; j < parent.size(); j++)
+		{
+			find(parent, j);
+		}
+		size_t nextCluster = 0;
+		for (size_t j = 0; j < parent.size(); j++)
+		{
+			if (parent[j] != j) continue;
+			parentToCluster[j] = nextCluster;
+			nextCluster += 1;
+		}
+		auto endTime = getTime();
+		assert(nextCluster >= 1);
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			if (nextCluster > 1)
+			{
+				totalSplitted += 1;
+				totalSplittedTo += nextCluster;
+			}
+			// std::cerr << "split chunk with coverage " << occurrencesPerChunk[i].size() << " into " << nextCluster << " chunks time " << formatTime(startTime, endTime) << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = nextNum + parentToCluster.at(parent[j]) + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
+			}
+			nextNum += nextCluster;
+		}
+	});
+	std::cerr << "rough sequence identity splitting splitted " << totalSplitted << " chunks to " << totalSplittedTo << " chunks" << std::endl;
+}
+
 void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting by sequence identity" << std::endl;
@@ -2373,7 +2438,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 	for (size_t iterationIndex = 0; iterationIndex < firstSmall; iterationIndex++)
 	{
 		const size_t i = iterationOrder[iterationIndex];
-//		std::cerr << "try split chunk " << i << std::endl;
+		// std::cerr << "try split chunk " << i << std::endl;
 		// auto startTime = getTime();
 		std::vector<std::pair<std::string, size_t>> sequencesPerOccurrence;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
@@ -2396,7 +2461,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 		}
 		const size_t blockSize = 50;
 		const size_t numBlocks = (sequencesPerOccurrence.size()+blockSize-1)/blockSize;
-//		std::cerr << "split part 1" << std::endl;
+		// std::cerr << "split part 1" << std::endl;
 		iterateMultithreaded(0, numBlocks, numThreads, [&sequencesPerOccurrence, &parent, blockSize, i, mismatchFloor](size_t index)
 		{
 			for (size_t j = index * blockSize+1; j < (index+1) * blockSize && j < sequencesPerOccurrence.size(); j++)
@@ -2434,7 +2499,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 		}
 		for (size_t blockDistance = 1; blockDistance < numBlocks; blockDistance++)
 		{
-//			std::cerr << "split part 2 dist " << blockDistance << std::endl;
+			// std::cerr << "split part 2 dist " << blockDistance << std::endl;
 			std::vector<std::pair<size_t, size_t>> merges;
 			std::mutex mergeMutex;
 			phmap::flat_hash_set<size_t> removeBlocks;
@@ -2475,7 +2540,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 					merges.insert(merges.end(), mergesHere.begin(), mergesHere.end());
 				}
 			});
-//			std::cerr << merges.size() << " merges" << std::endl;
+			// std::cerr << merges.size() << " merges" << std::endl;
 			for (auto pair : merges)
 			{
 				merge(parent, pair.first, pair.second);
@@ -2494,7 +2559,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 				std::swap(activeBlocks[i], activeBlocks.back());
 				activeBlocks.pop_back();
 			}
-//			std::cerr << "remove " << removeBlocks.size() << ", " << activeBlocks.size() << " remaining" << std::endl;
+			// std::cerr << "remove " << removeBlocks.size() << ", " << activeBlocks.size() << " remaining" << std::endl;
 			if (activeBlocks.size() == 0) break;
 		}
 		// auto endTime = getTime();
@@ -2506,8 +2571,8 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 			keyToNode[key] = nextNum;
 			nextNum += 1;
 		}
-//		std::cerr << "sequence identity big chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " time " << formatTime(startTime, endTime) << " splitted to " << keyToNode.size() << std::endl;
-//		std::cerr << "sequence identity splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
+		// std::cerr << "sequence identity big chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " time " << formatTime(startTime, endTime) << " splitted to " << keyToNode.size() << std::endl;
+		// std::cerr << "sequence identity splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			size_t index = sequencesPerOccurrence[j].second;
@@ -2518,16 +2583,16 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 	iterateMultithreaded(firstSmall, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &iterationOrder, &rawReadLengths, mismatchFloor](const size_t iterationIndex)
 	{
 		const size_t i = iterationOrder[iterationIndex];
-//		{
-//			std::lock_guard<std::mutex> lock { resultMutex };
-//			std::cerr << "sequence identity split chunk " << i << " coverage " << occurrencesPerChunk[i].size() << std::endl;
-//		}
-//		size_t coverage = occurrencesPerChunk[i].size();
-//		size_t totalCheckablePairs = 0;
-//		size_t totalMergedPairs = 0;
-//		size_t totalNotMergedPairs = 0;
-//		size_t totalDistinct = 0;
-//		auto startTime = getTime();
+		// {
+		// 	std::lock_guard<std::mutex> lock { resultMutex };
+		// 	std::cerr << "sequence identity split chunk " << i << " coverage " << occurrencesPerChunk[i].size() << std::endl;
+		// }
+		// size_t coverage = occurrencesPerChunk[i].size();
+		// size_t totalCheckablePairs = 0;
+		// size_t totalMergedPairs = 0;
+		// size_t totalNotMergedPairs = 0;
+		// size_t totalDistinct = 0;
+		// auto startTime = getTime();
 		std::vector<std::pair<std::string, size_t>> sequencesPerOccurrence;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
@@ -2545,12 +2610,12 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 		std::vector<bool> differentFromPredecessor;
 		differentFromPredecessor.resize(occurrencesPerChunk[i].size(), false);
 		differentFromPredecessor[0] = true;
-//		totalDistinct += 1;
+		// totalDistinct += 1;
 		for (size_t j = 1; j < differentFromPredecessor.size(); j++)
 		{
 			if (sequencesPerOccurrence[j].first == sequencesPerOccurrence[j-1].first) continue;
 			differentFromPredecessor[j] = true;
-//			totalDistinct += 1;
+			// totalDistinct += 1;
 		}
 		std::vector<size_t> parent;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
@@ -2567,7 +2632,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 			for (size_t k = j-1; k < occurrencesPerChunk[i].size(); k--)
 			{
 				if (!differentFromPredecessor[k]) continue;
-//				totalCheckablePairs += 1;
+				// totalCheckablePairs += 1;
 				if (find(parent, k) == find(parent, j)) continue;
 				assert(sequencesPerOccurrence[j].first.size() >= sequencesPerOccurrence[k].first.size());
 				size_t maxMismatches = std::max(mismatchFloor, (size_t)(sequencesPerOccurrence[k].first.size()*mismatchFraction));
@@ -2575,14 +2640,14 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 				size_t mismatches = getNumMismatches(sequencesPerOccurrence[j].first, sequencesPerOccurrence[k].first, maxMismatches);
 				if (mismatches > maxMismatches)
 				{
-//					totalNotMergedPairs += 1;
+					// totalNotMergedPairs += 1;
 					continue;
 				}
-//				totalMergedPairs += 1;
+				// totalMergedPairs += 1;
 				merge(parent, j, k);
 			}
 		}
-//		auto endTime = getTime();
+		// auto endTime = getTime();
 		phmap::flat_hash_map<size_t, size_t> keyToNode;
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
@@ -2593,8 +2658,8 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 				keyToNode[key] = nextNum;
 				nextNum += 1;
 			}
-//			std::cerr << "sequence identity chunk " << i << " coverage " << coverage << " distinct " << totalDistinct << " checkable pairs " << totalCheckablePairs << " merged " << totalMergedPairs << " not merged " << totalNotMergedPairs << " time " << formatTime(startTime, endTime) << " splitted to " << keyToNode.size() << std::endl;
-//			std::cerr << "sequence identity splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
+			// std::cerr << "sequence identity chunk " << i << " coverage " << coverage << " distinct " << totalDistinct << " checkable pairs " << totalCheckablePairs << " merged " << totalMergedPairs << " not merged " << totalNotMergedPairs << " time " << formatTime(startTime, endTime) << " splitted to " << keyToNode.size() << std::endl;
+			// std::cerr << "sequence identity splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
 				size_t index = sequencesPerOccurrence[j].second;
@@ -7149,6 +7214,8 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(4, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage);
 			[[fallthrough]];
 		case 4:
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
