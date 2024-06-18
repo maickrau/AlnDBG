@@ -1,3 +1,4 @@
+#include <map>
 #include <queue>
 #include <mutex>
 #include <fstream>
@@ -6927,6 +6928,152 @@ void writeStage(const size_t stage, const std::vector<std::vector<std::tuple<siz
 	writeBidirectedUnitigGraph("graph-round" + std::to_string(stage) + ".gfa", "paths" + std::to_string(stage) + ".gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 }
 
+std::vector<std::pair<size_t, size_t>> getNoncontainedUniqueRanges(std::vector<std::pair<size_t, size_t>> raw)
+{
+	assert(raw.size() >= 1);
+	std::sort(raw.begin(), raw.end());
+	for (size_t j = raw.size()-1; j < raw.size() && j > 0; j--)
+	{
+		if (raw[j] != raw[j-1]) continue;
+		std::swap(raw[j], raw.back());
+		raw.pop_back();
+	}
+	assert(raw.size() >= 1);
+	std::sort(raw.begin(), raw.end());
+	size_t longestExtent = raw[0].second;
+	std::vector<bool> contained;
+	contained.resize(raw.size(), false);
+	for (size_t j = 1; j < raw.size(); j++)
+	{
+		assert(raw[j].first >= raw[j-1].first);
+		if (raw[j].second <= longestExtent) contained[j] = true;
+		if (raw[j].first == raw[j-1].first)
+		{
+			assert(raw[j].second > raw[j-1].second);
+			contained[j-1] = true;
+		}
+		longestExtent = std::max(longestExtent, raw[j].second);
+	}
+	for (size_t j = raw.size()-1; j < raw.size(); j--)
+	{
+		if (!contained[j]) continue;
+		std::swap(raw[j], raw.back());
+		raw.pop_back();
+	}
+	std::sort(raw.begin(), raw.end());
+	return raw;
+}
+
+void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t expandedSize)
+{
+	std::vector<size_t> chunkLengths;
+	{
+		std::vector<std::vector<size_t>> rawChunkLengths;
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+				size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+				size_t length = std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) + 1;
+				while (chunk >= rawChunkLengths.size()) rawChunkLengths.emplace_back();
+				rawChunkLengths[chunk].emplace_back(length);
+			}
+		}
+		chunkLengths.resize(rawChunkLengths.size());
+		for (size_t i = 0; i < rawChunkLengths.size(); i++)
+		{
+			assert(rawChunkLengths[i].size() >= 1);
+			std::sort(rawChunkLengths[i].begin(), rawChunkLengths[i].end());
+			chunkLengths[i] = rawChunkLengths[i][rawChunkLengths[i].size()/2];
+		}
+	}
+	std::map<std::vector<uint64_t>, size_t> chunkmerToNewChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		std::vector<std::pair<size_t, size_t>> newChunkmerRanges;
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) newChunkmerRanges.emplace_back(j, j);
+		}
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			size_t end = j;
+			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			while (end < chunksPerRead[i].size() && length < expandedSize)
+			{
+				end += 1;
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][end]))) break;
+				if (end == chunksPerRead[i].size()) break;
+				length += chunkLengths[std::get<2>(chunksPerRead[i][end]) & maskUint64_t];
+				length -= kmerSize;
+			}
+			if (length < expandedSize) continue;
+			if (end == chunksPerRead[i].size()) continue;
+			newChunkmerRanges.emplace_back(j, end);
+		}
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			size_t start = j;
+			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			while (start > 0 && length < expandedSize)
+			{
+				start -= 1;
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][start]))) break;
+				length += chunkLengths[std::get<2>(chunksPerRead[i][start]) & maskUint64_t];
+				length -= kmerSize;
+			}
+			if (length < expandedSize) continue;
+			newChunkmerRanges.emplace_back(start, j);
+		}
+		if (newChunkmerRanges.size() == 0)
+		{
+			chunksPerRead[i].clear();
+			continue;
+		}
+		newChunkmerRanges = getNoncontainedUniqueRanges(newChunkmerRanges);
+		assert(newChunkmerRanges.size() >= 1);
+		for (size_t j = 1; j < newChunkmerRanges.size(); j++)
+		{
+			assert(newChunkmerRanges[j].first > newChunkmerRanges[j-1].first);
+			assert(newChunkmerRanges[j].second > newChunkmerRanges[j-1].second);
+		}
+		std::vector<std::tuple<size_t, size_t, uint64_t>> newChunks;
+		for (size_t j = 0; j < newChunkmerRanges.size(); j++)
+		{
+			size_t newchunk = std::numeric_limits<size_t>::max();
+			std::vector<uint64_t> chunkmer;
+			bool valid = true;
+			for (size_t k = newChunkmerRanges[j].first; k <= newChunkmerRanges[j].second; k++)
+			{
+				chunkmer.emplace_back(std::get<2>(chunksPerRead[i][k]));
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][k]))) valid = false;
+			}
+			if (valid)
+			{
+				if (chunkmerToNewChunk.count(chunkmer) == 1)
+				{
+					newchunk = chunkmerToNewChunk.at(chunkmer) + firstBitUint64_t;
+				}
+				else
+				{
+					newchunk = chunkmerToNewChunk.size();
+					chunkmerToNewChunk[chunkmer] = newchunk;
+					newchunk += firstBitUint64_t;
+				}
+			}
+			else
+			{
+				newchunk = std::numeric_limits<size_t>::max();
+			}
+			newChunks.emplace_back(std::get<0>(chunksPerRead[i][newChunkmerRanges[j].first]), std::get<1>(chunksPerRead[i][newChunkmerRanges[j].second]), newchunk);
+		}
+		std::swap(chunksPerRead[i], newChunks);
+	}
+}
+
 void resolveTinyNodesRecklessly(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const size_t kmerSize)
 {
 	size_t nextNum = 0;
@@ -7253,6 +7400,11 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(5, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 5:
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			expandChunks(chunksPerRead, kmerSize, 5000);
+			writeStage(51, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			[[fallthrough]];
+		case 51:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
