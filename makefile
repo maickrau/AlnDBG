@@ -1,5 +1,5 @@
 GPP=$(CXX)
-CPPFLAGS=-Wall -Wextra -std=c++17 -O3 -g -Izstr/src -Iedlib/edlib/include -Iparallel-hashmap/parallel_hashmap/ -Icxxopts/include -Wno-unused-parameter `pkg-config --cflags zlib` -Iconcurrentqueue -Ihifioverlapper/src -Ifastacompressor/src
+CPPFLAGS=-Wall -Wextra -std=c++17 -O3 -g -Izstr/src -Iedlib/edlib/include -Iparallel-hashmap/parallel_hashmap/ -Icxxopts/include -Wno-unused-parameter `pkg-config --cflags zlib` -Iconcurrentqueue -Ifastacompressor/src
 
 ODIR=obj
 BINDIR=bin
