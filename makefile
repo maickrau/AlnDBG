@@ -7,10 +7,10 @@ SRCDIR=src
 
 LIBS=`pkg-config --libs zlib`
 
-_DEPS = Common.h UnionFind.h TwobitString.h SparseEdgeContainer.h RankBitvector.h VectorWithDirection.h MostlySparse2DHashmap.h
+_DEPS = Common.h UnionFind.h TwobitString.h SparseEdgeContainer.h RankBitvector.h ChunkGraphWriter.h ChunkUnitigGraph.h EdlibWrapper.h ConsensusMaker.h VectorWithDirection.h MostlySparse2DHashmap.h KmerIterator.h
 DEPS = $(patsubst %, $(SRCDIR)/%, $(_DEPS))
 
-_OBJ = Common.o UnionFind.o TwobitString.o SparseEdgeContainer.o RankBitvector.o
+_OBJ = Common.o UnionFind.o TwobitString.o SparseEdgeContainer.o RankBitvector.o ChunkGraphWriter.o ChunkUnitigGraph.o EdlibWrapper.o ConsensusMaker.o
 OBJ = $(patsubst %, $(ODIR)/%, $(_OBJ))
 
 LINKFLAGS = $(CPPFLAGS) -Wl,-Bstatic $(LIBS) -Wl,-Bdynamic -Wl,--as-needed -lpthread -pthread -static-libstdc++

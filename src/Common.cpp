@@ -94,3 +94,25 @@ std::string revCompRaw(const std::string& raw)
 	}
 	return result;
 }
+
+bool NonexistantChunk(const uint64_t chunk)
+{
+	if (chunk == std::numeric_limits<uint64_t>::max()) return true;
+	if (chunk == std::numeric_limits<uint64_t>::max()-1) return true;
+	if (chunk == (std::numeric_limits<uint64_t>::max() ^ firstBitUint64_t)) return true;
+	if (chunk == (std::numeric_limits<uint64_t>::max() ^ firstBitUint64_t)-1) return true;
+	return false;
+}
+
+std::chrono::time_point<std::chrono::steady_clock> getTime()
+{
+	return std::chrono::steady_clock::now();
+}
+
+std::string formatTime(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end)
+{
+	size_t milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count();
+	return std::to_string(milliseconds / 1000) + "," + std::to_string(milliseconds % 1000) + " s";
+}
+
+std::chrono::time_point<std::chrono::steady_clock> programStartTime = getTime();

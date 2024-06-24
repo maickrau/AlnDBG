@@ -14,6 +14,10 @@ const uint64_t maskUint64_t = firstBitUint64_t-1;
 std::pair<size_t, bool> reverse(std::pair<size_t, bool> pos);
 std::pair<std::pair<size_t, bool>, std::pair<size_t, bool>> canon(std::pair<size_t, bool> from, std::pair<size_t, bool> to);
 std::string revCompRaw(const std::string& raw);
+bool NonexistantChunk(const uint64_t chunk);
+std::chrono::time_point<std::chrono::steady_clock> getTime();
+std::string formatTime(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end);
+extern std::chrono::time_point<std::chrono::steady_clock> programStartTime;
 
 class ReadPathBundle
 {
