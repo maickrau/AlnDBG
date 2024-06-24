@@ -5,23 +5,13 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include "fastqloader.h"
+#include "Common.h"
 #include "RankBitvector.h"
 #include "UnionFind.h"
-#include "CommonUtils.h"
-#include "ReadStorage.h"
-#include "MatchIndex.h"
-#include "KmerGraph.h"
-#include "KmerMatcher.h"
-#include "MatchGroup.h"
-#include "UnitigGraph.h"
-#include "GraphCleaner.h"
-#include "AlnHaploFilter.h"
-#include "GraphPhaser.h"
-#include "GraphResolver.h"
-#include "AnchorFinder.h"
-#include "ChunkmerFilter.h"
 #include "edlib.h"
 #include "CompressedStringIndex.h"
+#include "TwobitString.h"
 
 double mismatchFraction;
 
@@ -85,7 +75,7 @@ std::string getReadSequence(const FastaCompressor::CompressedStringIndex& sequen
 		return sequenceIndex.getSequence(index);
 	}
 	assert(index < sequenceIndex.size()*2);
-	return MBG::revCompRaw(sequenceIndex.getSequence(index - sequenceIndex.size()));
+	return revCompRaw(sequenceIndex.getSequence(index - sequenceIndex.size()));
 }
 
 std::string getChunkSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t read, const size_t index)
@@ -99,7 +89,7 @@ std::string getChunkSequence(const FastaCompressor::CompressedStringIndex& seque
 		}
 		else
 		{
-			result = MBG::revCompRaw(result);
+			result = revCompRaw(result);
 		}
 		return result;
 	}
@@ -110,7 +100,7 @@ std::string getChunkSequence(const FastaCompressor::CompressedStringIndex& seque
 		std::string result = sequenceIndex.getSubstring(read - sequenceIndex.size(), rawReadLengths[read-sequenceIndex.size()] - 1 - std::get<1>(t), std::get<1>(t) - std::get<0>(t) + 1);
 		if (std::get<2>(t) & firstBitUint64_t)
 		{
-			result = MBG::revCompRaw(result);
+			result = revCompRaw(result);
 		}
 		return result;
 	}
@@ -133,7 +123,7 @@ void writeUnitigPaths(const std::string& filename, const ChunkUnitigGraph& uniti
 				if (k >= 1)
 				{
 					uint64_t prevNode = readPaths[i][j].path[k-1];
-					auto pairkey = MBG::canon(std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t), std::make_pair(node & maskUint64_t, node & firstBitUint64_t));
+					auto pairkey = canon(std::make_pair(prevNode & maskUint64_t, prevNode & firstBitUint64_t), std::make_pair(node & maskUint64_t, node & firstBitUint64_t));
 					std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 					pathLength -= unitigGraph.edgeOverlaps.at(key);
 				}
@@ -405,7 +395,7 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeOverlaps(cons
 			auto curr = std::get<2>(chunksPerRead[i][j]);
 			size_t overlap = 0;
 			if (std::get<1>(chunksPerRead[i][j-1]) > std::get<0>(chunksPerRead[i][j])) overlap = std::get<1>(chunksPerRead[i][j-1]) - std::get<0>(chunksPerRead[i][j]);
-			auto pairkey = MBG::canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
+			auto pairkey = canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
 			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 			overlaps[key].push_back(overlap);
 		}
@@ -432,7 +422,7 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(con
 			assert(std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
 			auto prev = std::get<2>(chunksPerRead[i][j-1]);
 			auto curr = std::get<2>(chunksPerRead[i][j]);
-			auto pairkey = MBG::canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
+			auto pairkey = canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
 			std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 			edgeCoverage[key] += 1;
 		}
@@ -785,7 +775,7 @@ std::string getAlleleStr(const TwobitString& readSequence, const size_t readStar
 {
 	assert(readEnd > readStart);
 	std::string str = readSequence.substr(readStart, readEnd - readStart);
-	if (!fw) str = MBG::revCompRaw(str);
+	if (!fw) str = revCompRaw(str);
 	return str;
 }
 
@@ -3645,8 +3635,8 @@ std::vector<uint64_t> getUnitig(const uint64_t startNode, const std::vector<bool
 		std::pair<size_t, bool> pairpos { pos & maskUint64_t, pos & firstBitUint64_t };
 		if (allowedEdges.getEdges(pairpos).size() != 1) break;
 		std::pair<size_t, bool> next = allowedEdges.getEdges(pairpos)[0];
-		assert(allowedEdges.hasEdge(MBG::reverse(next), MBG::reverse(pairpos)));
-		if (allowedEdges.getEdges(MBG::reverse(next)).size() != 1) break;
+		assert(allowedEdges.hasEdge(reverse(next), reverse(pairpos)));
+		if (allowedEdges.getEdges(reverse(next)).size() != 1) break;
 		if (next.first == pairpos.first) break;
 		if (next.first == (startNode & maskUint64_t)) break;
 		pos = next.first + (next.second ? firstBitUint64_t : 0);
@@ -3663,8 +3653,8 @@ std::vector<uint64_t> getUnitig(const uint64_t startNode, const std::vector<bool
 		std::pair<size_t, bool> pairpos { pos & maskUint64_t, pos & firstBitUint64_t };
 		if (allowedEdges.getEdges(pairpos).size() != 1) break;
 		std::pair<size_t, bool> next = allowedEdges.getEdges(pairpos)[0];
-		assert(allowedEdges.hasEdge(MBG::reverse(next), MBG::reverse(pairpos)));
-		if (allowedEdges.getEdges(MBG::reverse(next)).size() != 1) break;
+		assert(allowedEdges.hasEdge(reverse(next), reverse(pairpos)));
+		if (allowedEdges.getEdges(reverse(next)).size() != 1) break;
 		if (next.first == pairpos.first) break;
 		if (next.first == (unitigStart & maskUint64_t)) break;
 		pos = next.first + (next.second ? firstBitUint64_t : 0);
@@ -3720,7 +3710,7 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 			{
 				std::pair<size_t, bool> fromnode { unitigs[i][j-1] & maskUint64_t, unitigs[i][j-1] & firstBitUint64_t };
 				std::pair<size_t, bool> tonode { unitigs[i][j] & maskUint64_t, unitigs[i][j] & firstBitUint64_t };
-				auto pairkey = MBG::canon(fromnode, tonode);
+				auto pairkey = canon(fromnode, tonode);
 				std::pair<uint64_t, uint64_t> key { pairkey.first.first + (pairkey.first.second ? firstBitUint64_t : 0), pairkey.second.first + (pairkey.second.second ? firstBitUint64_t : 0) };
 				size_t overlap = edgeOverlaps.at(key);
 				size_t prevLength = lengths[unitigs[i][j-1] & maskUint64_t][lengths[unitigs[i][j-1] & maskUint64_t].size()/2];
@@ -4098,7 +4088,7 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 				if (std::get<2>(t1)-std::get<2>(t2) > end - start + 50) continue;
 				if (std::get<2>(t1)-std::get<2>(t2) + 50 < end - start) continue;
 				sequenceHere = sequenceIndex.getSubstring(std::get<0>(t1), std::get<2>(t2), std::get<2>(t1)-std::get<2>(t2)+1);
-				sequenceHere = MBG::revCompRaw(sequenceHere);
+				sequenceHere = revCompRaw(sequenceHere);
 			}
 			sequenceCount[sequenceHere] += 1;
 			totalCount += 1;
@@ -4458,12 +4448,12 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<C
 			assert(!NonexistantChunk(edge.first + (edge.second ? firstBitUint64_t : 0)));
 			uint64_t targetUnitig = std::get<0>(chunkLocationInUnitig[edge.first]);
 			if (!edge.second) targetUnitig ^= firstBitUint64_t;
-			auto nodepairkey = MBG::canon(lastNode, edge);
+			auto nodepairkey = canon(lastNode, edge);
 			std::pair<uint64_t, uint64_t> nodekey { nodepairkey.first.first + (nodepairkey.first.second ? firstBitUint64_t : 0), nodepairkey.second.first + (nodepairkey.second.second ? firstBitUint64_t : 0) };
-			auto unitigpairkey = MBG::canon(std::make_pair(i, true), std::make_pair(targetUnitig & maskUint64_t, targetUnitig & firstBitUint64_t));
+			auto unitigpairkey = canon(std::make_pair(i, true), std::make_pair(targetUnitig & maskUint64_t, targetUnitig & firstBitUint64_t));
 			std::pair<uint64_t, uint64_t> unitigkey { unitigpairkey.first.first + (unitigpairkey.first.second ? firstBitUint64_t : 0), unitigpairkey.second.first + (unitigpairkey.second.second ? firstBitUint64_t : 0) };
 			result.edges.addEdge(unitigpairkey.first, unitigpairkey.second);
-			result.edges.addEdge(MBG::reverse(unitigpairkey.second), MBG::reverse(unitigpairkey.first));
+			result.edges.addEdge(reverse(unitigpairkey.second), reverse(unitigpairkey.first));
 			result.edgeOverlaps[unitigkey] = edgeOverlaps.at(nodekey);
 			result.edgeCoverages[unitigkey] = edgeCoverage.at(nodekey);
 		}
@@ -4472,12 +4462,12 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<C
 			assert(!NonexistantChunk(edge.first + (edge.second ? firstBitUint64_t : 0)));
 			uint64_t targetUnitig = std::get<0>(chunkLocationInUnitig[edge.first]);
 			if (!edge.second) targetUnitig ^= firstBitUint64_t;
-			auto nodepairkey = MBG::canon(firstNode, edge);
+			auto nodepairkey = canon(firstNode, edge);
 			std::pair<uint64_t, uint64_t> nodekey { nodepairkey.first.first + (nodepairkey.first.second ? firstBitUint64_t : 0), nodepairkey.second.first + (nodepairkey.second.second ? firstBitUint64_t : 0) };
-			auto unitigpairkey = MBG::canon(std::make_pair(i, false), std::make_pair(targetUnitig & maskUint64_t, targetUnitig & firstBitUint64_t));
+			auto unitigpairkey = canon(std::make_pair(i, false), std::make_pair(targetUnitig & maskUint64_t, targetUnitig & firstBitUint64_t));
 			std::pair<uint64_t, uint64_t> unitigkey { unitigpairkey.first.first + (unitigpairkey.first.second ? firstBitUint64_t : 0), unitigpairkey.second.first + (unitigpairkey.second.second ? firstBitUint64_t : 0) };
 			result.edges.addEdge(unitigpairkey.first, unitigpairkey.second);
-			result.edges.addEdge(MBG::reverse(unitigpairkey.second), MBG::reverse(unitigpairkey.first));
+			result.edges.addEdge(reverse(unitigpairkey.second), reverse(unitigpairkey.first));
 			result.edgeOverlaps[unitigkey] = edgeOverlaps.at(nodekey);
 			result.edgeCoverages[unitigkey] = edgeCoverage.at(nodekey);
 		}
@@ -5516,13 +5506,13 @@ bool hasOtherHigherCoverageEdge(const uint64_t fork, const uint64_t edge, const 
 	std::pair<size_t, bool> forkpair { fork & maskUint64_t, fork & firstBitUint64_t };
 	std::pair<size_t, bool> edgepair { edge & maskUint64_t, edge & firstBitUint64_t };
 	assert(graph.edges.hasEdge(forkpair, edgepair));
-	auto keypair = MBG::canon(forkpair, edgepair);
+	auto keypair = canon(forkpair, edgepair);
 	std::pair<uint64_t, uint64_t> key { keypair.first.first + (keypair.first.second ? firstBitUint64_t : 0), keypair.second.first + (keypair.second.second ? firstBitUint64_t : 0) };
 	size_t compareCoverage = graph.edgeCoverages.at(key);
 	for (auto edge : graph.edges.getEdges(forkpair))
 	{
 		if (edge == edgepair) continue;
-		keypair = MBG::canon(forkpair, edge);
+		keypair = canon(forkpair, edge);
 		std::pair<uint64_t, uint64_t> key { keypair.first.first + (keypair.first.second ? firstBitUint64_t : 0), keypair.second.first + (keypair.second.second ? firstBitUint64_t : 0) };
 		if (graph.edgeCoverages.at(key) >= compareCoverage * 2) return true;
 	}
@@ -6499,7 +6489,7 @@ void writeReadUnitigSequences(const std::string& filename, const std::vector<std
 				size_t unitig = readPaths[i][j].path[k] & maskUint64_t;
 				bool fw = readPaths[i][j].path[k] & firstBitUint64_t;
 				std::string seq = sequenceIndex.getSubstring(i, readPaths[i][j].readPartInPathnode[k].first, readPaths[i][j].readPartInPathnode[k].second - readPaths[i][j].readPartInPathnode[k].first+1);
-				if (!fw) seq = MBG::revCompRaw(seq);
+				if (!fw) seq = revCompRaw(seq);
 				size_t unitigStart = 0;
 				size_t unitigEnd = graph.unitigLengths[unitig];
 				if (k == 0) unitigStart += readPaths[i][j].pathLeftClip;
@@ -6637,203 +6627,6 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getMinimizerBound
 			std::get<1>(result[readIndex+backwardOffset].back()) = readSequence.size()-1-std::get<1>(result[readIndex+backwardOffset].back());
 		}
 	});
-	return result;
-}
-
-std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBetterChunksPerRead(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t k, const size_t windowSize, const size_t middleSkip)
-{
-	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
-	result.resize(sequenceIndex.size());
-	std::vector<std::string> readFiles { };
-	MBG::ReadpartIterator partIterator { 31, 1, MBG::ErrorMasking::No, 1, readFiles, false, "" };
-	phmap::flat_hash_map<uint64_t, size_t> hashToNode;
-	phmap::flat_hash_set<MBG::HashType> removedHashes;
-	std::mutex resultMutex;
-	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&result, &sequenceIndex, &partIterator, &hashToNode, &resultMutex, &removedHashes, k, windowSize, middleSkip](const size_t readIndex)
-	{
-		std::string readSequence = sequenceIndex.getSequence(readIndex);
-		std::vector<std::tuple<size_t, size_t, MBG::HashType>> hashes;
-		partIterator.iteratePartsOfRead("", readSequence, [&hashToNode, &hashes, &resultMutex, readIndex, k, windowSize, middleSkip](const MBG::ReadInfo& read, const MBG::SequenceCharType& seq, const MBG::SequenceLengthType& poses, const std::string& raw)
-		{
-			iterateWindowchunks(seq, k, windowSize, middleSkip, [&hashToNode, &hashes, &resultMutex, &poses, &seq, readIndex, k](const std::vector<uint64_t>& hashPositions)
-			{
-				assert(hashPositions.size() == 2);
-				size_t startPos = hashPositions[0];
-				size_t endPos = hashPositions.back() + k - 1;
-				size_t realStartPos = poses[startPos];
-				size_t realEndPos = poses[endPos+1]-1;
-				if (readIndex == 58059)
-				{
-					std::cerr << "!!! " << readIndex << " " << startPos << " " << endPos << " " << realStartPos << " " << realEndPos << " !!!" << std::endl;
-				}
-				MBG::SequenceCharType hashableSequence;
-				for (size_t i = 0; i < hashPositions.size()/2; i++)
-				{
-					size_t pos = hashPositions[i];
-					hashableSequence.insert(hashableSequence.end(), seq.begin() + pos, seq.begin() + pos + k);
-				}
-				hashableSequence.emplace_back(10);
-				for (size_t i = hashPositions.size()/2; i < hashPositions.size(); i++)
-				{
-					size_t pos = hashPositions[i];
-					MBG::SequenceCharType insertSubstr { seq.begin() + pos, seq.begin() + pos + k };
-					//insertSubstr = MBG::revCompRLE(insertSubstr);
-					hashableSequence.insert(hashableSequence.end(), insertSubstr.begin(), insertSubstr.end());
-				}
-				MBG::HashType totalhashfw = MBG::hash(hashableSequence);
-				hashes.emplace_back(realStartPos, realEndPos, totalhashfw);
-			});
-		});
-		std::vector<bool> removeHash;
-		removeHash.resize(hashes.size(), false);
-		phmap::flat_hash_set<MBG::HashType> removeHashesHere;
-		for (size_t i = 1; i < hashes.size(); i++)
-		{
-			assert(std::get<0>(hashes[i]) > std::get<0>(hashes[i-1]) || std::get<1>(hashes[i]) > std::get<1>(hashes[i-1]));
-			assert(std::get<0>(hashes[i]) >= std::get<0>(hashes[i-1]));
-			assert(std::get<1>(hashes[i]) >= std::get<1>(hashes[i-1]));
-			if (std::get<0>(hashes[i]) != std::get<0>(hashes[i-1]) && std::get<1>(hashes[i]) != std::get<1>(hashes[i-1])) continue;
-			size_t prevLen = std::get<1>(hashes[i-1]) - std::get<0>(hashes[i-1]);
-			size_t currLen = std::get<1>(hashes[i]) - std::get<0>(hashes[i]);
-			size_t prevDistFromMid;
-			size_t currDistFromMid;
-			if (prevLen < middleSkip + windowSize)
-			{
-				prevDistFromMid = middleSkip + windowSize - prevLen;
-			}
-			else
-			{
-				prevDistFromMid = prevLen - (middleSkip + windowSize);
-			}
-			if (currLen < middleSkip + windowSize)
-			{
-				currDistFromMid = middleSkip + windowSize - currLen;
-			}
-			else
-			{
-				currDistFromMid = currLen - (middleSkip + windowSize);
-			}
-			if (prevDistFromMid < currDistFromMid)
-			{
-				if (readIndex == 58059)
-				{
-					std::cerr << "remove " << std::get<0>(hashes[i]) << " " << std::get<1>(hashes[i]) << " due to prev" << std::endl;
-				}
-				removeHash[i] = true;
-				removeHashesHere.insert(std::get<2>(hashes[i]));
-			}
-			if (currDistFromMid < prevDistFromMid)
-			{
-				if (readIndex == 58059)
-				{
-					std::cerr << "remove " << std::get<0>(hashes[i-1]) << " " << std::get<1>(hashes[i-1]) << " due to next" << std::endl;
-				}
-				removeHash[i-1] = true;
-				removeHashesHere.insert(std::get<2>(hashes[i-1]));
-			}
-			if (currDistFromMid == prevDistFromMid)
-			{
-				assert(prevLen != currLen);
-				if (prevLen > currLen)
-				{
-					removeHash[i] = true;
-					removeHashesHere.insert(std::get<2>(hashes[i]));
-				}
-				else
-				{
-					removeHash[i-1] = true;
-					removeHashesHere.insert(std::get<2>(hashes[i-1]));
-				}
-			}
-		}
-		for (size_t i = hashes.size()-1; i < hashes.size(); i--)
-		{
-			if (!removeHash[i]) continue;
-			std::swap(hashes[i], hashes.back());
-			hashes.pop_back();
-		}
-		std::sort(hashes.begin(), hashes.end(), [](auto left, auto right) { return std::get<0>(left) < std::get<0>(right); });
-		for (size_t i = 1; i < hashes.size(); i++)
-		{
-			assert(std::get<0>(hashes[i]) > std::get<0>(hashes[i-1]));
-			assert(std::get<1>(hashes[i]) > std::get<1>(hashes[i-1]));
-		}
-		std::lock_guard<std::mutex> lock { resultMutex };
-		for (size_t j = 0; j < hashes.size(); j++)
-		{
-			removedHashes.insert(removeHashesHere.begin(), removeHashesHere.end());
-			MBG::HashType totalhashfw = std::get<2>(hashes[j]);
-			MBG::HashType totalhashbw = (totalhashfw << (MBG::HashType)64) + (totalhashfw >> (MBG::HashType)64);
-//			if (totalhashfw == totalhashbw) continue;
-			uint64_t hash;
-			bool fw;
-			if (totalhashfw <= totalhashbw)
-			{
-				hash = totalhashfw + 3*(totalhashfw >> 64);
-				fw = true;
-			}
-			else
-			{
-				hash = totalhashbw + 3*(totalhashbw >> 64);
-				fw = false;
-			}
-			size_t node;
-			if (hashToNode.count(hash) == 0)
-			{
-				node = hashToNode.size();
-				hashToNode[hash] = node;
-			}
-			else
-			{
-				node = hashToNode.at(hash);
-			}
-			result[readIndex].emplace_back(std::get<0>(hashes[j]), std::get<1>(hashes[j]), node + (fw ? firstBitUint64_t : 0));
-		}
-	});
-	phmap::flat_hash_set<uint64_t> removedNodes;
-	for (MBG::HashType totalhashfw : removedHashes)
-	{
-		MBG::HashType totalhashbw = (totalhashfw << (MBG::HashType)64) + (totalhashfw >> (MBG::HashType)64);
-		uint64_t hash;
-		if (totalhashfw <= totalhashbw)
-		{
-			hash = totalhashfw + 3*(totalhashfw >> 64);
-		}
-		else
-		{
-			hash = totalhashbw + 3*(totalhashbw >> 64);
-		}
-		if (hashToNode.count(hash) == 0) continue;
-		uint64_t node = hashToNode.at(hash);
-		removedNodes.insert(node);
-	}
-	for (size_t i = 0; i < result.size(); i++)
-	{
-		if (result[i].size() == 0) continue;
-		if (std::get<1>(result[i].back()) + windowSize >= rawReadLengths[i])
-		{
-			if (i == 58059)
-			{
-				std::cerr << "end remove " << std::get<0>(result[i].back()) << " " << std::get<1>(result[i].back()) << " end" << std::endl;
-			}
-			if (removedNodes.count(std::get<2>(result[i].back()) & maskUint64_t) == 1)
-			{
-				result[i].pop_back();
-			}
-		}
-		if (result[i].size() == 0) continue;
-		if (std::get<0>(result[i][0]) < windowSize)
-		{
-			if (i == 58059)
-			{
-				std::cerr << "end remove " << std::get<0>(result[i][0]) << " " << std::get<1>(result[i][0]) << " start" << std::endl;
-			}
-			if (removedNodes.count(std::get<2>(result[i][0]) & maskUint64_t) == 1)
-			{
-				result[i].erase(result[i].begin());
-			}
-		}
-	}
 	return result;
 }
 

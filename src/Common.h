@@ -5,22 +5,15 @@
 #include <cstdint>
 #include <vector>
 #include <thread>
-#include "MBGCommon.h"
-#include "SparseEdgeContainer.h"
 #include "MostlySparse2DHashmap.h"
+#include "SparseEdgeContainer.h"
 
 const uint64_t firstBitUint64_t = 1ull << 63ull;
 const uint64_t maskUint64_t = firstBitUint64_t-1;
 
-inline auto reverse(auto x) -> decltype(MBG::reverse(x))
-{
-	return MBG::reverse(x);
-}
-
-inline auto canon(auto x, auto y) -> decltype(MBG::canon(x, y))
-{
-	return MBG::canon(x, y);
-}
+std::pair<size_t, bool> reverse(std::pair<size_t, bool> pos);
+std::pair<std::pair<size_t, bool>, std::pair<size_t, bool>> canon(std::pair<size_t, bool> from, std::pair<size_t, bool> to);
+std::string revCompRaw(const std::string& raw);
 
 class ReadPathBundle
 {
