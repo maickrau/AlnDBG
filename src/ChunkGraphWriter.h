@@ -19,5 +19,7 @@ void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile
 std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getBidirectedChunks(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& rawChunksPerRead);
 void writeUnitigSequences(const std::string& filename, const std::vector<ConsensusString>& sequences);
 void writeGraph(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead);
+void writeReadChunkSequences(const std::string& filename, const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex);
+void writeReadUnitigSequences(const std::string& filename, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& rawChunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage, const size_t kmerSize);
 
 #endif

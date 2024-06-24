@@ -5,6 +5,7 @@
 #include "ChunkGraphWriter.h"
 #include "EdlibWrapper.h"
 #include "KmerIterator.h"
+#include "SequenceHelper.h"
 
 void writeStage(const size_t stage, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t kmerSize)
 {
@@ -296,6 +297,60 @@ void writeGraph(const std::string& graphFile, const std::string& pathsFile, cons
 			}
 			uint64_t rawnode = std::get<2>(t);
 			pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
+		}
+	}
+}
+
+void writeReadChunkSequences(const std::string& filename, const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex)
+{
+	std::cerr << "writing read chunk sequences" << std::endl;
+	std::ofstream file { filename };
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			size_t chunk = std::get<2>(t) & maskUint64_t;
+			bool fw = std::get<2>(t) & firstBitUint64_t;
+			std::string seq = getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, i, j);
+			std::string name;
+			if (i < sequenceIndex.size())
+			{
+				name = sequenceIndex.getName(i);
+			}
+			else
+			{
+				name = sequenceIndex.getName(i - sequenceIndex.size()) + "_bw";
+			}
+			file << chunk << " " << name << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << seq << std::endl;
+		}
+	}
+}
+
+void writeReadUnitigSequences(const std::string& filename, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& rawChunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage, const size_t kmerSize)
+{
+	std::cerr << "writing read unitig sequences" << std::endl;
+	auto chunksPerRead = getBidirectedChunks(rawChunksPerRead);
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	std::ofstream file { filename };
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				size_t unitig = readPaths[i][j].path[k] & maskUint64_t;
+				bool fw = readPaths[i][j].path[k] & firstBitUint64_t;
+				std::string seq = sequenceIndex.getSubstring(i, readPaths[i][j].readPartInPathnode[k].first, readPaths[i][j].readPartInPathnode[k].second - readPaths[i][j].readPartInPathnode[k].first+1);
+				if (!fw) seq = revCompRaw(seq);
+				size_t unitigStart = 0;
+				size_t unitigEnd = graph.unitigLengths[unitig];
+				if (k == 0) unitigStart += readPaths[i][j].pathLeftClip;
+				if (k+1 == readPaths[i][j].path.size()) unitigEnd -= readPaths[i][j].pathRightClip;
+				file << unitig << " " << unitigStart << " " << unitigEnd << " " << sequenceIndex.getName(i) << " " << readPaths[i][j].readPartInPathnode[k].first << " " << (readPaths[i][j].readPartInPathnode[k].second - readPaths[i][j].readPartInPathnode[k].first) << " " << seq << std::endl;
+			}
 		}
 	}
 }
