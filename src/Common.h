@@ -18,6 +18,7 @@ bool NonexistantChunk(const uint64_t chunk);
 std::chrono::time_point<std::chrono::steady_clock> getTime();
 std::string formatTime(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end);
 extern std::chrono::time_point<std::chrono::steady_clock> programStartTime;
+extern double mismatchFraction; // global variables best variables
 
 class ReadPathBundle
 {
