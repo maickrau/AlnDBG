@@ -80,7 +80,7 @@ void countReadRepetitiveUnitigs(const std::vector<std::vector<std::tuple<size_t,
 	std::cerr << countRepetitive << " read-repetitive unitigs" << std::endl;
 }
 
-std::vector<std::pair<size_t, size_t>> getNoncontainedUniqueRanges(std::vector<std::pair<size_t, size_t>> raw)
+std::vector<std::pair<size_t, size_t>> getUniqueRanges(std::vector<std::pair<size_t, size_t>> raw)
 {
 	assert(raw.size() >= 1);
 	std::sort(raw.begin(), raw.end());
@@ -91,27 +91,6 @@ std::vector<std::pair<size_t, size_t>> getNoncontainedUniqueRanges(std::vector<s
 		raw.pop_back();
 	}
 	assert(raw.size() >= 1);
-	std::sort(raw.begin(), raw.end());
-	size_t longestExtent = raw[0].second;
-	std::vector<bool> contained;
-	contained.resize(raw.size(), false);
-	for (size_t j = 1; j < raw.size(); j++)
-	{
-		assert(raw[j].first >= raw[j-1].first);
-		if (raw[j].second <= longestExtent) contained[j] = true;
-		if (raw[j].first == raw[j-1].first)
-		{
-			assert(raw[j].second > raw[j-1].second);
-			contained[j-1] = true;
-		}
-		longestExtent = std::max(longestExtent, raw[j].second);
-	}
-	for (size_t j = raw.size()-1; j < raw.size(); j--)
-	{
-		if (!contained[j]) continue;
-		std::swap(raw[j], raw.back());
-		raw.pop_back();
-	}
 	std::sort(raw.begin(), raw.end());
 	return raw;
 }
@@ -185,12 +164,12 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 			chunksPerRead[i].clear();
 			continue;
 		}
-		newChunkmerRanges = getNoncontainedUniqueRanges(newChunkmerRanges);
+		newChunkmerRanges = getUniqueRanges(newChunkmerRanges);
 		assert(newChunkmerRanges.size() >= 1);
 		for (size_t j = 1; j < newChunkmerRanges.size(); j++)
 		{
-			assert(newChunkmerRanges[j].first > newChunkmerRanges[j-1].first);
-			assert(newChunkmerRanges[j].second > newChunkmerRanges[j-1].second);
+			assert(newChunkmerRanges[j].first >= newChunkmerRanges[j-1].first);
+			assert(newChunkmerRanges[j].second >= newChunkmerRanges[j-1].second);
 		}
 		std::vector<std::tuple<size_t, size_t, uint64_t>> newChunks;
 		for (size_t j = 0; j < newChunkmerRanges.size(); j++)

@@ -168,8 +168,8 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCo
 				coverages.resize((std::get<2>(chunksPerRead[i][j]) & maskUint64_t)+1, 0);
 				lengths.resize((std::get<2>(chunksPerRead[i][j]) & maskUint64_t)+1);
 			}
-			assert(j == 0 || std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
-			assert(j == 0 || std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
+			assert(j == 0 || std::get<0>(chunksPerRead[i][j]) >= std::get<0>(chunksPerRead[i][j-1]));
+			assert(j == 0 || std::get<1>(chunksPerRead[i][j]) >= std::get<1>(chunksPerRead[i][j-1]));
 			lengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t].emplace_back(std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]));
 		}
 	}
@@ -182,8 +182,8 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<size_t>> getLengthsAndCo
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
-			assert(j == 0 || std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
-			assert(j == 0 || std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
+			assert(j == 0 || std::get<0>(chunksPerRead[i][j]) >= std::get<0>(chunksPerRead[i][j-1]));
+			assert(j == 0 || std::get<1>(chunksPerRead[i][j]) >= std::get<1>(chunksPerRead[i][j-1]));
 			coverages[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] += 1;
 		}
 	}
@@ -199,8 +199,8 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeOverlaps(cons
 		{
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j-1]))) continue;
-			assert(std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
-			assert(std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
+			assert(std::get<0>(chunksPerRead[i][j]) >= std::get<0>(chunksPerRead[i][j-1]));
+			assert(std::get<1>(chunksPerRead[i][j]) >= std::get<1>(chunksPerRead[i][j-1]));
 			auto prev = std::get<2>(chunksPerRead[i][j-1]);
 			auto curr = std::get<2>(chunksPerRead[i][j]);
 			size_t overlap = 0;
@@ -228,8 +228,8 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getEdgeCoverages(con
 		{
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j-1]))) continue;
-			assert(std::get<0>(chunksPerRead[i][j]) > std::get<0>(chunksPerRead[i][j-1]));
-			assert(std::get<1>(chunksPerRead[i][j]) > std::get<1>(chunksPerRead[i][j-1]));
+			assert(std::get<0>(chunksPerRead[i][j]) >= std::get<0>(chunksPerRead[i][j-1]));
+			assert(std::get<1>(chunksPerRead[i][j]) >= std::get<1>(chunksPerRead[i][j-1]));
 			auto prev = std::get<2>(chunksPerRead[i][j-1]);
 			auto curr = std::get<2>(chunksPerRead[i][j]);
 			auto pairkey = canon(std::make_pair(prev & maskUint64_t, prev & firstBitUint64_t), std::make_pair(curr & maskUint64_t, curr & firstBitUint64_t));
@@ -428,7 +428,7 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 			}
 			if (currentUnitig == unitig && currentUnitigIndex+1 == unitigIndex)
 			{
-				assert(readEnd > readPartInPathnode.back().second);
+				assert(readEnd >= readPartInPathnode.back().second);
 				assert(graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos < currentPathRightClip);
 				currentUnitigIndex = unitigIndex;
 				readPartInPathnode.back().second = readEnd;
@@ -441,7 +441,7 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 				std::pair<size_t, bool> thisUnitig { unitig & maskUint64_t, unitig & firstBitUint64_t };
 				if (graph.edges.hasEdge(fromUnitig, thisUnitig))
 				{
-					assert(readEnd > readPartInPathnode.back().second);
+					assert(readEnd >= readPartInPathnode.back().second);
 					path.emplace_back(unitig);
 					readPartInPathnode.emplace_back(readStart, readEnd);
 					currentUnitig = unitig;
