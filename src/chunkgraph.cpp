@@ -390,6 +390,194 @@ void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t
 	}
 }
 
+std::pair<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>, bool> getChunkContext(const std::vector<std::tuple<size_t, size_t, uint64_t>>& chunks, const std::vector<size_t>& chunkLengths, const size_t j, const size_t expandedSize)
+{
+	std::pair<std::vector<uint64_t>, std::vector<uint64_t>> context;
+	bool valid = true;
+	assert(j < chunks.size());
+	if (NonexistantChunk(std::get<2>(chunks[j]))) return std::make_pair(context, false);
+	size_t leftoverPerSide = 0;
+	if (chunkLengths[std::get<2>(chunks[j]) & maskUint64_t] < expandedSize)
+	{
+		leftoverPerSide = (expandedSize - chunkLengths[std::get<2>(chunks[j]) & maskUint64_t]) / 2;
+	}
+	if (leftoverPerSide >= 1)
+	{
+		size_t leftoverLeftside = leftoverPerSide;
+		size_t leftAdd = 0;
+		while (leftoverLeftside >= 1)
+		{
+			if (j > leftAdd)
+			{
+				leftAdd += 1;
+				if (NonexistantChunk(std::get<2>(chunks[j-leftAdd])))
+				{
+					valid = false;
+					break;
+				}
+				context.first.emplace_back(std::get<2>(chunks[j-leftAdd]));
+				if (leftoverLeftside < chunkLengths[std::get<2>(chunks[j-leftAdd]) & maskUint64_t])
+				{
+					leftoverLeftside = 0;
+					break;
+				}
+				leftoverLeftside -= chunkLengths[std::get<2>(chunks[j-leftAdd]) & maskUint64_t];
+			}
+			else
+			{
+				valid = false;
+				break;
+			}
+		}
+		if (leftoverLeftside > 0) valid = false;
+		size_t leftoverRightside = leftoverPerSide;
+		size_t rightAdd = 0;
+		while (leftoverRightside >= 1)
+		{
+			if (j+rightAdd+1 < chunks.size())
+			{
+				rightAdd += 1;
+				if (NonexistantChunk(std::get<2>(chunks[j+rightAdd])))
+				{
+					valid = false;
+					break;
+				}
+				context.second.emplace_back(std::get<2>(chunks[j+rightAdd]));
+				if (leftoverRightside < chunkLengths[std::get<2>(chunks[j+rightAdd]) & maskUint64_t])
+				{
+					leftoverRightside = 0;
+					break;
+				}
+				leftoverRightside -= chunkLengths[std::get<2>(chunks[j+rightAdd]) & maskUint64_t];
+			}
+			else
+			{
+				valid = false;
+				break;
+			}
+		}
+		if (leftoverRightside > 0) valid = false;
+	}
+	return std::make_pair(context, valid);
+}
+
+bool contextMatches(const std::pair<std::vector<uint64_t>, std::vector<uint64_t>>& subcontext, const std::pair<std::vector<uint64_t>, std::vector<uint64_t>>& supercontext)
+{
+	if (subcontext.first.size() > supercontext.first.size()) return false;
+	if (subcontext.second.size() > supercontext.second.size()) return false;
+	for (size_t i = 0; i < subcontext.first.size(); i++)
+	{
+		if (subcontext.first[i] != supercontext.first[i]) return false;
+	}
+	for (size_t i = 0; i < subcontext.second.size(); i++)
+	{
+		if (subcontext.second[i] != supercontext.second[i]) return false;
+	}
+	return true;
+}
+
+void contextResolve(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t expandedSize)
+{
+	std::vector<size_t> chunkLengths;
+	{
+		std::vector<std::vector<size_t>> rawChunkLengths;
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+				size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+				size_t length = std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) + 1;
+				while (chunk >= rawChunkLengths.size()) rawChunkLengths.emplace_back();
+				rawChunkLengths[chunk].emplace_back(length);
+			}
+		}
+		chunkLengths.resize(rawChunkLengths.size());
+		for (size_t i = 0; i < rawChunkLengths.size(); i++)
+		{
+			assert(rawChunkLengths[i].size() >= 1);
+			std::sort(rawChunkLengths[i].begin(), rawChunkLengths[i].end());
+			chunkLengths[i] = rawChunkLengths[i][rawChunkLengths[i].size()/2];
+		}
+	}
+	std::vector<std::map<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>, size_t>> contextToNewChunk;
+	contextToNewChunk.resize(chunkLengths.size());
+	size_t nextNum = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
+			{
+				continue;
+			}
+			std::pair<std::vector<uint64_t>, std::vector<uint64_t>> context;
+			bool valid = true;
+			std::tie(context, valid) = getChunkContext(chunksPerRead[i], chunkLengths, j, expandedSize);
+			if (!valid) continue;
+			assert(std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t);
+			if (contextToNewChunk[std::get<2>(chunksPerRead[i][j]) & maskUint64_t].count(context) == 0)
+			{
+				contextToNewChunk[std::get<2>(chunksPerRead[i][j]) & maskUint64_t][context] = nextNum;
+				nextNum += 1;
+			}
+		}
+	}
+	phmap::flat_hash_map<uint64_t, size_t> unresolvedChunkMapping;
+	for (size_t i = 0; i < contextToNewChunk.size(); i++)
+	{
+		if (contextToNewChunk[i].size() != 0) continue;
+		unresolvedChunkMapping[i] = nextNum;
+		nextNum += 1;
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		std::vector<std::tuple<size_t, size_t, uint64_t>> newChunksHere;
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
+			{
+				newChunksHere.emplace_back(std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j]), std::numeric_limits<size_t>::max());
+				continue;
+			}
+			if (unresolvedChunkMapping.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 1)
+			{
+				newChunksHere.emplace_back(std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j]), unresolvedChunkMapping.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) + firstBitUint64_t);
+				continue;
+			}
+			std::pair<std::vector<uint64_t>, std::vector<uint64_t>> context;
+			bool valid = true;
+			std::tie(context, valid) = getChunkContext(chunksPerRead[i], chunkLengths, j, expandedSize);
+			if (valid)
+			{
+				assert(contextToNewChunk.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t).count(context) == 1);
+				newChunksHere.emplace_back(std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j]), contextToNewChunk.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t).at(context) + firstBitUint64_t);
+			}
+			else
+			{
+				size_t uniqueMatchingContext = std::numeric_limits<size_t>::max();
+				for (auto pair : contextToNewChunk.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t))
+				{
+					if (contextMatches(context, pair.first))
+					{
+						if (uniqueMatchingContext == std::numeric_limits<size_t>::max())
+						{
+							uniqueMatchingContext = pair.second;
+						}
+						else
+						{
+							uniqueMatchingContext = std::numeric_limits<size_t>::max();
+							break;
+						}
+					}
+				}
+				newChunksHere.emplace_back(std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j]), uniqueMatchingContext | firstBitUint64_t);
+			}
+		}
+		std::swap(chunksPerRead[i], newChunksHere);
+	}
+}
+
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t middleSkip, const size_t startStage)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
@@ -465,11 +653,12 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 5:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			expandChunks(chunksPerRead, kmerSize, 5000);
+			contextResolve(chunksPerRead, kmerSize, 1000);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(51, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 51:
-			resegmentChunks(chunksPerRead, rawReadLengths, approxOneHapCoverage, kmerSize);
+//			resegmentChunks(chunksPerRead, rawReadLengths, approxOneHapCoverage, kmerSize);
 			writeStage(52, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 52:
@@ -504,6 +693,12 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 9:
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			contextResolve(chunksPerRead, kmerSize, 2000);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeStage(91, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			[[fallthrough]];
+		case 91:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
