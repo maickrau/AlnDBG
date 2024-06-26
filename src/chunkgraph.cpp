@@ -205,6 +205,191 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 	}
 }
 
+void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t kmerSize)
+{
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	std::vector<bool> canMergeRight;
+	std::vector<bool> canMergeLeft;
+	std::vector<size_t> uniqueRight;
+	std::vector<size_t> uniqueLeft;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			while (canMergeLeft.size() < chunk) canMergeLeft.emplace_back(false);
+		}
+	}
+	canMergeRight.resize(canMergeLeft.size(), false);
+	uniqueRight.resize(canMergeLeft.size(), std::numeric_limits<size_t>::max());
+	uniqueLeft.resize(canMergeLeft.size(), std::numeric_limits<size_t>::max());
+	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
+	{
+		for (size_t j = 1; j < graph.chunksInUnitig[i].size(); j++)
+		{
+			if (graph.chunksInUnitig[i][j] & firstBitUint64_t)
+			{
+				canMergeLeft[graph.chunksInUnitig[i][j] & maskUint64_t] = true;
+				uniqueLeft[graph.chunksInUnitig[i][j] & maskUint64_t] = graph.chunksInUnitig[i][j-1];
+			}
+			else
+			{
+				canMergeRight[graph.chunksInUnitig[i][j] & maskUint64_t] = true;
+				uniqueRight[graph.chunksInUnitig[i][j] & maskUint64_t] = graph.chunksInUnitig[i][j-1] ^ firstBitUint64_t;
+			}
+			if (graph.chunksInUnitig[i][j-1] & firstBitUint64_t)
+			{
+				canMergeRight[graph.chunksInUnitig[i][j-1] & maskUint64_t] = true;
+				uniqueRight[graph.chunksInUnitig[i][j-1] & maskUint64_t] = graph.chunksInUnitig[i][j];
+			}
+			else
+			{
+				canMergeLeft[graph.chunksInUnitig[i][j-1] & maskUint64_t] = true;
+				uniqueLeft[graph.chunksInUnitig[i][j-1] & maskUint64_t] = graph.chunksInUnitig[i][j] ^ firstBitUint64_t;
+			}
+		}
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		if (chunksPerRead[i].size() == 0) continue;
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (j == 0 || NonexistantChunk(std::get<2>(chunksPerRead[i][j-1])))
+			{
+				if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t)
+				{
+					canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+				}
+				else
+				{
+					canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+				}
+			}
+			if (j+1 == chunksPerRead[i].size() || NonexistantChunk(std::get<2>(chunksPerRead[i][j+1])))
+			{
+				if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t)
+				{
+					canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+				}
+				else
+				{
+					canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+				}
+			}
+		}
+		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j-1]))) continue;
+			if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t)
+			{
+				if (canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
+				{
+					if (uniqueLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] != std::get<2>(chunksPerRead[i][j-1]))
+					{
+						canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+					}
+				}
+			}
+			else
+			{
+				if (canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
+				{
+					if (uniqueRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] != (std::get<2>(chunksPerRead[i][j-1]) ^ firstBitUint64_t))
+					{
+						canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+					}
+				}
+			}
+			if (std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t)
+			{
+				if (canMergeRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t])
+				{
+					if (uniqueRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] != std::get<2>(chunksPerRead[i][j]))
+					{
+						canMergeRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;
+					}
+				}
+			}
+			else
+			{
+				if (canMergeLeft[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t])
+				{
+					if (uniqueLeft[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] != (std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t))
+					{
+						canMergeLeft[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;
+					}
+				}
+			}
+		}
+	}
+	std::map<std::vector<uint64_t>, size_t> chunkmerToNewChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		if (chunksPerRead[i].size() == 0) continue;
+		std::vector<std::tuple<size_t, size_t, uint64_t>> newChunksHere;
+		size_t currentStart = 0;
+		size_t currentEnd = 0;
+		std::vector<uint64_t> currentMer;
+		currentMer.emplace_back(std::get<2>(chunksPerRead[i][0]));
+		for (size_t j = 1; j <= chunksPerRead[i].size(); j++)
+		{
+			assert(currentMer.size() >= 1);
+			assert(currentEnd == j-1);
+			bool canContinueMerge = true;
+			if (j == chunksPerRead[i].size() || NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || NonexistantChunk(currentMer.back()))
+			{
+				canContinueMerge = false;
+			}
+			else
+			{
+				if (currentMer.back() & firstBitUint64_t)
+				{
+					if (!canMergeRight[currentMer.back() & maskUint64_t]) canContinueMerge = false;
+				}
+				else
+				{
+					if (!canMergeLeft[currentMer.back() & maskUint64_t]) canContinueMerge = false;
+				}
+				if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t)
+				{
+					if (!canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) canContinueMerge = false;
+				}
+				else
+				{
+					if (!canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) canContinueMerge = false;
+				}
+			}
+			if (canContinueMerge)
+			{
+				currentEnd = j;
+				currentMer.emplace_back(std::get<2>(chunksPerRead[i][j]));
+				continue;
+			}
+			size_t newMer = std::numeric_limits<size_t>::max();
+			if (chunkmerToNewChunk.count(currentMer) == 1)
+			{
+				newMer = chunkmerToNewChunk.at(currentMer);
+			}
+			else
+			{
+				newMer = chunkmerToNewChunk.size();
+				chunkmerToNewChunk[currentMer] = newMer;
+			}
+			newChunksHere.emplace_back(std::get<0>(chunksPerRead[i][currentStart]), std::get<1>(chunksPerRead[i][currentEnd]), newMer + firstBitUint64_t);
+			currentMer.clear();
+			currentStart = j;
+			currentEnd = j;
+			if (j < chunksPerRead[i].size()) currentMer.emplace_back(std::get<2>(chunksPerRead[i][j]));
+		}
+		std::swap(chunksPerRead[i], newChunksHere);
+	}
+}
+
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t middleSkip, const size_t startStage)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
@@ -284,6 +469,10 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(51, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 51:
+			resegmentChunks(chunksPerRead, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeStage(52, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			[[fallthrough]];
+		case 52:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
