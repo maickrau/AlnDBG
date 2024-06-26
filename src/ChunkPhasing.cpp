@@ -740,9 +740,34 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 			phasingSite.resize(matrix[0].size(), false);
 			std::vector<size_t> phasedSoFar;
 			std::vector<size_t> notPhasedSoFar;
-			notPhasedSoFar.emplace_back(0);
-			for (size_t j = 1; j < matrix[0].size(); j++)
+			std::vector<bool> coveredCorrectedColumn;
+			size_t columnsInCorrectedCovered = 0;
+			coveredCorrectedColumn.resize(columns.size(), false);
+			for (size_t j = 0; j < columns.size(); j++)
 			{
+				size_t zeros = 0;
+				size_t ones = 0;
+				for (size_t k = 0; k < correctedMatrix.size(); k++)
+				{
+					assert(correctedMatrix[k].size() == correctedMatrix[0].size());
+					if (correctedMatrix[k].get(j))
+					{
+						ones += 1;
+					}
+					else
+					{
+						zeros += 1;
+					}
+				}
+				if (zeros >= 5 && ones >= 5)
+				{
+					coveredCorrectedColumn[j] = true;
+					columnsInCorrectedCovered += 1;
+				}
+			}
+			for (size_t j = 0; j < matrix[0].size(); j++)
+			{
+				if (!coveredCorrectedColumn[j]) continue;
 				for (auto k : phasedSoFar)
 				{
 					if (kmerLocation[j].first < kmerLocation[k].second+1 && kmerLocation[j].second + 1 > kmerLocation[k].first) continue;
@@ -805,7 +830,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 			if (keyToNode.size() == 1)
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
-				std::cerr << "corrected kmer splitted chunk with coverage " << chunkBeingDone.size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " informative " << columnsInInformative << " phasing sites " << numPhasingSites << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
+				std::cerr << "corrected kmer splitted chunk with coverage " << chunkBeingDone.size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " informative " << columnsInInformative << " corrected covered " << columnsInCorrectedCovered << " phasing sites " << numPhasingSites << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
 				chunksDoneProcessing.emplace_back();
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
@@ -821,7 +846,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
 				if (keyToNode.size() >= 2) countSplitted += 1;
-				std::cerr << "corrected kmer splitted chunk with coverage " << chunkBeingDone.size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " informative " << columnsInInformative << " phasing sites " << numPhasingSites << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
+				std::cerr << "corrected kmer splitted chunk with coverage " << chunkBeingDone.size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " informative " << columnsInInformative << " corrected covered " << columnsInCorrectedCovered << " phasing sites " << numPhasingSites << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
 				while (chunkResult.size() > 0)
 				{
 					chunksNeedProcessing.emplace_back();
