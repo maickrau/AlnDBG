@@ -324,7 +324,8 @@ void splitPerMinHashes(const FastaCompressor::CompressedStringIndex& sequenceInd
 	std::cerr << "splitting by minhash" << std::endl;
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, kmerSize, hashCount](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	auto oldChunks = chunksPerRead;
+	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, kmerSize, hashCount](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		phmap::flat_hash_map<size_t, size_t> parent;
 		std::vector<size_t> oneHashPerLocation;
@@ -378,6 +379,7 @@ void splitPerMinHashes(const FastaCompressor::CompressedStringIndex& sequenceInd
 			}
 		}
 	});
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 void resolveVerySmallNodes(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<size_t>& rawReadLengths, const size_t maxResolveSize, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize)
@@ -1163,7 +1165,8 @@ void resolveTinyNodesRecklessly(std::vector<std::vector<std::tuple<size_t, size_
 	size_t countResolved = 0;
 	size_t countResolvedTo = 0;
 	std::vector<std::tuple<size_t, size_t, size_t>> replacements;
-	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &countResolved, &countResolvedTo, &replacements, kmerSize](const size_t chunki, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	auto oldChunks = chunksPerRead;
+	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &countResolved, &countResolvedTo, &replacements, kmerSize](const size_t chunki, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		if (occurrencesPerChunk[chunki].size() <= 2)
 		{
@@ -1255,6 +1258,7 @@ void resolveTinyNodesRecklessly(std::vector<std::vector<std::tuple<size_t, size_
 		std::get<2>(chunksPerRead[std::get<0>(t)][std::get<1>(t)]) = std::get<2>(t) + (std::get<2>(chunksPerRead[std::get<0>(t)][std::get<1>(t)]) & firstBitUint64_t);
 	}
 	std::cerr << "tiny node resolution resolved " << countResolved << " chunks to " << countResolvedTo << " chunks" << std::endl;
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 void removeTinyProblemNodes(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)

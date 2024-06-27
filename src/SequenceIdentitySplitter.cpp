@@ -8,6 +8,7 @@
 #include "EdlibWrapper.h"
 #include "SequenceHelper.h"
 #include "TransitiveClosure.h"
+#include "CanonHelper.h"
 
 void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
@@ -17,7 +18,8 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 	size_t totalSplitted = 0;
 	size_t totalSplittedTo = 0;
 	std::mutex resultMutex;
-	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &totalSplitted, &totalSplittedTo, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	auto oldChunks = chunksPerRead;
+	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &totalSplitted, &totalSplittedTo, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		if (occurrencesPerChunk[i].size() < 1000)
 		{
@@ -72,12 +74,15 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 		}
 	});
 	std::cerr << "rough sequence identity splitting splitted " << totalSplitted << " chunks to " << totalSplittedTo << " chunks" << std::endl;
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting by sequence identity" << std::endl;
 	const size_t mismatchFloor = 10;
+	auto oldChunks = chunksPerRead;
+	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -85,6 +90,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 		{
 			auto t = chunksPerRead[i][j];
 			if (NonexistantChunk(std::get<2>(t))) continue;
+			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
 			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
@@ -92,6 +98,7 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 	std::vector<size_t> iterationOrder;
 	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
 	{
+		if (!canonical[i]) continue;
 		iterationOrder.emplace_back(i);
 	}
 	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
@@ -248,9 +255,10 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 		}
 	}
 	std::mutex resultMutex;
-	iterateMultithreaded(firstSmall, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &iterationOrder, &rawReadLengths, mismatchFloor](const size_t iterationIndex)
+	iterateMultithreaded(firstSmall, iterationOrder.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &iterationOrder, &rawReadLengths, &canonical, mismatchFloor](const size_t iterationIndex)
 	{
 		const size_t i = iterationOrder[iterationIndex];
+		if (!canonical[i]) return;
 		// {
 		// 	std::lock_guard<std::mutex> lock { resultMutex };
 		// 	std::cerr << "sequence identity split chunk " << i << " coverage " << occurrencesPerChunk[i].size() << std::endl;
@@ -335,4 +343,5 @@ void splitPerSequenceIdentity(const FastaCompressor::CompressedStringIndex& sequ
 			}
 		}
 	});
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }

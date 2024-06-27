@@ -32,7 +32,7 @@ void iterateCanonicalChunksByCoverage(const std::vector<std::vector<std::tuple<s
 		iterationOrder.emplace_back(i);
 	}
 	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&occurrencesPerChunk, &iterationOrder, callback](const size_t iterationIndex)
+	iterateMultithreaded(0, iterationOrder.size(), numThreads, [&occurrencesPerChunk, &iterationOrder, callback](const size_t iterationIndex)
 	{
 		callback(iterationOrder[iterationIndex], occurrencesPerChunk);
 	});
