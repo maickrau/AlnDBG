@@ -1509,6 +1509,7 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const size_t kmerSize)
 {
 	std::cerr << "splitting by interchunk phasing kmers" << std::endl;
+	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -1520,6 +1521,7 @@ void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex&
 			occurrencesPerChunk[std::get<2>(t)].emplace_back(i, j);
 		}
 	}
+	auto oldChunks = chunksPerRead;
 	std::vector<bool> repetitive;
 	repetitive.resize(occurrencesPerChunk.size(), false);
 	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
@@ -1532,6 +1534,11 @@ void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex&
 			readsHere.insert(t.first);
 		}
 		if (repeats >= 2) repetitive[i] = true;
+	}
+	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	{
+		if (canonical[i]) continue;
+		occurrencesPerChunk[i].clear();
 	}
 	phmap::flat_hash_map<uint64_t, phmap::flat_hash_set<uint64_t>> edges;
 	{
@@ -2086,11 +2093,13 @@ void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex&
 		}
 	});
 	std::cerr << "interchunk phasing kmers splitted " << countSplitted << " chunks" << std::endl;
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize)
 {
 	std::cerr << "splitting by diploid chunk with neighbors" << std::endl;
+	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
 	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
 	size_t maxChunk = 0;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -2100,10 +2109,12 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			auto t = chunksPerRead[i][j];
 			if (NonexistantChunk(std::get<2>(t))) continue;
 			maxChunk = std::max(maxChunk, std::get<2>(t) & maskUint64_t);
+			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t) + 1);
 			occurrencesPerChunk[std::get<2>(t)].emplace_back(i, j);
 		}
 	}
+	auto oldChunks = chunksPerRead;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
 	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
@@ -2753,4 +2764,5 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 		}
 	});
 	std::cerr << "diploid chunk with neighbors splitted " << countSplitted << " chunks" << std::endl;
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
