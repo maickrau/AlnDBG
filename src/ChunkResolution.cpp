@@ -7,6 +7,7 @@
 #include "ChunkUnitigGraph.h"
 #include "SequenceHelper.h"
 #include "KmerIterator.h"
+#include "CanonHelper.h"
 
 size_t findBiggestSmallerIndex(const std::vector<size_t>& nums, const size_t value)
 {
@@ -236,7 +237,8 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 	std::cerr << "splitting by base counts" << std::endl;
 	size_t nextNum = 0;
 	std::mutex resultMutex;
-	iterateChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	auto oldChunks = chunksPerRead;
+	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		std::vector<std::vector<size_t>> countsPerOccurrence;
 		countsPerOccurrence.resize(occurrencesPerChunk[i].size());
@@ -312,6 +314,7 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 			}
 		}
 	});
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 void splitPerMinHashes(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
