@@ -549,12 +549,30 @@ void sortAndInterleave(std::vector<RankBitvector>& correctedMatrix)
 	assert(pos == 65);
 }
 
+class ScopedCounterIncrementer
+{
+public:
+	ScopedCounterIncrementer(std::atomic<size_t>& counter) :
+	counter(counter)
+	{
+		counter += 1;
+	}
+	~ScopedCounterIncrementer()
+	{
+		counter -= 1;
+	}
+private:
+	std::atomic<size_t>& counter;
+};
+
 void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by corrected kmer phasing" << std::endl;
 	const size_t countNeighbors = 5;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
+	std::atomic<size_t> threadsRunning;
+	threadsRunning = 0;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksNeedProcessing;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksDoneProcessing;
 	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
@@ -572,16 +590,29 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
 	auto oldChunks = chunksPerRead;
-	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, countNeighbors, kmerSize](size_t dummy)
+	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, countNeighbors, kmerSize](size_t dummy)
 	{
 		while (true)
 		{
 			std::vector<std::pair<size_t, size_t>> chunkBeingDone;
+			bool gotOne = false;
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
-				if (chunksNeedProcessing.size() == 0) return;
-				std::swap(chunkBeingDone, chunksNeedProcessing.back());
-				chunksNeedProcessing.pop_back();
+				if (chunksNeedProcessing.size() >= 1)
+				{
+					std::swap(chunkBeingDone, chunksNeedProcessing.back());
+					chunksNeedProcessing.pop_back();
+					gotOne = true;
+				}
+				else
+				{
+					if (threadsRunning == 0) return;
+				}
+			}
+			if (!gotOne)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+				continue;
 			}
 			auto startTime = getTime();
 			if (chunkBeingDone.size() < 10)
@@ -592,6 +623,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
+			ScopedCounterIncrementer threadCounter { threadsRunning };
 			phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToColumn;
 			std::vector<RankBitvector> matrix; // doesn't actually use rank in any way, but exposes uint64 for bitparallel hamming distance calculation
 			std::vector<std::pair<size_t, size_t>> clusters;
@@ -870,22 +902,6 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 	std::cerr << "corrected kmer phasing splitted " << countSplitted << " chunks" << std::endl;
 	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
-
-class ScopedCounterIncrementer
-{
-public:
-	ScopedCounterIncrementer(std::atomic<size_t>& counter) :
-	counter(counter)
-	{
-		counter += 1;
-	}
-	~ScopedCounterIncrementer()
-	{
-		counter -= 1;
-	}
-private:
-	std::atomic<size_t>& counter;
-};
 
 void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
