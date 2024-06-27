@@ -7,6 +7,7 @@
 #include "KmerIterator.h"
 #include "ChunkUnitigGraph.h"
 #include "TransitiveClosure.h"
+#include "CanonHelper.h"
 
 void checkPhasablePair(const phmap::flat_hash_map<size_t, size_t>& bwForks, const phmap::flat_hash_map<size_t, size_t>& fwForks, std::vector<std::vector<size_t>>& phaseIdentities)
 {
@@ -556,18 +557,21 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 	std::mutex resultMutex;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksNeedProcessing;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksDoneProcessing;
+	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
 			if (NonexistantChunk(std::get<2>(t))) continue;
+			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= chunksNeedProcessing.size()) chunksNeedProcessing.resize((std::get<2>(t) & maskUint64_t)+1);
 			chunksNeedProcessing[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
 	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
+	auto oldChunks = chunksPerRead;
 	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, countNeighbors, kmerSize](size_t dummy)
 	{
 		while (true)
@@ -864,6 +868,7 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 		}
 	}
 	std::cerr << "corrected kmer phasing splitted " << countSplitted << " chunks" << std::endl;
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 class ScopedCounterIncrementer
@@ -891,6 +896,7 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 	std::atomic<size_t> threadsRunning;
 	threadsRunning = 0;
 	std::mutex resultMutex;
+	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksNeedProcessing;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksDoneProcessing;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -899,12 +905,14 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 		{
 			auto t = chunksPerRead[i][j];
 			if (NonexistantChunk(std::get<2>(t))) continue;
+			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= chunksNeedProcessing.size()) chunksNeedProcessing.resize((std::get<2>(t) & maskUint64_t)+1);
 			chunksNeedProcessing[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
 	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
+	auto oldChunks = chunksPerRead;
 	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, countNeighbors, countDifferences, kmerSize](size_t dummy)
 	{
 		while (true)
@@ -1121,6 +1129,7 @@ void splitPerNearestNeighborPhasing(const FastaCompressor::CompressedStringIndex
 		}
 	}
 	std::cerr << "nearest neighbor phasing splitted " << countSplitted << " chunks" << std::endl;
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
@@ -1129,6 +1138,7 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 	size_t countSplitted = 0;
 	size_t countSplittedTo = 0;
 	std::mutex resultMutex;
+	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksNeedProcessing;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksDoneProcessing;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -1137,12 +1147,14 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 		{
 			auto t = chunksPerRead[i][j];
 			if (NonexistantChunk(std::get<2>(t))) continue;
+			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= chunksNeedProcessing.size()) chunksNeedProcessing.resize((std::get<2>(t) & maskUint64_t)+1);
 			chunksNeedProcessing[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
 	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
+	auto oldChunks = chunksPerRead;
 	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &countSplittedTo, &rawReadLengths, kmerSize](size_t dummy)
 	{
 		while (true)
@@ -1287,6 +1299,7 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 		}
 	}
 	std::cerr << "allele phasing splitted " << countSplitted << " chunks to " << countSplittedTo << std::endl;
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
@@ -1296,18 +1309,21 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 	std::mutex resultMutex;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksNeedProcessing;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksDoneProcessing;
+	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
 			if (NonexistantChunk(std::get<2>(t))) continue;
+			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= chunksNeedProcessing.size()) chunksNeedProcessing.resize((std::get<2>(t) & maskUint64_t)+1);
 			chunksNeedProcessing[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
 	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
+	auto oldChunks = chunksPerRead;
 	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, kmerSize](size_t dummy)
 	{
 		while (true)
@@ -1471,6 +1487,7 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 		}
 	}
 	std::cerr << "phasing kmers splitted " << countSplitted << " chunks" << std::endl;
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const size_t kmerSize)
