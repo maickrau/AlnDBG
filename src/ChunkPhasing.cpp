@@ -575,21 +575,21 @@ void splitPerCorrectedKmerClustering(const FastaCompressor::CompressedStringInde
 	threadsRunning = 0;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksNeedProcessing;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunksDoneProcessing;
-//	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
+	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			auto t = chunksPerRead[i][j];
 			if (NonexistantChunk(std::get<2>(t))) continue;
-//			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
+			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= chunksNeedProcessing.size()) chunksNeedProcessing.resize((std::get<2>(t) & maskUint64_t)+1);
 			chunksNeedProcessing[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
 	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
-//	auto oldChunks = chunksPerRead;
+	auto oldChunks = chunksPerRead;
 	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, countNeighbors, kmerSize](size_t dummy)
 	{
 		while (true)
@@ -838,7 +838,7 @@ void splitPerCorrectedKmerClustering(const FastaCompressor::CompressedStringInde
 		}
 	}
 	std::cerr << "corrected kmer clustering splitted " << countSplitted << " chunks" << std::endl;
-//	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
