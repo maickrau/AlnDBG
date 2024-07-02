@@ -565,6 +565,282 @@ private:
 	std::atomic<size_t>& counter;
 };
 
+void splitPerCorrectedKmerClustering(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+{
+	std::cerr << "splitting by corrected kmer clustering" << std::endl;
+	const size_t countNeighbors = 5;
+	size_t countSplitted = 0;
+	std::mutex resultMutex;
+	std::atomic<size_t> threadsRunning;
+	threadsRunning = 0;
+	std::vector<std::vector<std::pair<size_t, size_t>>> chunksNeedProcessing;
+	std::vector<std::vector<std::pair<size_t, size_t>>> chunksDoneProcessing;
+//	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
+//			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
+			if ((std::get<2>(t) & maskUint64_t) >= chunksNeedProcessing.size()) chunksNeedProcessing.resize((std::get<2>(t) & maskUint64_t)+1);
+			chunksNeedProcessing[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
+		}
+	}
+	// biggest on top so starts processing first
+	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
+//	auto oldChunks = chunksPerRead;
+	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, countNeighbors, kmerSize](size_t dummy)
+	{
+		while (true)
+		{
+			std::vector<std::pair<size_t, size_t>> chunkBeingDone;
+			bool gotOne = false;
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				if (chunksNeedProcessing.size() >= 1)
+				{
+					std::swap(chunkBeingDone, chunksNeedProcessing.back());
+					chunksNeedProcessing.pop_back();
+					gotOne = true;
+				}
+				else
+				{
+					if (threadsRunning == 0) return;
+				}
+			}
+			if (!gotOne)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+				continue;
+			}
+			auto startTime = getTime();
+			if (chunkBeingDone.size() < 10)
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				chunksDoneProcessing.emplace_back();
+				std::cerr << "corrected kmer clustering skipped chunk with coverage " << chunkBeingDone.size() << std::endl;
+				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
+				continue;
+			}
+			ScopedCounterIncrementer threadCounter { threadsRunning };
+			phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> kmerClusterToColumn;
+			std::vector<RankBitvector> matrix; // doesn't actually use rank in any way, but exposes uint64 for bitparallel hamming distance calculation
+			std::vector<std::pair<size_t, size_t>> clusters;
+			matrix.resize(chunkBeingDone.size());
+			std::vector<TwobitString> chunkSequences;
+			for (size_t j = 0; j < chunkBeingDone.size(); j++)
+			{
+				chunkSequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
+			}
+			auto validClusters = iterateSolidKmers(chunkSequences, kmerSize, 5, true, true, [&kmerClusterToColumn, &clusters, &matrix](size_t occurrenceID, size_t chunkStartPos, size_t chunkEndPos, uint64_t node, size_t kmer, size_t clusterIndex, size_t pos)
+			{
+				assert(occurrenceID < matrix.size());
+				size_t column = std::numeric_limits<size_t>::max();
+				if (kmerClusterToColumn.count(std::make_pair(kmer, clusterIndex)) == 1)
+				{
+					column = kmerClusterToColumn.at(std::make_pair(kmer, clusterIndex));
+				}
+				else
+				{
+					column = kmerClusterToColumn.size();
+					kmerClusterToColumn[std::make_pair(kmer, clusterIndex)] = column;
+					clusters.emplace_back(std::make_pair(kmer, clusterIndex));
+				}
+				if (matrix[occurrenceID].size() <= column)
+				{
+					assert(column < kmerClusterToColumn.size());
+					matrix[occurrenceID].resize(kmerClusterToColumn.size());
+				}
+				assert(!matrix[occurrenceID].get(column));
+				matrix[occurrenceID].set(column, true);
+			});
+			std::vector<std::pair<double, double>> kmerLocation;
+			kmerLocation.resize(clusters.size(), std::make_pair(-1, -1));
+			for (auto pair : kmerClusterToColumn)
+			{
+				size_t index = pair.second;
+				assert(kmerLocation[index].first == -1);
+				kmerLocation[index] = validClusters.at(pair.first.first)[pair.first.second];
+			}
+			for (size_t i = 0; i < kmerLocation.size(); i++)
+			{
+				assert(kmerLocation[i].first != -1);
+			}
+			for (size_t j = 0; j < matrix.size(); j++)
+			{
+				if (matrix[j].size() == kmerClusterToColumn.size()) continue;
+				assert(matrix[j].size() < kmerClusterToColumn.size());
+				matrix[j].resize(kmerClusterToColumn.size());
+			}
+			size_t columnsInUnfiltered = matrix[0].size();
+			std::vector<bool> covered;
+			covered.resize(matrix[0].size(), false);
+			size_t columnsInCovered = 0;
+			std::vector<RankBitvector> columns;
+			columns.resize(matrix[0].size());
+			for (size_t j = 0; j < matrix[0].size(); j++)
+			{
+				columns[j].resize(matrix.size());
+				size_t zeros = 0;
+				size_t ones = 0;
+				for (size_t k = 0; k < matrix.size(); k++)
+				{
+					assert(matrix[k].size() == matrix[0].size());
+					columns[j].set(k, matrix[k].get(j));
+					if (matrix[k].get(j))
+					{
+						ones += 1;
+					}
+					else
+					{
+						zeros += 1;
+					}
+				}
+				if (zeros >= 5 && ones >= 5)
+				{
+					covered[j] = true;
+					columnsInCovered += 1;
+				}
+			}
+			if (columnsInCovered < 2)
+			{
+				auto endTime = getTime();
+				std::lock_guard<std::mutex> lock { resultMutex };
+				std::cerr << "corrected kmer clustering skipped chunk with coverage " << chunkBeingDone.size() << " columns " << columnsInUnfiltered << " due to covered " << columnsInCovered << " time " << formatTime(startTime, endTime) << std::endl;
+				chunksDoneProcessing.emplace_back();
+				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
+				continue;
+			}
+			std::vector<bool> informativeSite;
+			informativeSite.resize(matrix[0].size(), false);
+			assert(clusters.size() == informativeSite.size());
+			assert(clusters.size() == kmerClusterToColumn.size());
+			for (size_t j = 0; j < informativeSite.size(); j++)
+			{
+				if (!covered[j]) continue;
+				for (size_t k = 0; k < j; k++)
+				{
+					if (!covered[k]) continue;
+					if (informativeSite[j] && informativeSite[k]) continue;
+					assert(validClusters.at(clusters[j].first).size() > clusters[j].second);
+					assert(validClusters.at(clusters[k].first).size() > clusters[k].second);
+					if (validClusters.at(clusters[j].first)[clusters[j].second].first < validClusters.at(clusters[k].first)[clusters[k].second].second + 1)
+					{
+						if (validClusters.at(clusters[j].first)[clusters[j].second].second + 1 > validClusters.at(clusters[k].first)[clusters[k].second].first)
+						{
+							continue;
+						}
+					}
+					if (siteIsInformative(columns, j, k) || siteIsInformative(columns, k, j))
+					{
+						informativeSite[j] = true;
+						informativeSite[k] = true;
+					}
+				}
+			}
+			size_t columnsInInformative = 0;
+			for (size_t j = 0; j < informativeSite.size(); j++)
+			{
+				if (informativeSite[j]) columnsInInformative += 1;
+			}
+			if (columnsInInformative < 2)
+			{
+				auto endTime = getTime();
+				std::lock_guard<std::mutex> lock { resultMutex };
+				std::cerr << "corrected kmer clustering skipped chunk with coverage " << chunkBeingDone.size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " due to informative " << columnsInInformative << " time " << formatTime(startTime, endTime) << std::endl;
+				chunksDoneProcessing.emplace_back();
+				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
+				continue;
+			}
+			filterVector(columns, informativeSite);
+			filterVector(kmerLocation, informativeSite);
+			filterMatrix(matrix, informativeSite);
+			std::vector<RankBitvector> correctedMatrix = getCorrectedMatrix(matrix, countNeighbors);
+			assert(correctedMatrix.size() == matrix.size());
+			assert(correctedMatrix.size() == chunkBeingDone.size());
+			std::vector<size_t> pairwiseHammingDistances;
+			pairwiseHammingDistances.resize(columns.size()+1);
+			for (size_t j = 1; j < matrix.size(); j++)
+			{
+				for (size_t k = 0; k < j; k++)
+				{
+					size_t distance = getHammingdistance(correctedMatrix[j], correctedMatrix[k], pairwiseHammingDistances.size());
+					assert(distance < pairwiseHammingDistances.size());
+					pairwiseHammingDistances[distance] += 1;
+				}
+			}
+			size_t clusteringDistance = 0;
+			for (size_t j = 0; j < pairwiseHammingDistances.size(); j++)
+			{
+				if (pairwiseHammingDistances[j] > pairwiseHammingDistances[clusteringDistance]) clusteringDistance = j;
+			}
+			clusteringDistance *= 2;
+			clusteringDistance += 1;
+			std::vector<size_t> parent;
+			for (size_t i = 0; i < matrix.size(); i++)
+			{
+				parent.emplace_back(i);
+			}
+			for (size_t j = 1; j < matrix.size(); j++)
+			{
+				for (size_t k = 0; k < j; k++)
+				{
+					if (find(parent, j) == find(parent, k)) continue;
+					size_t distance = getHammingdistance(correctedMatrix[j], correctedMatrix[k], clusteringDistance+1);
+					if (distance <= clusteringDistance) merge(parent, j, k);
+				}
+			}
+			auto endTime = getTime();
+			size_t nextNum = 0;
+			phmap::flat_hash_map<size_t, size_t> keyToNode;
+			for (size_t j = 0; j < parent.size(); j++)
+			{
+				size_t key = find(parent, j);
+				if (keyToNode.count(key) == 1) continue;
+				keyToNode[key] = nextNum;
+				nextNum += 1;
+			}
+			if (keyToNode.size() == 1)
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				std::cerr << "corrected kmer clustering splitted chunk with coverage " << chunkBeingDone.size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " informative " << columnsInInformative << " clustering distance " << clusteringDistance << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
+				chunksDoneProcessing.emplace_back();
+				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
+				continue;
+			}
+			std::vector<std::vector<std::pair<size_t, size_t>>> chunkResult;
+			chunkResult.resize(keyToNode.size());
+			for (size_t j = 0; j < parent.size(); j++)
+			{
+				chunkResult[keyToNode.at(find(parent, j))].emplace_back(chunkBeingDone[j]);
+			}
+			// sort smallest last, so emplace-pop-swap puts biggest on top of chunksNeedProcessing
+			std::sort(chunkResult.begin(), chunkResult.end(), [](const auto& left, const auto& right) { return left.size() > right.size(); });
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				if (keyToNode.size() >= 2) countSplitted += 1;
+				std::cerr << "corrected kmer clustering splitted chunk with coverage " << chunkBeingDone.size() << " columns " << columnsInUnfiltered << " covered " << columnsInCovered << " informative " << columnsInInformative << " clustering distance " << clusteringDistance << " to " << keyToNode.size() << " chunks time " << formatTime(startTime, endTime) << std::endl;
+				while (chunkResult.size() > 0)
+				{
+					chunksNeedProcessing.emplace_back();
+					std::swap(chunksNeedProcessing.back(), chunkResult.back());
+					chunkResult.pop_back();
+				}
+			}
+		}
+	});
+	for (size_t i = 0; i < chunksDoneProcessing.size(); i++)
+	{
+		for (auto pair : chunksDoneProcessing[i])
+		{
+			std::get<2>(chunksPerRead[pair.first][pair.second]) = i + (std::get<2>(chunksPerRead[pair.first][pair.second]) & firstBitUint64_t);
+		}
+	}
+	std::cerr << "corrected kmer clustering splitted " << countSplitted << " chunks" << std::endl;
+//	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
+}
+
 void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by corrected kmer phasing" << std::endl;
