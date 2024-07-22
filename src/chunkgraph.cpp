@@ -655,13 +655,13 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		case 5:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			contextResolve(chunksPerRead, kmerSize, 1000);
-			expandChunks(chunksPerRead, kmerSize, 5000);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(51, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+//			expandChunks(chunksPerRead, kmerSize, 5000);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			writeStage(51, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 51:
-			resegmentChunks(chunksPerRead, rawReadLengths, approxOneHapCoverage, kmerSize);
-			writeStage(52, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+//			resegmentChunks(chunksPerRead, rawReadLengths, approxOneHapCoverage, kmerSize);
+//			writeStage(52, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 52:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;

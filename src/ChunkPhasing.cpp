@@ -1089,12 +1089,12 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 						phasingSite[k] = true;
 						break;
 					}
-					else if (siteIsPhasedTwoVariantsThreeHaps(columns, j, k))
+/*					else if (siteIsPhasedTwoVariantsThreeHaps(columns, j, k))
 					{
 						phasingSite[j] = true;
 						phasingSite[k] = true;
 						break;
-					}
+					}*/
 				}
 				for (size_t kindex = notPhasedSoFar.size()-1; kindex < notPhasedSoFar.size(); kindex--)
 				{
@@ -1108,14 +1108,14 @@ void splitPerCorrectedKmerPhasing(const FastaCompressor::CompressedStringIndex& 
 						std::swap(notPhasedSoFar[kindex], notPhasedSoFar.back());
 						notPhasedSoFar.pop_back();
 					}
-					else if (siteIsPhasedTwoVariantsThreeHaps(columns, j, k))
+/*					else if (siteIsPhasedTwoVariantsThreeHaps(columns, j, k))
 					{
 						phasingSite[j] = true;
 						phasingSite[k] = true;
 						phasedSoFar.emplace_back(k);
 						std::swap(notPhasedSoFar[kindex], notPhasedSoFar.back());
 						notPhasedSoFar.pop_back();
-					}
+					}*/
 				}
 				if (phasingSite[j])
 				{
