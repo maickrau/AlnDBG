@@ -579,6 +579,79 @@ void contextResolve(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 	}
 }
 
+void mergeFakeBubbles(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
+{
+	std::vector<std::vector<size_t>> lengths;
+	std::vector<size_t> coverages;
+	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeCoverage = getEdgeCoverages(chunksPerRead);
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
+	std::vector<bool> allowedNode;
+	SparseEdgeContainer allowedEdges;
+	std::tie(allowedNode, allowedEdges) = getAllowedNodesAndEdges(coverages, edgeCoverage, chunksPerRead);
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> merges;
+	phmap::flat_hash_set<size_t> removeNodes;
+	for (size_t i = 0; i < allowedNode.size(); i++)
+	{
+		if (!allowedNode[i]) continue;
+		if (allowedEdges.getEdges(std::make_pair(i, true)).size() != 1) continue;
+		if (allowedEdges.getEdges(std::make_pair(i, false)).size() != 1) continue;
+		std::pair<size_t, bool> bubbleStartPair = allowedEdges.getEdges(std::make_pair(i, false))[0];
+		assert(!bubbleStartPair.second);
+		std::pair<size_t, bool> bubbleEndPair = allowedEdges.getEdges(std::make_pair(i, true))[0];
+		assert(bubbleEndPair.second);
+		size_t bubbleStart = bubbleStartPair.first;
+		size_t bubbleEnd = bubbleEndPair.first;
+		assert(allowedNode[bubbleStart]);
+		assert(allowedNode[bubbleEnd]);
+		if (allowedEdges.getEdges(std::make_pair(bubbleStart, true)).size() != 2) continue;
+		if (allowedEdges.getEdges(std::make_pair(bubbleEnd, false)).size() != 2) continue;
+		size_t otherAlleleFirst = std::numeric_limits<size_t>::max();;
+		size_t otherAlleleSecond = std::numeric_limits<size_t>::max();
+		for (auto edge : allowedEdges.getEdges(std::make_pair(bubbleStart, true)))
+		{
+			assert(edge.second);
+			if (edge.first == i) continue;
+			otherAlleleFirst = edge.first;
+		}
+		for (auto edge : allowedEdges.getEdges(std::make_pair(bubbleEnd, false)))
+		{
+			assert(!edge.second);
+			if (edge.first == i) continue;
+			otherAlleleSecond = edge.first;
+		}
+		if (allowedEdges.getEdges(std::make_pair(otherAlleleFirst, false)).size() != 1) continue;
+		if (allowedEdges.getEdges(std::make_pair(otherAlleleFirst, true)).size() != 1) continue;
+		if (allowedEdges.getEdges(std::make_pair(otherAlleleSecond, false)).size() != 1) continue;
+		if (allowedEdges.getEdges(std::make_pair(otherAlleleSecond, true)).size() != 1) continue;
+		if (allowedEdges.getEdges(std::make_pair(otherAlleleFirst, true))[0] != std::make_pair(otherAlleleSecond, true)) continue;
+		size_t alleleLength = lengths[i][lengths[i].size()/2];
+		size_t otherAlleleLength = lengths[otherAlleleFirst][lengths[otherAlleleFirst].size()/2] + lengths[otherAlleleSecond][lengths[otherAlleleSecond].size()/2] - kmerSize;
+		if (alleleLength + 50 < otherAlleleLength) continue;
+		if (alleleLength > otherAlleleLength + 50) continue;
+//		std::cerr << "merge " << otherAlleleFirst << " " << otherAlleleSecond << " into " << i << std::endl;
+		merges[std::make_pair(otherAlleleFirst, otherAlleleSecond)] = i;
+		removeNodes.insert(otherAlleleFirst);
+		removeNodes.insert(otherAlleleSecond);
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		if (chunksPerRead[i].size() == 0) continue;
+		for (size_t j = chunksPerRead[i].size()-1; j > 0; j--)
+		{
+			if (merges.count(std::make_pair(std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t, std::get<2>(chunksPerRead[i][j]) & maskUint64_t)) == 0) continue;
+			chunksPerRead[i].emplace_back(std::get<0>(chunksPerRead[i][j-1]), std::get<1>(chunksPerRead[i][j]), merges.at(std::make_pair(std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t, std::get<2>(chunksPerRead[i][j]) & maskUint64_t)) + firstBitUint64_t);
+		}
+		for (size_t j = chunksPerRead[i].size()-1; j < chunksPerRead[i].size(); j--)
+		{
+			if (removeNodes.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 0) continue;
+			std::swap(chunksPerRead[i][j], chunksPerRead[i].back());
+			chunksPerRead[i].pop_back();
+		}
+		std::sort(chunksPerRead[i].begin(), chunksPerRead[i].end());
+	}
+}
+
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t middleSkip, const size_t startStage)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
@@ -607,6 +680,8 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			}
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize);
 			splitPerLength(chunksPerRead, numThreads);
+			writeStage(0, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			mergeFakeBubbles(chunksPerRead, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(1, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
