@@ -700,10 +700,10 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 2:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerMinHashes(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(3, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			splitPerMinHashes(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			writeStage(3, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 3:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -751,8 +751,8 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		case 6:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			splitPerPhasingKmersWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(7, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			writeStage(7, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 7:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -767,14 +767,14 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		case 8:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			splitPerCorrectedKmerClustering(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(81, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			writeStage(81, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 81:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			splitPerCorrectedKmerPhasing(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(82, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			writeStage(82, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 82:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
