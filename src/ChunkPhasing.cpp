@@ -583,6 +583,153 @@ private:
 	std::atomic<size_t>& counter;
 };
 
+bool allelesMatchApproximately(const std::vector<std::vector<size_t>>& left, const std::vector<std::vector<size_t>>& right)
+{
+	assert(left.size() >= 1);
+	assert(right.size() >= 1);
+	if (left.size() < 2) return false;
+	if (right.size() < 2) return false;
+	if (left[0].size() < 10) return false;
+	if (right[0].size() < 10) return false;
+	if (left[1].size() < 10) return false;
+	if (right[1].size() < 10) return false;
+	if (left.size() > right.size() && left[right.size()].size() >= 10) return false;
+	if (right.size() > left.size() && right[left.size()].size() >= 10) return false;
+	for (size_t i = 0; i < left.size() && i < right.size(); i++)
+	{
+		if (left[i].size() < right[i].size() * 0.95) return false;
+		if (right[i].size() < left[i].size() * 0.95) return false;
+		if (left[i].size() < 10) break;
+		if (right[i].size() < 10) break;
+	}
+	for (size_t i = 0; i < left.size() && i < right.size(); i++)
+	{
+		size_t intersect = intersectSize(left[i], right[i]);
+		if (intersect < left[i].size() * 0.95) return false;
+		if (intersect < right[i].size() * 0.95) return false;
+		if (left[i].size() < 10) break;
+		if (right[i].size() < 10) break;
+	}
+	return true;
+}
+
+std::vector<std::vector<uint8_t>> filterByOccurrenceLinkage(const std::vector<std::vector<uint8_t>>& unfiltered)
+{
+	assert(unfiltered.size() >= 1);
+	assert(unfiltered[0].size() >= 1);
+	std::vector<std::vector<std::vector<size_t>>> readsPerAllelePerSite;
+	readsPerAllelePerSite.resize(unfiltered[0].size());
+	for (size_t i = 0; i < unfiltered[0].size(); i++)
+	{
+		phmap::flat_hash_map<uint8_t, uint8_t> alleleToIndex;
+		for (size_t j = 0; j < unfiltered.size(); j++)
+		{
+			if (unfiltered[j][i] == '-') continue;
+			assert(unfiltered[j].size() == unfiltered[0].size());
+			if (alleleToIndex.count(unfiltered[j][i]) == 0)
+			{
+				alleleToIndex[unfiltered[j][i]] = readsPerAllelePerSite[i].size();
+				readsPerAllelePerSite[i].emplace_back();
+			}
+		}
+		for (size_t j = 0; j < unfiltered.size(); j++)
+		{
+			if (unfiltered[j][i] == '-') continue;
+			readsPerAllelePerSite[i][alleleToIndex.at(unfiltered[j][i])].emplace_back(j);
+		}
+		std::sort(readsPerAllelePerSite[i].begin(), readsPerAllelePerSite[i].end(), [](const auto& left, const auto& right) { return left.size() > right.size(); });
+		for (size_t j = 0; j < readsPerAllelePerSite[i].size(); j++)
+		{
+			std::sort(readsPerAllelePerSite[i][j].begin(), readsPerAllelePerSite[i][j].end());
+		}
+	}
+	std::vector<size_t> possibleSites;
+	for (size_t i = 0; i < unfiltered[0].size(); i++)
+	{
+		if (readsPerAllelePerSite[i].size() < 2) continue;
+		if (readsPerAllelePerSite[i][1].size() < 10) continue;
+		possibleSites.emplace_back(i);
+	}
+	std::sort(possibleSites.begin(), possibleSites.end(), [&readsPerAllelePerSite](const size_t left, const size_t right) { return readsPerAllelePerSite[left][0].size() > readsPerAllelePerSite[right][0].size(); });
+	std::vector<bool> covered;
+	covered.resize(unfiltered[0].size(), false);
+	for (size_t i = 0; i < possibleSites.size(); i++)
+	{
+		for (size_t j = i+1; j < possibleSites.size(); j++)
+		{
+			assert(readsPerAllelePerSite[possibleSites[j]][0].size() <= readsPerAllelePerSite[possibleSites[i]][0].size());
+			if (readsPerAllelePerSite[possibleSites[j]][0].size() < readsPerAllelePerSite[possibleSites[i]][0].size() * 0.95) break;
+			if (possibleSites[j] + 10 > possibleSites[i] && possibleSites[j] < possibleSites[i] + 10) continue;
+			if (covered[possibleSites[i]] && covered[possibleSites[j]]) continue;
+			if (allelesMatchApproximately(readsPerAllelePerSite[possibleSites[i]], readsPerAllelePerSite[possibleSites[j]]))
+			{
+				covered[possibleSites[i]] = true;
+				covered[possibleSites[j]] = true;
+			}
+		}
+	}
+	std::vector<std::vector<uint8_t>> result = unfiltered;
+	for (size_t i = 0; i < result.size(); i++)
+	{
+		filterVector(result[i], covered);
+	}
+	return result;
+}
+
+void checkPairPhasingGroups(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const size_t firstIndex, const size_t secondIndex, std::vector<std::vector<size_t>>& pairPhasingGroups)
+{
+	phmap::flat_hash_set<std::pair<uint8_t, uint8_t>> alleles;
+	for (size_t i = 0; i < readFakeMSABases.size(); i++)
+	{
+		alleles.emplace(readFakeMSABases[i][firstIndex], readFakeMSABases[i][secondIndex]);
+	}
+	phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, std::pair<uint8_t, uint8_t>> parent;
+	for (auto pair : alleles)
+	{
+		parent[pair] = pair;
+	}
+	for (auto pair : alleles)
+	{
+		for (auto pair2 : alleles)
+		{
+			if (pair == pair2) continue;
+			if (pair.first != pair2.first && pair.second != pair2.second) continue;
+			merge(parent, pair, pair2);
+		}
+	}
+	phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, size_t> keyToNode;
+	size_t nextNum = 0;
+	for (auto pair : alleles)
+	{
+		if (keyToNode.count(find(parent, pair)) == 0)
+		{
+			keyToNode[find(parent, pair)] = nextNum;
+			nextNum += 1;
+		}
+	}
+	assert(nextNum >= 1);
+	if (nextNum < 2) return;
+	for (size_t i = 0; i < readFakeMSABases.size(); i++)
+	{
+		std::pair<uint8_t, uint8_t> key { readFakeMSABases[i][firstIndex], readFakeMSABases[i][secondIndex] };
+		pairPhasingGroups[i].emplace_back(keyToNode.at(find(parent, key)));
+	}
+}
+
+std::vector<std::vector<size_t>> getPairPhasingGroups(const std::vector<std::vector<uint8_t>>& readFakeMSABases)
+{
+	std::vector<std::vector<size_t>> result;
+	result.resize(readFakeMSABases.size());
+	for (size_t j = 0; j < readFakeMSABases[0].size(); j++)
+	{
+		for (size_t k = j+1; k < readFakeMSABases[0].size(); k++)
+		{
+			checkPairPhasingGroups(readFakeMSABases, j, k, result);
+		}
+	}
+	return result;
+}
+
 void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting by SNP transitive closure clustering" << std::endl;
@@ -641,10 +788,10 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
-			// {
-			// 	std::lock_guard<std::mutex> lock { resultMutex };
-			// 	std::cerr << "begin chunk with coverage " << chunkBeingDone.size() << std::endl;
-			// }
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				std::cerr << "begin chunk with coverage " << chunkBeingDone.size() << std::endl;
+			}
 			ScopedCounterIncrementer threadCounter { threadsRunning };
 			phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>> readAnchorPoints;
 			size_t lengthSum = 0;
@@ -717,8 +864,8 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
-			std::vector<std::vector<uint8_t>> readFakeMSABases;
-			readFakeMSABases.resize(chunkBeingDone.size());
+			std::vector<std::vector<uint8_t>> unfilteredReadFakeMSABases;
+			unfilteredReadFakeMSABases.resize(chunkBeingDone.size());
 			bool anyAlignmentError = false;
 			size_t totalMismatches = 0;
 			size_t sequenceLengthSum = 0;
@@ -741,7 +888,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				totalMismatches += result.editDistance;
 				size_t consensusPos = 0;
 				size_t seqPos = 0;
-				readFakeMSABases[j].resize(consensusSeq.size(), 'N');
+				unfilteredReadFakeMSABases[j].resize(consensusSeq.size(), 'N');
 				assert(result.alignmentLength >= std::max(consensusSeq.size(), seqHere.size()));
 				for (size_t k = 0; k < result.alignmentLength; k++)
 				{
@@ -751,7 +898,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 						assert(seqPos < seqHere.size());
 						assert(consensusPos < consensusSeq.size());
 						assert(seqHere[seqPos] == consensusSeq[consensusPos]);
-						readFakeMSABases[j][consensusPos] = seqHere[seqPos];
+						unfilteredReadFakeMSABases[j][consensusPos] = seqHere[seqPos];
 						seqPos += 1;
 						consensusPos += 1;
 						continue;
@@ -761,14 +908,14 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 						continue;
 					case 2:
 						assert(consensusPos < consensusSeq.size());
-						readFakeMSABases[j][consensusPos] = '-';
+						unfilteredReadFakeMSABases[j][consensusPos] = '-';
 						consensusPos += 1;
 						continue;
 					case 3:
 						assert(seqPos < seqHere.size());
 						assert(consensusPos < consensusSeq.size());
 						assert(seqHere[seqPos] != consensusSeq[consensusPos]);
-						readFakeMSABases[j][consensusPos] = seqHere[seqPos];
+						unfilteredReadFakeMSABases[j][consensusPos] = seqHere[seqPos];
 						seqPos += 1;
 						consensusPos += 1;
 						continue;
@@ -779,9 +926,9 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				assert(seqPos == seqHere.size());
 				assert(consensusPos == consensusSeq.size());
 				edlibFreeAlignResult(result);
-				for (size_t k = 0; k < readFakeMSABases[j].size(); k++)
+				for (size_t k = 0; k < unfilteredReadFakeMSABases[j].size(); k++)
 				{
-					assert(readFakeMSABases[j][k] != 'N');
+					assert(unfilteredReadFakeMSABases[j][k] != 'N');
 				}
 			}
 			if (anyAlignmentError)
@@ -793,7 +940,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				continue;
 			}
 			double estimatedAverageErrorRate = (double)totalMismatches/(double)sequenceLengthSum; // not really error rate, actually error+divergence rate
-			assert(readFakeMSABases.size() == chunkBeingDone.size());
+			assert(unfilteredReadFakeMSABases.size() == chunkBeingDone.size());
 			std::vector<bool> coveredSite;
 			coveredSite.resize(consensusSeq.size(), false);
 			size_t countCovered = 0;
@@ -805,10 +952,10 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			for (size_t j = 0; j < consensusSeq.size(); j++)
 			{
 				phmap::flat_hash_map<uint8_t, uint32_t> counts;
-				for (size_t k = 0; k < readFakeMSABases.size(); k++)
+				for (size_t k = 0; k < unfilteredReadFakeMSABases.size(); k++)
 				{
-					assert(readFakeMSABases[k].size() == consensusSeq.size());
-					counts[readFakeMSABases[k][j]] += 1;
+					assert(unfilteredReadFakeMSABases[k].size() == consensusSeq.size());
+					counts[unfilteredReadFakeMSABases[k][j]] += 1;
 				}
 				if (counts.size() < 2) continue;
 				size_t countSolid = 0;
@@ -823,10 +970,26 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				coveredSite[j] = true;
 				countCovered += 1;
 			}
+			std::vector<std::vector<uint8_t>> readFakeMSABases = unfilteredReadFakeMSABases;
+			bool filtered = false;
 			auto filterTime = getTime();
 			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
 				filterVector(readFakeMSABases[j], coveredSite);
+			}
+			if (readFakeMSABases[0].size() < 2 || chunkBeingDone.size() == 50441)
+			{
+				filtered = true;
+//				{
+//					std::lock_guard<std::mutex> lock { resultMutex };
+//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " begin filter stage 1" << std::endl;
+//				}
+				readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
+//				{
+//					std::lock_guard<std::mutex> lock { resultMutex };
+//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did filter stage 1 from " << countCovered << " to " << readFakeMSABases[0].size() << " covered, sites " << consensusSeq.size() << std::endl;
+//				}
+				countCovered = readFakeMSABases[0].size();
 			}
 			if (readFakeMSABases[0].size() < 2)
 			{
@@ -846,10 +1009,10 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			}
 			std::vector<size_t> parent;
 			size_t maxEdits = countCovered * mismatchFraction + 1;
-			// {
-			// 	std::lock_guard<std::mutex> lock { resultMutex };
-			// 	std::cerr << "chunk with coverage " << chunkBeingDone.size() << " get transitive closure time " << formatTime(startTime, getTime()) << std::endl;
-			// }
+//			{
+//				std::lock_guard<std::mutex> lock { resultMutex };
+//				std::cerr << "chunk with coverage " << chunkBeingDone.size() << " get transitive closure time " << formatTime(startTime, getTime()) << std::endl;
+//			}
 			parent = getFastTransitiveClosure(chunkBeingDone.size(), maxEdits, [&readFakeMSABases](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(readFakeMSABases[i], readFakeMSABases[j], maxDist); });
 			auto transitiveClosureTime = getTime();
 			size_t nextNum = 0;
@@ -860,6 +1023,58 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				if (keyToNode.count(key) == 1) continue;
 				keyToNode[key] = nextNum;
 				nextNum += 1;
+			}
+			if (keyToNode.size() == 1 && !filtered)
+			{
+//				{
+//					std::lock_guard<std::mutex> lock { resultMutex };
+//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " begin filter stage 2" << std::endl;
+//				}
+				filtered = true;
+				readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
+//				{
+//					std::lock_guard<std::mutex> lock { resultMutex };
+//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did filter stage 2 from " << countCovered << " to " << readFakeMSABases[0].size() << " covered, sites " << consensusSeq.size() << std::endl;
+//				}
+				countCovered = readFakeMSABases[0].size();
+				maxEdits = countCovered * mismatchFraction + 1;
+				parent = getFastTransitiveClosure(chunkBeingDone.size(), maxEdits, [&readFakeMSABases](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(readFakeMSABases[i], readFakeMSABases[j], maxDist); });
+				nextNum = 0;
+				keyToNode.clear();
+				for (size_t j = 0; j < parent.size(); j++)
+				{
+					size_t key = find(parent, j);
+					if (keyToNode.count(key) == 1) continue;
+					keyToNode[key] = nextNum;
+					nextNum += 1;
+				}
+			}
+			if (keyToNode.size() == 1)
+			{
+				assert(filtered);
+//				{
+//					std::lock_guard<std::mutex> lock { resultMutex };
+//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " do pair phasing" << std::endl;
+//				}
+				std::vector<std::vector<size_t>> pairPhasingGroups = getPairPhasingGroups(readFakeMSABases);
+//				{
+//					std::lock_guard<std::mutex> lock { resultMutex };
+//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did pair phasing, num groups " << pairPhasingGroups[0].size() << std::endl;
+//				}
+				if (pairPhasingGroups[0].size() >= 1)
+				{
+					parent = getFastTransitiveClosure(chunkBeingDone.size(), 0, [&pairPhasingGroups](const size_t i, const size_t j, const size_t maxEdits) { return (pairPhasingGroups[i] == pairPhasingGroups[j]) ? 0 : 1; });
+					nextNum = 0;
+					keyToNode.clear();
+					for (size_t j = 0; j < parent.size(); j++)
+					{
+						size_t key = find(parent, j);
+						if (keyToNode.count(key) == 1) continue;
+						keyToNode[key] = nextNum;
+						nextNum += 1;
+					}
+					assert(keyToNode.size() >= 2);
+				}
 			}
 			auto endTime = getTime();
 			if (keyToNode.size() == 1)
@@ -888,7 +1103,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
 				if (keyToNode.size() >= 2) countSplitted += 1;
-				std::cerr << "SNP transitive closure clustering splitted chunk with coverage " << chunkBeingDone.size() << " to " << keyToNode.size() << " chunks, sites: " << consensusSeq.size() << " covered: " << countCovered << " maxedits: " << maxEdits << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
+				std::cerr << "SNP transitive closure clustering splitted chunk with coverage " << chunkBeingDone.size() << " to " << keyToNode.size() << " chunks, biggest chunk size: " << chunkResult[0].size() << ", sites: " << consensusSeq.size() << " covered: " << countCovered << " maxedits: " << maxEdits << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
 				// std::cerr << "times " << formatTime(startTime, getSequencesTime) << " " << formatTime(getSequencesTime, getConsensusTime) << " " << formatTime(getConsensusTime, alignTime) << " " << formatTime(alignTime, getCoveredTime) << " " << formatTime(getCoveredTime, filterTime) << " " << formatTime(filterTime, transitiveClosureTime) << " " << formatTime(transitiveClosureTime, endTime) << std::endl;
 /*				std::cerr << "sites:";
 				for (size_t k = 0; k < coveredSite.size(); k++)
