@@ -676,6 +676,60 @@ std::vector<std::vector<uint8_t>> filterByOccurrenceLinkage(const std::vector<st
 	return result;
 }
 
+void checkPairPhasingGroupsDiscardSingletons(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const size_t firstIndex, const size_t secondIndex, std::vector<std::vector<size_t>>& pairPhasingGroups)
+{
+	phmap::flat_hash_set<std::pair<uint8_t, uint8_t>> alleles;
+	phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, size_t> alleleCoverage;
+	for (size_t i = 0; i < readFakeMSABases.size(); i++)
+	{
+		alleles.emplace(readFakeMSABases[i][firstIndex], readFakeMSABases[i][secondIndex]);
+		alleleCoverage[std::make_pair(readFakeMSABases[i][firstIndex], readFakeMSABases[i][secondIndex])] += 1;
+	}
+	phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, std::pair<uint8_t, uint8_t>> parent;
+	for (auto pair : alleles)
+	{
+		if (alleleCoverage.at(pair) == 1) continue;
+		parent[pair] = pair;
+	}
+	for (auto pair : alleles)
+	{
+		if (alleleCoverage.at(pair) == 1) continue;
+		for (auto pair2 : alleles)
+		{
+			if (alleleCoverage.at(pair2) == 1) continue;
+			if (pair == pair2) continue;
+			if (pair.first != pair2.first && pair.second != pair2.second) continue;
+			merge(parent, pair, pair2);
+		}
+	}
+	phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, size_t> keyToNode;
+	size_t nextNum = 0;
+	for (auto pair : alleles)
+	{
+		if (alleleCoverage.at(pair) == 1) continue;
+		if (keyToNode.count(find(parent, pair)) == 0)
+		{
+			keyToNode[find(parent, pair)] = nextNum;
+			nextNum += 1;
+		}
+	}
+	assert(nextNum >= 1);
+	if (nextNum < 2) return;
+	for (size_t i = 0; i < readFakeMSABases.size(); i++)
+	{
+		std::pair<uint8_t, uint8_t> key { readFakeMSABases[i][firstIndex], readFakeMSABases[i][secondIndex] };
+		if (alleleCoverage.at(key) == 1)
+		{
+			pairPhasingGroups[i].emplace_back(nextNum);
+			nextNum += 1;
+		}
+		else
+		{
+			pairPhasingGroups[i].emplace_back(keyToNode.at(find(parent, key)));
+		}
+	}
+}
+
 void checkPairPhasingGroups(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const size_t firstIndex, const size_t secondIndex, std::vector<std::vector<size_t>>& pairPhasingGroups)
 {
 	phmap::flat_hash_set<std::pair<uint8_t, uint8_t>> alleles;
@@ -714,6 +768,21 @@ void checkPairPhasingGroups(const std::vector<std::vector<uint8_t>>& readFakeMSA
 		std::pair<uint8_t, uint8_t> key { readFakeMSABases[i][firstIndex], readFakeMSABases[i][secondIndex] };
 		pairPhasingGroups[i].emplace_back(keyToNode.at(find(parent, key)));
 	}
+}
+
+std::vector<std::vector<size_t>> getPairPhasingGroupsDiscardSingletons(const std::vector<std::vector<uint8_t>>& readFakeMSABases)
+{
+	std::vector<std::vector<size_t>> result;
+	result.resize(readFakeMSABases.size());
+	for (size_t j = 0; j < readFakeMSABases[0].size(); j++)
+	{
+		for (size_t k = j+1; k < readFakeMSABases[0].size(); k++)
+		{
+			checkPairPhasingGroupsDiscardSingletons(readFakeMSABases, j, k, result);
+			if (result[0].size() > 0) return result;
+		}
+	}
+	return result;
 }
 
 std::vector<std::vector<size_t>> getPairPhasingGroups(const std::vector<std::vector<uint8_t>>& readFakeMSABases)
@@ -790,7 +859,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			}
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
-				std::cerr << "begin chunk with coverage " << chunkBeingDone.size() << std::endl;
+				std::cerr << "SNP transitive closure clustering begin chunk with coverage " << chunkBeingDone.size() << std::endl;
 			}
 			ScopedCounterIncrementer threadCounter { threadsRunning };
 			phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>> readAnchorPoints;
@@ -977,7 +1046,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			{
 				filterVector(readFakeMSABases[j], coveredSite);
 			}
-			if (readFakeMSABases[0].size() < 2 || chunkBeingDone.size() == 50441)
+			if (readFakeMSABases[0].size() < 2)
 			{
 				filtered = true;
 //				{
@@ -1024,6 +1093,35 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				keyToNode[key] = nextNum;
 				nextNum += 1;
 			}
+			if (keyToNode.size() == 1)
+			{
+				size_t smallerDist = countCovered * estimatedAverageErrorRate + 1;
+//				{
+//					std::lock_guard<std::mutex> lock { resultMutex };
+//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " check smaller dist " << smallerDist << " vs " << maxEdits << " time " << formatTime(startTime, getTime()) << std::endl;
+//				}
+				if (smallerDist < maxEdits && chunkBeingDone.size() > 1000)
+				{
+//					{
+//						std::lock_guard<std::mutex> lock { resultMutex };
+//						std::cerr << "chunk with coverage " << chunkBeingDone.size() << " get transitive closure with smaller dist " << smallerDist << " time " << formatTime(startTime, getTime()) << std::endl;
+//					}
+					parent = getFastTransitiveClosure(chunkBeingDone.size(), smallerDist, [&readFakeMSABases](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(readFakeMSABases[i], readFakeMSABases[j], maxDist); });
+					nextNum = 0;
+					keyToNode.clear();
+					for (size_t j = 0; j < parent.size(); j++)
+					{
+						size_t key = find(parent, j);
+						if (keyToNode.count(key) == 1) continue;
+						keyToNode[key] = nextNum;
+						nextNum += 1;
+					}
+//					{
+//						std::lock_guard<std::mutex> lock { resultMutex };
+//						std::cerr << "chunk with coverage " << chunkBeingDone.size() << " clusters " << keyToNode.size() << " with smaller dist " << smallerDist << " time  " << formatTime(startTime, getTime()) << std::endl;
+//					}
+				}
+			}
 			if (keyToNode.size() == 1 && !filtered)
 			{
 //				{
@@ -1061,6 +1159,14 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 //					std::lock_guard<std::mutex> lock { resultMutex };
 //					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did pair phasing, num groups " << pairPhasingGroups[0].size() << std::endl;
 //				}
+				if (pairPhasingGroups[0].size() == 0 && chunkBeingDone.size() > 1000)
+				{
+					pairPhasingGroups = getPairPhasingGroupsDiscardSingletons(readFakeMSABases);
+//					{
+//						std::lock_guard<std::mutex> lock { resultMutex };
+//						std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did pair phasing discard singletons, num groups " << pairPhasingGroups[0].size() << std::endl;
+//					}
+				}
 				if (pairPhasingGroups[0].size() >= 1)
 				{
 					parent = getFastTransitiveClosure(chunkBeingDone.size(), 0, [&pairPhasingGroups](const size_t i, const size_t j, const size_t maxEdits) { return (pairPhasingGroups[i] == pairPhasingGroups[j]) ? 0 : 1; });
