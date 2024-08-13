@@ -38,6 +38,7 @@ public:
 };
 
 SparseEdgeContainer getActiveEdges(const MostlySparse2DHashmap<uint8_t, size_t>& edges, const size_t numNodes);
+size_t intersectSize(const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right);
 size_t intersectSize(const std::vector<size_t>& left, const std::vector<size_t>& right);
 
 template <typename F>

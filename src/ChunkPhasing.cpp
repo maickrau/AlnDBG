@@ -799,6 +799,107 @@ std::vector<std::vector<size_t>> getPairPhasingGroups(const std::vector<std::vec
 	return result;
 }
 
+std::tuple<std::vector<std::vector<uint8_t>>, size_t, size_t> getSNPMSA(const std::vector<std::string>& strings)
+{
+	std::vector<std::vector<uint8_t>> readSNPMSA;
+	std::string consensusSeq;
+	{
+		phmap::flat_hash_map<std::string, size_t> sequenceCount;
+		for (size_t j = 0; j < strings.size(); j++)
+		{
+			sequenceCount[strings[j]] += 1;
+		}
+		if (sequenceCount.size() >= 2)
+		{
+			consensusSeq = getConsensus(sequenceCount, strings.size());
+		}
+		else
+		{
+			return std::make_tuple(readSNPMSA, 0, 0);
+		}
+	}
+	bool hasNonATCG = false;
+	for (size_t j = 0; j < consensusSeq.size(); j++)
+	{
+		if (consensusSeq[j] != 'A' && consensusSeq[j] != 'C' && consensusSeq[j] != 'T' && consensusSeq[j] != 'G')
+		{
+			hasNonATCG = true;
+			break;
+		}
+	}
+	if (hasNonATCG)
+	{
+		std::cerr << "ERROR SNP transitive closure clustering skipped chunk with coverage " << strings.size() << " NON-ATCG IN CONSENSUS: " << consensusSeq << std::endl;
+		return std::make_tuple(readSNPMSA, 0, 0);
+	}
+	readSNPMSA.resize(strings.size());
+	bool anyAlignmentError = false;
+	size_t totalMismatches = 0;
+	size_t sequenceLengthSum = 0;
+	for (size_t j = 0; j < strings.size(); j++)
+	{
+		sequenceLengthSum += strings[j].size();
+		EdlibAlignResult result = edlibAlign(strings[j].data(), strings[j].size(), consensusSeq.data(), consensusSeq.size(), edlibNewAlignConfig(std::max(consensusSeq.size(), strings[j].size()), EDLIB_MODE_NW, EDLIB_TASK_PATH, NULL, 0));
+		if (result.status != EDLIB_STATUS_OK)
+		{
+			anyAlignmentError = true;
+			edlibFreeAlignResult(result);
+			break;
+		}
+		totalMismatches += result.editDistance;
+		size_t consensusPos = 0;
+		size_t seqPos = 0;
+		readSNPMSA[j].resize(consensusSeq.size(), 'N');
+		assert(result.alignmentLength >= std::max(consensusSeq.size(), strings[j].size()));
+		for (size_t k = 0; k < result.alignmentLength; k++)
+		{
+			switch(result.alignment[k])
+			{
+			case 0:
+				assert(seqPos < strings[j].size());
+				assert(consensusPos < consensusSeq.size());
+				assert(strings[j][seqPos] == consensusSeq[consensusPos]);
+				readSNPMSA[j][consensusPos] = strings[j][seqPos];
+				seqPos += 1;
+				consensusPos += 1;
+				continue;
+			case 1:
+				assert(seqPos < strings[j].size());
+				seqPos += 1;
+				continue;
+			case 2:
+				assert(consensusPos < consensusSeq.size());
+				readSNPMSA[j][consensusPos] = '-';
+				consensusPos += 1;
+				continue;
+			case 3:
+				assert(seqPos < strings[j].size());
+				assert(consensusPos < consensusSeq.size());
+				assert(strings[j][seqPos] != consensusSeq[consensusPos]);
+				readSNPMSA[j][consensusPos] = strings[j][seqPos];
+				seqPos += 1;
+				consensusPos += 1;
+				continue;
+			default:
+				assert(false);
+			}
+		}
+		assert(seqPos == strings[j].size());
+		assert(consensusPos == consensusSeq.size());
+		edlibFreeAlignResult(result);
+		for (size_t k = 0; k < readSNPMSA[j].size(); k++)
+		{
+			assert(readSNPMSA[j][k] != 'N');
+		}
+	}
+	if (anyAlignmentError)
+	{
+		std::cerr << "ERROR SNP transitive closure clustering skipped chunk with coverage " << strings.size() << " EDLIB ERROR" << std::endl;
+		readSNPMSA.clear();
+	}
+	return std::make_tuple(std::move(readSNPMSA), totalMismatches, sequenceLengthSum);
+}
+
 void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	std::cerr << "splitting by SNP transitive closure clustering" << std::endl;
@@ -877,153 +978,43 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
-			std::string consensusSeq;
-			auto getSequencesTime = getTime();
-			auto getConsensusTime = getTime();
-			{
-				phmap::flat_hash_map<std::string, size_t> sequenceCount;
-				// {
-				// 	std::lock_guard<std::mutex> lock { resultMutex };
-				// 	std::cerr << "chunk with coverage " << chunkBeingDone.size() << " get sequences time " << formatTime(startTime, getTime()) << std::endl;
-				// }
-				for (size_t j = 0; j < chunkBeingDone.size(); j++)
-				{
-					sequenceCount[getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second)] += 1;
-				}
-				getConsensusTime = getTime();
-				// {
-				// 	std::lock_guard<std::mutex> lock { resultMutex };
-				// 	std::cerr << "chunk with coverage " << chunkBeingDone.size() << " get consensus time " << formatTime(startTime, getTime()) << std::endl;
-				// }
-				if (sequenceCount.size() >= 2)
-				{
-					consensusSeq = getConsensus(sequenceCount, chunkBeingDone.size());
-				}
-				else
-				{
-					std::lock_guard<std::mutex> lock { resultMutex };
-					chunksDoneProcessing.emplace_back();
-					std::cerr << "SNP transitive closure clustering skipped chunk with coverage " << chunkBeingDone.size() << " length " << chunkLength << " all sequences identical" << std::endl;
-					std::swap(chunksDoneProcessing.back(), chunkBeingDone);
-					continue;
-				}
-			}
-			if (consensusSeq.size() < chunkLength * 0.5 || consensusSeq.size() > chunkLength * 1.5)
-			{
-				std::lock_guard<std::mutex> lock { resultMutex };
-				chunksDoneProcessing.emplace_back();
-				std::cerr << "ERROR SNP transitive closure clustering skipped chunk with coverage " << chunkBeingDone.size() << " WRONG LENGTH " << chunkLength << " vs " << consensusSeq.size() << std::endl;
-				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
-				continue;
-			}
-			bool hasNonATCG = false;
-			for (size_t j = 0; j < consensusSeq.size(); j++)
-			{
-				if (consensusSeq[j] != 'A' && consensusSeq[j] != 'C' && consensusSeq[j] != 'T' && consensusSeq[j] != 'G')
-				{
-					hasNonATCG = true;
-					break;
-				}
-			}
-			if (hasNonATCG)
-			{
-				std::lock_guard<std::mutex> lock { resultMutex };
-				chunksDoneProcessing.emplace_back();
-				std::cerr << "ERROR SNP transitive closure clustering skipped chunk with coverage " << chunkBeingDone.size() << " NON-ATCG IN CONSENSUS: " << consensusSeq << std::endl;
-				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
-				continue;
-			}
 			std::vector<std::vector<uint8_t>> unfilteredReadFakeMSABases;
-			unfilteredReadFakeMSABases.resize(chunkBeingDone.size());
-			bool anyAlignmentError = false;
 			size_t totalMismatches = 0;
 			size_t sequenceLengthSum = 0;
-			auto alignTime = getTime();
-			// {
-			// 	std::lock_guard<std::mutex> lock { resultMutex };
-			// 	std::cerr << "chunk with coverage " << chunkBeingDone.size() << " start alignments time " << formatTime(startTime, getTime()) << std::endl;
-			// }
-			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
-				std::string seqHere = getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second);
-				sequenceLengthSum += seqHere.size();
-				EdlibAlignResult result = edlibAlign(seqHere.data(), seqHere.size(), consensusSeq.data(), consensusSeq.size(), edlibNewAlignConfig(std::max(consensusSeq.size(), seqHere.size()), EDLIB_MODE_NW, EDLIB_TASK_PATH, NULL, 0));
-				if (result.status != EDLIB_STATUS_OK)
+				std::vector<std::string> strings;
+				for (size_t j = 0; j < chunkBeingDone.size(); j++)
 				{
-					anyAlignmentError = true;
-					edlibFreeAlignResult(result);
-					break;
+					strings.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
 				}
-				totalMismatches += result.editDistance;
-				size_t consensusPos = 0;
-				size_t seqPos = 0;
-				unfilteredReadFakeMSABases[j].resize(consensusSeq.size(), 'N');
-				assert(result.alignmentLength >= std::max(consensusSeq.size(), seqHere.size()));
-				for (size_t k = 0; k < result.alignmentLength; k++)
-				{
-					switch(result.alignment[k])
-					{
-					case 0:
-						assert(seqPos < seqHere.size());
-						assert(consensusPos < consensusSeq.size());
-						assert(seqHere[seqPos] == consensusSeq[consensusPos]);
-						unfilteredReadFakeMSABases[j][consensusPos] = seqHere[seqPos];
-						seqPos += 1;
-						consensusPos += 1;
-						continue;
-					case 1:
-						assert(seqPos < seqHere.size());
-						seqPos += 1;
-						continue;
-					case 2:
-						assert(consensusPos < consensusSeq.size());
-						unfilteredReadFakeMSABases[j][consensusPos] = '-';
-						consensusPos += 1;
-						continue;
-					case 3:
-						assert(seqPos < seqHere.size());
-						assert(consensusPos < consensusSeq.size());
-						assert(seqHere[seqPos] != consensusSeq[consensusPos]);
-						unfilteredReadFakeMSABases[j][consensusPos] = seqHere[seqPos];
-						seqPos += 1;
-						consensusPos += 1;
-						continue;
-					default:
-						assert(false);
-					}
-				}
-				assert(seqPos == seqHere.size());
-				assert(consensusPos == consensusSeq.size());
-				edlibFreeAlignResult(result);
-				for (size_t k = 0; k < unfilteredReadFakeMSABases[j].size(); k++)
-				{
-					assert(unfilteredReadFakeMSABases[j][k] != 'N');
-				}
+				std::tie(unfilteredReadFakeMSABases, totalMismatches, sequenceLengthSum) = getSNPMSA(strings);
 			}
-			if (anyAlignmentError)
+			if (unfilteredReadFakeMSABases.size() == 0)
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
 				chunksDoneProcessing.emplace_back();
-				std::cerr << "ERROR SNP transitive closure clustering skipped chunk with coverage " << chunkBeingDone.size() << " EDLIB ERROR" << std::endl;
+				std::cerr << "ERROR SNP transitive closure clustering skipped chunk with coverage " << chunkBeingDone.size() << std::endl;
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
+			size_t consensusLength = unfilteredReadFakeMSABases[0].size();
+			assert(unfilteredReadFakeMSABases.size() == chunkBeingDone.size());
 			double estimatedAverageErrorRate = (double)totalMismatches/(double)sequenceLengthSum; // not really error rate, actually error+divergence rate
 			assert(unfilteredReadFakeMSABases.size() == chunkBeingDone.size());
 			std::vector<bool> coveredSite;
-			coveredSite.resize(consensusSeq.size(), false);
+			coveredSite.resize(consensusLength, false);
 			size_t countCovered = 0;
 			auto getCoveredTime = getTime();
 			// {
 			// 	std::lock_guard<std::mutex> lock { resultMutex };
 			// 	std::cerr << "chunk with coverage " << chunkBeingDone.size() << " get covered bases time " << formatTime(startTime, getTime()) << std::endl;
 			// }
-			for (size_t j = 0; j < consensusSeq.size(); j++)
+			for (size_t j = 0; j < consensusLength; j++)
 			{
 				phmap::flat_hash_map<uint8_t, uint32_t> counts;
 				for (size_t k = 0; k < unfilteredReadFakeMSABases.size(); k++)
 				{
-					assert(unfilteredReadFakeMSABases[k].size() == consensusSeq.size());
+					assert(unfilteredReadFakeMSABases[k].size() == consensusLength);
 					counts[unfilteredReadFakeMSABases[k][j]] += 1;
 				}
 				if (counts.size() < 2) continue;
@@ -1056,7 +1047,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
 //				{
 //					std::lock_guard<std::mutex> lock { resultMutex };
-//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did filter stage 1 from " << countCovered << " to " << readFakeMSABases[0].size() << " covered, sites " << consensusSeq.size() << std::endl;
+//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did filter stage 1 from " << countCovered << " to " << readFakeMSABases[0].size() << " covered, sites " << consensusLength << std::endl;
 //				}
 				countCovered = readFakeMSABases[0].size();
 			}
@@ -1064,7 +1055,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			{
 				auto endTime = getTime();
 				std::lock_guard<std::mutex> lock { resultMutex };
-				std::cerr << "SNP transitive closure clustering skipped chunk with coverage " << chunkBeingDone.size() << " due to no covered sites, sites: " << consensusSeq.size() << " covered: " << countCovered << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
+				std::cerr << "SNP transitive closure clustering skipped chunk with coverage " << chunkBeingDone.size() << " due to no covered sites, sites: " << consensusLength << " covered: " << countCovered << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
 				//std::cerr << "times " << formatTime(startTime, getSequencesTime) << " " << formatTime(getSequencesTime, getConsensusTime) << " " << formatTime(getConsensusTime, alignTime) << " " << formatTime(alignTime, getCoveredTime) << " " << formatTime(getCoveredTime, filterTime) << " " << formatTime(filterTime, transitiveClosureTime) << " " << formatTime(transitiveClosureTime, endTime) << std::endl;
 /*				std::cerr << "sites:";
 				for (size_t k = 0; k < coveredSite.size(); k++)
@@ -1186,7 +1177,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			if (keyToNode.size() == 1)
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
-				std::cerr << "SNP transitive closure clustering splitted chunk with coverage " << chunkBeingDone.size() << " to " << keyToNode.size() << " chunks, sites: " << consensusSeq.size() << " covered: " << countCovered << " maxedits: " << maxEdits << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
+				std::cerr << "SNP transitive closure clustering splitted chunk with coverage " << chunkBeingDone.size() << " to " << keyToNode.size() << " chunks, sites: " << consensusLength << " covered: " << countCovered << " maxedits: " << maxEdits << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
 				// std::cerr << "times " << formatTime(startTime, getSequencesTime) << " " << formatTime(getSequencesTime, getConsensusTime) << " " << formatTime(getConsensusTime, alignTime) << " " << formatTime(alignTime, getCoveredTime) << " " << formatTime(getCoveredTime, filterTime) << " " << formatTime(filterTime, transitiveClosureTime) << " " << formatTime(transitiveClosureTime, endTime) << std::endl;
 /*				std::cerr << "sites:";
 				for (size_t k = 0; k < coveredSite.size(); k++)
@@ -1209,7 +1200,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
 				if (keyToNode.size() >= 2) countSplitted += 1;
-				std::cerr << "SNP transitive closure clustering splitted chunk with coverage " << chunkBeingDone.size() << " to " << keyToNode.size() << " chunks, biggest chunk size: " << chunkResult[0].size() << ", sites: " << consensusSeq.size() << " covered: " << countCovered << " maxedits: " << maxEdits << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
+				std::cerr << "SNP transitive closure clustering splitted chunk with coverage " << chunkBeingDone.size() << " to " << keyToNode.size() << " chunks, biggest chunk size: " << chunkResult[0].size() << ", sites: " << consensusLength << " covered: " << countCovered << " maxedits: " << maxEdits << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
 				// std::cerr << "times " << formatTime(startTime, getSequencesTime) << " " << formatTime(getSequencesTime, getConsensusTime) << " " << formatTime(getConsensusTime, alignTime) << " " << formatTime(alignTime, getCoveredTime) << " " << formatTime(getCoveredTime, filterTime) << " " << formatTime(filterTime, transitiveClosureTime) << " " << formatTime(transitiveClosureTime, endTime) << std::endl;
 /*				std::cerr << "sites:";
 				for (size_t k = 0; k < coveredSite.size(); k++)
@@ -3127,18 +3118,50 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 	std::vector<std::vector<UnitigPath>> readPaths;
 	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
 	std::vector<size_t> chunkBelongsToUnitig;
+	std::vector<size_t> chunkStartPosInUnitig;
+	std::vector<size_t> chunkEndPosInUnitig;
 	chunkBelongsToUnitig.resize(maxChunk+1, std::numeric_limits<size_t>::max());
-	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
+	chunkStartPosInUnitig.resize(maxChunk+1, std::numeric_limits<size_t>::max());
+	chunkEndPosInUnitig.resize(maxChunk+1, std::numeric_limits<size_t>::max());
 	{
-		for (uint64_t node : graph.chunksInUnitig[i])
+		std::vector<std::vector<size_t>> chunkLengths;
+		chunkLengths.resize(maxChunk+1);
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
 		{
-			assert((node & maskUint64_t) < chunkBelongsToUnitig.size());
-			assert(chunkBelongsToUnitig[node & maskUint64_t] == std::numeric_limits<size_t>::max());
-			chunkBelongsToUnitig[node & maskUint64_t] = i;
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				auto t = chunksPerRead[i][j];
+				if (NonexistantChunk(std::get<2>(t))) continue;
+				size_t chunk = std::get<2>(t) & maskUint64_t;
+				assert(chunk <= maxChunk);
+				chunkLengths[chunk].emplace_back(std::get<1>(t) - std::get<0>(t));
+			}
+		}
+		for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
+		{
+			assert(graph.unitigChunkBreakpointPositions[i].size() == graph.chunksInUnitig[i].size());
+			for (size_t j = 0; j < graph.chunksInUnitig[i].size(); j++)
+			{
+				uint64_t node = graph.chunksInUnitig[i][j];
+				assert(node & firstBitUint64_t);
+				size_t startPos = graph.unitigChunkBreakpointPositions[i][j];
+				assert((node & maskUint64_t) < chunkBelongsToUnitig.size());
+				assert(chunkBelongsToUnitig[node & maskUint64_t] == std::numeric_limits<size_t>::max());
+				chunkBelongsToUnitig[node & maskUint64_t] = i;
+				chunkStartPosInUnitig[node & maskUint64_t] = startPos;
+				assert(startPos < graph.unitigLengths[i]);
+				assert(chunkLengths[node & maskUint64_t].size() >= 1);
+				chunkEndPosInUnitig[node & maskUint64_t] = startPos + chunkLengths[node & maskUint64_t][chunkLengths[node & maskUint64_t].size()/2];
+				if (chunkEndPosInUnitig[node & maskUint64_t] >= graph.unitigLengths[i])
+				{
+					assert(chunkEndPosInUnitig[node & maskUint64_t] <= graph.unitigLengths[i] + 100);
+					chunkEndPosInUnitig[node & maskUint64_t] = graph.unitigLengths[i];
+				}
+			}
 		}
 	}
-	std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> fwForksPerUnitig;
-	std::vector<std::pair<std::vector<size_t>, std::vector<size_t>>> bwForksPerUnitig;
+	std::vector<std::pair<std::vector<std::pair<size_t, size_t>>, std::vector<std::pair<size_t, size_t>>>> fwForksPerUnitig;
+	std::vector<std::pair<std::vector<std::pair<size_t, size_t>>, std::vector<std::pair<size_t, size_t>>>> bwForksPerUnitig;
 	fwForksPerUnitig.resize(graph.unitigLengths.size());
 	bwForksPerUnitig.resize(graph.unitigLengths.size());
 	std::vector<bool> hasFwFork;
@@ -3166,58 +3189,33 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			{
 				uint64_t prev = readPaths[i][j].path[k-1];
 				uint64_t curr = readPaths[i][j].path[k];
-				if ((prev & firstBitUint64_t) && hasFwFork[prev & maskUint64_t])
+				assert(prev & firstBitUint64_t);
+				assert(curr & firstBitUint64_t);
+				if (hasFwFork[prev & maskUint64_t])
 				{
 					std::pair<size_t, bool> currPair { curr & maskUint64_t, curr & firstBitUint64_t };
 					if (currPair == graph.edges.getEdges(std::make_pair(prev & maskUint64_t, true))[0])
 					{
-						fwForksPerUnitig[prev & maskUint64_t].first.emplace_back(i);
+						fwForksPerUnitig[prev & maskUint64_t].first.emplace_back(i, readPaths[i][j].readPartInPathnode[k-1].second);
 					}
 					else
 					{
 						assert(currPair == graph.edges.getEdges(std::make_pair(prev & maskUint64_t, true))[1]);
-						fwForksPerUnitig[prev & maskUint64_t].second.emplace_back(i);
+						fwForksPerUnitig[prev & maskUint64_t].second.emplace_back(i, readPaths[i][j].readPartInPathnode[k-1].second);
 					}
 				}
-				if (((prev ^ firstBitUint64_t) & firstBitUint64_t) && hasBwFork[prev & maskUint64_t])
-				{
-					std::pair<size_t, bool> currPair { curr & maskUint64_t, curr & firstBitUint64_t };
-					if (currPair == graph.edges.getEdges(std::make_pair(prev & maskUint64_t, false))[0])
-					{
-						bwForksPerUnitig[prev & maskUint64_t].first.emplace_back(i);
-					}
-					else
-					{
-						assert(currPair == graph.edges.getEdges(std::make_pair(prev & maskUint64_t, false))[1]);
-						bwForksPerUnitig[prev & maskUint64_t].second.emplace_back(i);
-					}
-				}
-				if ((curr & firstBitUint64_t) && hasBwFork[curr & maskUint64_t])
+				if (hasBwFork[curr & maskUint64_t])
 				{
 					std::pair<size_t, bool> prevPair { prev & maskUint64_t, prev & firstBitUint64_t };
 					prevPair.second = !prevPair.second;
 					if (prevPair == graph.edges.getEdges(std::make_pair(curr & maskUint64_t, false))[0])
 					{
-						bwForksPerUnitig[curr & maskUint64_t].first.emplace_back(i);
+						bwForksPerUnitig[curr & maskUint64_t].first.emplace_back(i, readPaths[i][j].readPartInPathnode[k].first);
 					}
 					else
 					{
 						assert(prevPair == graph.edges.getEdges(std::make_pair(curr & maskUint64_t, false))[1]);
-						bwForksPerUnitig[curr & maskUint64_t].second.emplace_back(i);
-					}
-				}
-				if (((curr ^ firstBitUint64_t) & firstBitUint64_t) && hasFwFork[curr & maskUint64_t])
-				{
-					std::pair<size_t, bool> prevPair { prev & maskUint64_t, prev & firstBitUint64_t };
-					prevPair.second = !prevPair.second;
-					if (prevPair == graph.edges.getEdges(std::make_pair(curr & maskUint64_t, true))[0])
-					{
-						fwForksPerUnitig[curr & maskUint64_t].first.emplace_back(i);
-					}
-					else
-					{
-						assert(prevPair == graph.edges.getEdges(std::make_pair(curr & maskUint64_t, true))[1]);
-						fwForksPerUnitig[curr & maskUint64_t].second.emplace_back(i);
+						bwForksPerUnitig[curr & maskUint64_t].second.emplace_back(i, readPaths[i][j].readPartInPathnode[k].first);
 					}
 				}
 			}
@@ -3235,8 +3233,8 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			{
 				hasFwFork[i] = false;
 			}
-			if (phmap::flat_hash_set<size_t>(fwForksPerUnitig[i].first.begin(), fwForksPerUnitig[i].first.end()).size() != fwForksPerUnitig[i].first.size()) hasFwFork[i] = false;
-			if (phmap::flat_hash_set<size_t>(fwForksPerUnitig[i].second.begin(), fwForksPerUnitig[i].second.end()).size() != fwForksPerUnitig[i].second.size()) hasFwFork[i] = false;
+			if (phmap::flat_hash_set<std::pair<size_t, size_t>>(fwForksPerUnitig[i].first.begin(), fwForksPerUnitig[i].first.end()).size() != fwForksPerUnitig[i].first.size()) hasFwFork[i] = false;
+			if (phmap::flat_hash_set<std::pair<size_t, size_t>>(fwForksPerUnitig[i].second.begin(), fwForksPerUnitig[i].second.end()).size() != fwForksPerUnitig[i].second.size()) hasFwFork[i] = false;
 			if (fwForksPerUnitig[i].first.size() < 2) hasFwFork[i] = false;
 			if (fwForksPerUnitig[i].second.size() < 2) hasFwFork[i] = false;
 		}
@@ -3246,14 +3244,14 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			{
 				hasBwFork[i] = false;
 			}
-			if (phmap::flat_hash_set<size_t>(bwForksPerUnitig[i].first.begin(), bwForksPerUnitig[i].first.end()).size() != bwForksPerUnitig[i].first.size()) hasBwFork[i] = false;
-			if (phmap::flat_hash_set<size_t>(bwForksPerUnitig[i].second.begin(), bwForksPerUnitig[i].second.end()).size() != bwForksPerUnitig[i].second.size()) hasBwFork[i] = false;
+			if (phmap::flat_hash_set<std::pair<size_t, size_t>>(bwForksPerUnitig[i].first.begin(), bwForksPerUnitig[i].first.end()).size() != bwForksPerUnitig[i].first.size()) hasBwFork[i] = false;
+			if (phmap::flat_hash_set<std::pair<size_t, size_t>>(bwForksPerUnitig[i].second.begin(), bwForksPerUnitig[i].second.end()).size() != bwForksPerUnitig[i].second.size()) hasBwFork[i] = false;
 			if (bwForksPerUnitig[i].first.size() < 2) hasBwFork[i] = false;
 			if (bwForksPerUnitig[i].second.size() < 2) hasBwFork[i] = false;
 		}
 	}
-	std::vector<std::pair<phmap::flat_hash_set<size_t>, phmap::flat_hash_set<size_t>>> fwForksPerUnitigSet;
-	std::vector<std::pair<phmap::flat_hash_set<size_t>, phmap::flat_hash_set<size_t>>> bwForksPerUnitigSet;
+	std::vector<std::pair<phmap::flat_hash_set<std::pair<size_t, size_t>>, phmap::flat_hash_set<std::pair<size_t, size_t>>>> fwForksPerUnitigSet;
+	std::vector<std::pair<phmap::flat_hash_set<std::pair<size_t, size_t>>, phmap::flat_hash_set<std::pair<size_t, size_t>>>> bwForksPerUnitigSet;
 	fwForksPerUnitigSet.resize(graph.unitigLengths.size());
 	bwForksPerUnitigSet.resize(graph.unitigLengths.size());
 	for (size_t i = 0; i < fwForksPerUnitig.size(); i++)
@@ -3272,7 +3270,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &hasFwFork, &hasBwFork, &fwForksPerUnitigSet, &bwForksPerUnitigSet,  &countSplitted, &chunkBelongsToUnitig, &rawReadLengths, kmerSize](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &hasFwFork, &hasBwFork, &fwForksPerUnitigSet, &bwForksPerUnitigSet,  &countSplitted, &chunkBelongsToUnitig, &rawReadLengths, &graph, &chunkStartPosInUnitig, &chunkEndPosInUnitig, &canonical, kmerSize](const size_t i)
 	{
 		if (chunkBelongsToUnitig[i] == std::numeric_limits<size_t>::max())
 		{
@@ -3284,35 +3282,59 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			nextNum += 1;
 			return;
 		}
+		if (occurrencesPerChunk[i].size() == 0)
+		{
+			assert(!canonical[i]);
+			return;
+		}
 		size_t unitig = chunkBelongsToUnitig[i];
+		assert(unitig < graph.unitigLengths.size());
 		bool anythingToPhase = false;
 		std::vector<std::pair<phmap::flat_hash_set<size_t>, phmap::flat_hash_set<size_t>>> maybePhaseGroups;
 		if (hasFwFork[unitig])
 		{
 			if (fwForksPerUnitigSet[unitig].first.size() >= 2 && fwForksPerUnitigSet[unitig].second.size() >= 2)
 			{
-				size_t firstsHere = 0;
-				size_t secondsHere = 0;
+				std::vector<size_t> firstsHere;
+				std::vector<size_t> secondsHere;
 				bool valid = true;
-				for (auto pair : occurrencesPerChunk[i])
+				assert(chunkEndPosInUnitig[i] <= graph.unitigLengths[unitig]);
+				size_t extraUntilEnd = graph.unitigLengths[unitig] - chunkEndPosInUnitig[i];
+				assert(extraUntilEnd < graph.unitigLengths[unitig]);
+				for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 				{
-					if (fwForksPerUnitigSet[unitig].first.count(pair.first) == 1)
+					auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+					size_t read = occurrencesPerChunk[i][j].first;
+					size_t endPos = std::get<1>(t) + extraUntilEnd;
+					bool matchesFirst = false;
+					bool matchesSecond = false;
+					for (auto pair : fwForksPerUnitigSet[unitig].first)
 					{
-						firstsHere += 1;
-						if (fwForksPerUnitigSet[unitig].second.count(pair.first) == 1)
-						{
-							valid = false;
-							break;
-						}
+						if (pair.first != read) continue;
+						if (endPos > pair.second+100) continue;
+						if (pair.second > endPos+100) continue;
+						matchesFirst = true;
 					}
-					if (fwForksPerUnitigSet[unitig].second.count(pair.first) == 1)
+					for (auto pair : fwForksPerUnitigSet[unitig].second)
 					{
-						secondsHere += 1;
+						if (pair.first != read) continue;
+						if (endPos > pair.second+100) continue;
+						if (pair.second > endPos+100) continue;
+						matchesSecond = true;
 					}
+					if (matchesFirst && matchesSecond)
+					{
+						valid = false;
+						break;
+					}
+					if (matchesFirst) firstsHere.emplace_back(j);
+					if (matchesSecond) secondsHere.emplace_back(j);
 				}
-				if (firstsHere >= 2 && secondsHere >= 2 && valid)
+				if (firstsHere.size() >= 2 && secondsHere.size() >= 2 && valid)
 				{
-					maybePhaseGroups.emplace_back(fwForksPerUnitigSet[unitig]);
+					maybePhaseGroups.emplace_back();
+					maybePhaseGroups.back().first.insert(firstsHere.begin(), firstsHere.end());
+					maybePhaseGroups.back().second.insert(secondsHere.begin(), secondsHere.end());
 				}
 			}
 		}
@@ -3320,28 +3342,46 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 		{
 			if (bwForksPerUnitigSet[unitig].first.size() >= 2 && bwForksPerUnitigSet[unitig].second.size() >= 2)
 			{
-				size_t firstsHere = 0;
-				size_t secondsHere = 0;
+				std::vector<size_t> firstsHere;
+				std::vector<size_t> secondsHere;
 				bool valid = true;
-				for (auto pair : occurrencesPerChunk[i])
+				size_t extraUntilStart = chunkStartPosInUnitig[i];
+				assert(extraUntilStart < graph.unitigLengths[unitig]);
+				for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 				{
-					if (bwForksPerUnitigSet[unitig].first.count(pair.first) == 1)
+					auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+					size_t read = occurrencesPerChunk[i][j].first;
+					if (std::get<0>(t) < extraUntilStart) continue;
+					size_t startPos = std::get<0>(t) - extraUntilStart;
+					bool matchesFirst = false;
+					bool matchesSecond = false;
+					for (auto pair : bwForksPerUnitigSet[unitig].first)
 					{
-						firstsHere += 1;
-						if (bwForksPerUnitigSet[unitig].second.count(pair.first) == 1)
-						{
-							valid = false;
-							break;
-						}
+						if (pair.first != read) continue;
+						if (startPos > pair.second+100) continue;
+						if (pair.second > startPos+100) continue;
+						matchesFirst = true;
 					}
-					if (bwForksPerUnitigSet[unitig].second.count(pair.first) == 1)
+					for (auto pair : bwForksPerUnitigSet[unitig].second)
 					{
-						secondsHere += 1;
+						if (pair.first != read) continue;
+						if (startPos > pair.second+100) continue;
+						if (pair.second > startPos+100) continue;
+						matchesSecond = true;
 					}
+					if (matchesFirst && matchesSecond)
+					{
+						valid = false;
+						break;
+					}
+					if (matchesFirst) firstsHere.emplace_back(j);
+					if (matchesSecond) secondsHere.emplace_back(j);
 				}
-				if (firstsHere >= 2 && secondsHere >= 2 && valid)
+				if (firstsHere.size() >= 2 && secondsHere.size() >= 2 && valid)
 				{
-					maybePhaseGroups.emplace_back(bwForksPerUnitigSet[unitig]);
+					maybePhaseGroups.emplace_back();
+					maybePhaseGroups.back().first.insert(firstsHere.begin(), firstsHere.end());
+					maybePhaseGroups.back().second.insert(secondsHere.begin(), secondsHere.end());
 				}
 			}
 		}
@@ -3404,6 +3444,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 				solidKmersPerOccurrence[j].emplace(kmerkey);
 			}
 		}
+		size_t nextKmerNum = kmerToNumber.size() + kmerClusterToNumber.size();
 		{
 			std::vector<std::tuple<size_t, size_t, size_t, size_t, size_t, size_t>> alleles; // startkmer, startcluster, endkmer, endcluster, occurrenceID, allele
 			size_t lastOccurrence = std::numeric_limits<size_t>::max();
@@ -3432,7 +3473,6 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			std::sort(alleles.begin(), alleles.end());
 			std::vector<std::vector<std::vector<size_t>>> occurrencesPerAlleleSite;
 			occurrencesPerAlleleSite = getAlleleOccurrences(alleles, occurrencesPerChunk[i].size());
-			size_t nextNum = kmerToNumber.size() + kmerClusterToNumber.size();
 			for (size_t j = 0; j < occurrencesPerAlleleSite.size(); j++)
 			{
 				if (occurrencesPerAlleleSite[j].size() < 2) continue;
@@ -3440,9 +3480,62 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 				{
 					for (size_t k : occurrencesPerAlleleSite[j][allele])
 					{
-						solidKmersPerOccurrence[k].emplace(nextNum);
+						solidKmersPerOccurrence[k].emplace(nextKmerNum);
 					}
-					nextNum += 1;
+					nextKmerNum += 1;
+				}
+			}
+		}
+		{
+			std::vector<std::vector<uint8_t>> unfilteredReadFakeMSABases;
+			size_t totalMismatches = 0;
+			size_t sequenceLengthSum = 0;
+			{
+				std::vector<std::string> strings;
+				for (size_t j = 0; j < chunkSequences.size(); j++)
+				{
+					strings.emplace_back(chunkSequences[j].toString());
+				}
+				std::tie(unfilteredReadFakeMSABases, totalMismatches, sequenceLengthSum) = getSNPMSA(strings);
+			}
+			if (unfilteredReadFakeMSABases.size() > 0)
+			{
+				assert(unfilteredReadFakeMSABases.size() == chunkSequences.size());
+				std::vector<bool> covered;
+				covered.resize(unfilteredReadFakeMSABases[0].size(), false);
+				for (size_t j = 0; j < unfilteredReadFakeMSABases[0].size(); j++)
+				{
+					phmap::flat_hash_map<uint8_t, size_t> alleleCoverages;
+					for (size_t k = 0; k < unfilteredReadFakeMSABases.size(); k++)
+					{
+						alleleCoverages[unfilteredReadFakeMSABases[k][j]] += 1;
+					}
+					size_t countCovered = 0;
+					for (auto pair : alleleCoverages)
+					{
+						if (pair.first == '-') continue;
+						if (pair.second < 3) continue;
+						if (pair.second < chunkSequences.size() * mismatchFraction) continue;
+						countCovered += 1;
+					}
+					if (countCovered >= 2)
+					{
+						covered[j] = true;
+					}
+				}
+				for (size_t j = 0; j < covered.size(); j++)
+				{
+					if (!covered[j]) continue;
+					phmap::flat_hash_map<uint8_t, size_t> alleleToIndex;
+					for (size_t k = 0; k < unfilteredReadFakeMSABases.size(); k++)
+					{
+						if (alleleToIndex.count(unfilteredReadFakeMSABases[k][j]) == 0)
+						{
+							alleleToIndex[unfilteredReadFakeMSABases[k][j]] = nextKmerNum;
+							nextKmerNum += 1;
+						}
+						solidKmersPerOccurrence[k].emplace(alleleToIndex.at(unfilteredReadFakeMSABases[k][j]));
+					}
 				}
 			}
 		}
@@ -3477,7 +3570,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 				}
 			}
 		}
-		phmap::flat_hash_map<size_t, std::vector<size_t>> phaseGroupsPerRead;
+		phmap::flat_hash_map<size_t, std::vector<size_t>> phaseGroupsPerOccurrence;
 		for (size_t phaseGroup = 0; phaseGroup < maybePhaseGroups.size(); phaseGroup++)
 		{
 			phmap::flat_hash_set<size_t> kmersInFirst;
@@ -3488,15 +3581,14 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			bool hasSecond = false;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
-				size_t read = occurrencesPerChunk[i][j].first;
-				if (maybePhaseGroups[phaseGroup].first.count(read) == 0 && maybePhaseGroups[phaseGroup].second.count(read) == 0) continue;
+				if (maybePhaseGroups[phaseGroup].first.count(j) == 0 && maybePhaseGroups[phaseGroup].second.count(j) == 0) continue;
 				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 				assert(!NonexistantChunk(std::get<2>(t)));
 				const phmap::flat_hash_set<size_t> kmersHere = solidKmersPerOccurrence[j];
-				if (maybePhaseGroups[phaseGroup].first.count(read) == 1)
+				if (maybePhaseGroups[phaseGroup].first.count(j) == 1)
 				{
 					kmersInEvenOneFirst.insert(kmersHere.begin(), kmersHere.end());
-					assert(maybePhaseGroups[phaseGroup].second.count(read) == 0);
+					assert(maybePhaseGroups[phaseGroup].second.count(j) == 0);
 					if (!hasFirst)
 					{
 						hasFirst = true;
@@ -3518,7 +3610,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 				else
 				{
 					kmersInEvenOneSecond.insert(kmersHere.begin(), kmersHere.end());
-					assert(maybePhaseGroups[phaseGroup].second.count(read) == 1);
+					assert(maybePhaseGroups[phaseGroup].second.count(j) == 1);
 					if (!hasSecond)
 					{
 						hasSecond = true;
@@ -3570,8 +3662,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			phmap::flat_hash_set<size_t> removeKmers;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
-				size_t read = occurrencesPerChunk[i][j].first;
-				if (maybePhaseGroups[phaseGroup].first.count(read) == 1 || maybePhaseGroups[phaseGroup].second.count(read) == 1) continue;
+				if (maybePhaseGroups[phaseGroup].first.count(j) == 1 || maybePhaseGroups[phaseGroup].second.count(j) == 1) continue;
 				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 				assert(!NonexistantChunk(std::get<2>(t)));
 				const phmap::flat_hash_set<size_t>& kmersHere = solidKmersPerOccurrence[j];
@@ -3641,20 +3732,19 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			phmap::flat_hash_map<size_t, size_t> assignments;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
-				size_t read = occurrencesPerChunk[i][j].first;
-				if (maybePhaseGroups[phaseGroup].first.count(read) == 1)
+				if (maybePhaseGroups[phaseGroup].first.count(j) == 1)
 				{
-					assert(maybePhaseGroups[phaseGroup].second.count(read) == 0);
-					assignments[read] = 0;
+					assert(maybePhaseGroups[phaseGroup].second.count(j) == 0);
+					assignments[j] = 0;
 					continue;
 				}
-				if (maybePhaseGroups[phaseGroup].second.count(read) == 1)
+				if (maybePhaseGroups[phaseGroup].second.count(j) == 1)
 				{
-					assignments[read] = 1;
+					assignments[j] = 1;
 					continue;
 				}
-				assert(maybePhaseGroups[phaseGroup].first.count(read) == 0);
-				assert(maybePhaseGroups[phaseGroup].second.count(read) == 0);
+				assert(maybePhaseGroups[phaseGroup].first.count(j) == 0);
+				assert(maybePhaseGroups[phaseGroup].second.count(j) == 0);
 				auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 				assert(!NonexistantChunk(std::get<2>(t)));
 				const phmap::flat_hash_set<size_t>& kmersHere = solidKmersPerOccurrence[j];
@@ -3680,29 +3770,29 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 				}
 				if (firstMatches > secondMatches)
 				{
-					if (assignments.count(read) == 1 && assignments.at(read) != 0)
+					if (assignments.count(j) == 1 && assignments.at(j) != 0)
 					{
 						possiblyValid = false;
 						break;
 					}
-					assert(assignments.count(read) == 0 || assignments.at(read) == 0);
-					assignments[read] = 0;
+					assert(assignments.count(j) == 0 || assignments.at(j) == 0);
+					assignments[j] = 0;
 				}
 				else
 				{
-					if (assignments.count(read) == 1 && assignments.at(read) != 1)
+					if (assignments.count(j) == 1 && assignments.at(j) != 1)
 					{
 						possiblyValid = false;
 						break;
 					}
-					assert(assignments.count(read) == 0 || assignments.at(read) == 1);
-					assignments[read] = 1;
+					assert(assignments.count(j) == 0 || assignments.at(j) == 1);
+					assignments[j] = 1;
 				}
 			}
 			if (!possiblyValid) continue;
 			for (auto pair : assignments)
 			{
-				phaseGroupsPerRead[pair.first].push_back(nextGroupNum + pair.second);
+				phaseGroupsPerOccurrence[pair.first].push_back(nextGroupNum + pair.second);
 			}
 			nextGroupNum += 2;
 		}
@@ -3711,7 +3801,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 		{
 			parent.emplace_back(j);
 		}
-		if (phaseGroupsPerRead.size() == 0)
+		if (phaseGroupsPerOccurrence.size() == 0)
 		{
 			for (size_t j = 1; j < occurrencesPerChunk[i].size(); j++)
 			{
@@ -3724,9 +3814,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			{
 				for (size_t k = 0; k < j; k++)
 				{
-					size_t readj = occurrencesPerChunk[i][j].first;
-					size_t readk = occurrencesPerChunk[i][k].first;
-					if (phaseGroupsPerRead.at(readj) != phaseGroupsPerRead.at(readk)) continue;
+					if (phaseGroupsPerOccurrence.at(j) != phaseGroupsPerOccurrence.at(k)) continue;
 					merge(parent, j, k);
 				}
 			}
@@ -3737,7 +3825,8 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			groupCoverage[find(parent, i)] += 1;
 		}
 		bool valid = true;
-		if (groupCoverage.size() != 2) valid = false;
+		if (groupCoverage.size() < 2) valid = false;
+		if (groupCoverage.size() > 5) valid = false; // sanity check
 		for (auto pair : groupCoverage)
 		{
 			if (pair.second < 3) valid = false;

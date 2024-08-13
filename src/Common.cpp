@@ -46,6 +46,32 @@ size_t intersectSize(const std::vector<size_t>& left, const std::vector<size_t>&
 	return count;
 }
 
+size_t intersectSize(const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right)
+{
+	size_t lefti = 0;
+	size_t righti = 0;
+	size_t count = 0;
+	while (lefti < left.size() && righti < right.size())
+	{
+		if (left[lefti] < right[righti])
+		{
+			lefti += 1;
+		}
+		else if (right[righti] < left[lefti])
+		{
+			righti += 1;
+		}
+		else
+		{
+			assert(left[lefti] == right[righti]);
+			lefti += 1;
+			righti += 1;
+			count += 1;
+		}
+	}
+	return count;
+}
+
 std::pair<size_t, bool> reverse(std::pair<size_t, bool> pos)
 {
 	return std::make_pair(pos.first, !pos.second);
