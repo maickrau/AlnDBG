@@ -3123,41 +3123,26 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 	chunkBelongsToUnitig.resize(maxChunk+1, std::numeric_limits<size_t>::max());
 	chunkStartPosInUnitig.resize(maxChunk+1, std::numeric_limits<size_t>::max());
 	chunkEndPosInUnitig.resize(maxChunk+1, std::numeric_limits<size_t>::max());
+	assert(graph.unitigChunkBreakpointPositions.size() == graph.chunksInUnitig.size());
+	assert(graph.unitigChunkBreakpointPositions.size() == graph.unitigLengths.size());
+	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
 	{
-		std::vector<std::vector<size_t>> chunkLengths;
-		chunkLengths.resize(maxChunk+1);
-		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		assert(graph.unitigChunkBreakpointPositions[i].size() == graph.chunksInUnitig[i].size());
+		for (size_t j = 0; j < graph.chunksInUnitig[i].size(); j++)
 		{
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				auto t = chunksPerRead[i][j];
-				if (NonexistantChunk(std::get<2>(t))) continue;
-				size_t chunk = std::get<2>(t) & maskUint64_t;
-				assert(chunk <= maxChunk);
-				chunkLengths[chunk].emplace_back(std::get<1>(t) - std::get<0>(t));
-			}
-		}
-		for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
-		{
-			assert(graph.unitigChunkBreakpointPositions[i].size() == graph.chunksInUnitig[i].size());
-			for (size_t j = 0; j < graph.chunksInUnitig[i].size(); j++)
-			{
-				uint64_t node = graph.chunksInUnitig[i][j];
-				assert(node & firstBitUint64_t);
-				size_t startPos = graph.unitigChunkBreakpointPositions[i][j];
-				assert((node & maskUint64_t) < chunkBelongsToUnitig.size());
-				assert(chunkBelongsToUnitig[node & maskUint64_t] == std::numeric_limits<size_t>::max());
-				chunkBelongsToUnitig[node & maskUint64_t] = i;
-				chunkStartPosInUnitig[node & maskUint64_t] = startPos;
-				assert(startPos < graph.unitigLengths[i]);
-				assert(chunkLengths[node & maskUint64_t].size() >= 1);
-				chunkEndPosInUnitig[node & maskUint64_t] = startPos + chunkLengths[node & maskUint64_t][chunkLengths[node & maskUint64_t].size()/2];
-				if (chunkEndPosInUnitig[node & maskUint64_t] >= graph.unitigLengths[i])
-				{
-					assert(chunkEndPosInUnitig[node & maskUint64_t] <= graph.unitigLengths[i] + 100);
-					chunkEndPosInUnitig[node & maskUint64_t] = graph.unitigLengths[i];
-				}
-			}
+			uint64_t node = graph.chunksInUnitig[i][j];
+			assert(node & firstBitUint64_t);
+			size_t startPos = graph.unitigChunkBreakpointPositions[i][j].first;
+			size_t endPos = graph.unitigChunkBreakpointPositions[i][j].second;
+			assert(endPos > startPos);
+			assert(endPos <= graph.unitigLengths[i]);
+			assert((node & maskUint64_t) < chunkBelongsToUnitig.size());
+			assert(chunkBelongsToUnitig[node & maskUint64_t] == std::numeric_limits<size_t>::max());
+			chunkBelongsToUnitig[node & maskUint64_t] = i;
+			chunkStartPosInUnitig[node & maskUint64_t] = startPos;
+			assert(startPos < graph.unitigLengths[i]);
+			chunkEndPosInUnitig[node & maskUint64_t] = endPos;
+			assert(chunkEndPosInUnitig[node & maskUint64_t] <= graph.unitigLengths[i]);
 		}
 	}
 	std::vector<std::pair<std::vector<std::pair<size_t, size_t>>, std::vector<std::pair<size_t, size_t>>>> fwForksPerUnitig;

@@ -278,12 +278,13 @@ std::vector<uint64_t> getUnitig(const uint64_t startNode, const std::vector<bool
 	return result;
 }
 
-std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>> getUnitigs(const std::vector<bool>& allowedNode, const SparseEdgeContainer& allowedEdges, const std::vector<std::vector<size_t>>& lengths, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
+std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>, std::vector<std::vector<std::pair<size_t, size_t>>>> getUnitigs(const std::vector<bool>& allowedNode, const SparseEdgeContainer& allowedEdges, const std::vector<std::vector<size_t>>& lengths, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
 {
 	std::vector<std::vector<uint64_t>> unitigs;
 	std::vector<bool> checked;
 	checked.resize(allowedNode.size(), false);
 	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig;
+	std::vector<std::vector<std::pair<size_t, size_t>>> unitigChunkBreakpointPositions;
 	chunkLocationInUnitig.resize(allowedNode.size(), std::make_tuple(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()));
 	for (size_t i = 0; i < allowedNode.size(); i++)
 	{
@@ -308,9 +309,11 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 		}
 	}
 	std::vector<size_t> unitigLengths;
+	unitigChunkBreakpointPositions.resize(unitigs.size());
 	for (size_t i = 0; i < unitigs.size(); i++)
 	{
 		unitigLengths.emplace_back(0);
+		unitigChunkBreakpointPositions[i].reserve(unitigs[i].size());
 		for (size_t j = 0; j < unitigs[i].size(); j++)
 		{
 			assert(lengths[unitigs[i][j] & maskUint64_t].size() >= 1);
@@ -336,6 +339,7 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 			}
 			std::get<2>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back();
 			std::get<3>(chunkLocationInUnitig[unitigs[i][j] & maskUint64_t]) = unitigLengths.back() + length;
+			unitigChunkBreakpointPositions[i].emplace_back(unitigLengths.back(), unitigLengths.back() + length);
 			unitigLengths.back() += length;
 		}
 	}
@@ -361,7 +365,7 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 		assert(std::get<3>(chunkLocationInUnitig[i]) - std::get<2>(chunkLocationInUnitig[i]) == lengths[i][lengths[i].size()/2]);
 		assert(std::get<3>(chunkLocationInUnitig[i]) <= unitigLengths[unitig]);
 	}
-	return std::make_tuple(unitigs, unitigLengths, chunkLocationInUnitig);
+	return std::make_tuple(unitigs, unitigLengths, chunkLocationInUnitig, unitigChunkBreakpointPositions);
 }
 
 std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& graph, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<bool>& allowedNode, const std::vector<std::vector<uint64_t>>& unitigs, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig)
@@ -792,12 +796,14 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<C
 	std::tie(allowedNode, allowedEdges) = getAllowedNodesAndEdges(coverages, edgeCoverage, chunksPerRead);
 	std::vector<std::vector<uint64_t>> unitigs;
 	std::vector<size_t> unitigLengths;
+	std::vector<std::vector<std::pair<size_t, size_t>>> unitigChunkBreakpointPositions;
 	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig; // unitig, index, startpos, endpos. reverse also reverses index and poses.
-	std::tie(unitigs, unitigLengths, chunkLocationInUnitig) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps);
+	std::tie(unitigs, unitigLengths, chunkLocationInUnitig, unitigChunkBreakpointPositions) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps);
 	{
 		allowedEdges = filterOutZEdges(unitigs, unitigLengths, allowedEdges, lengths, coverages, edgeCoverage, chunkLocationInUnitig, approxOneHapCoverage);
-		std::tie(unitigs, unitigLengths, chunkLocationInUnitig) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps);
+		std::tie(unitigs, unitigLengths, chunkLocationInUnitig, unitigChunkBreakpointPositions) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps);
 	}
+	std::swap(result.unitigChunkBreakpointPositions, unitigChunkBreakpointPositions);
 	result.unitigLengths = unitigLengths;
 	result.edges.resize(result.unitigLengths.size());
 	for (size_t i = 0; i < unitigs.size(); i++)
@@ -847,25 +853,19 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<C
 	{
 		consensuses = getUnitigConsensuses(result, paths, sequenceIndex, chunksPerRead, lengths, coverages, chunkLocationInUnitig, edgeOverlaps, numThreads);
 	}
-	result.unitigChunkBreakpointPositions.resize(result.chunksInUnitig.size());
-	for (size_t i = 0; i < result.chunksInUnitig.size(); i++)
+	assert(result.unitigChunkBreakpointPositions.size() == result.unitigLengths.size());
+	for (size_t i = 0; i < result.unitigLengths.size(); i++)
 	{
-		result.unitigChunkBreakpointPositions[i].emplace_back(0);
-		for (size_t j = 1; j < result.chunksInUnitig[i].size(); j++)
+		assert(result.unitigChunkBreakpointPositions[i].size() == result.chunksInUnitig[i].size());
+		for (size_t j = 0; j < result.unitigChunkBreakpointPositions[i].size(); j++)
 		{
-			size_t chunkLength = lengths[result.chunksInUnitig[i][j-1] & maskUint64_t][lengths[result.chunksInUnitig[i][j-1] & maskUint64_t].size()/2];
-			auto keypair = canon(std::make_pair(result.chunksInUnitig[i][j-1] & maskUint64_t, result.chunksInUnitig[i][j-1] & firstBitUint64_t), std::make_pair(result.chunksInUnitig[i][j] & maskUint64_t, result.chunksInUnitig[i][j] & firstBitUint64_t));
-			auto key = std::make_pair(keypair.first.first + (keypair.first.second ? firstBitUint64_t : 0), keypair.second.first + (keypair.second.second ? firstBitUint64_t : 0));
-			assert(edgeOverlaps.count(key) == 1);
-			size_t overlap = edgeOverlaps.at(key);
-			if (overlap > chunkLength)
+			assert(result.unitigChunkBreakpointPositions[i][j].first < result.unitigChunkBreakpointPositions[i][j].second);
+			assert(result.unitigChunkBreakpointPositions[i][j].second <= result.unitigLengths[i]);
+			if (j > 0)
 			{
-				assert(overlap < chunkLength+100);
-				overlap = chunkLength;
+				assert(result.unitigChunkBreakpointPositions[i][j].first >= result.unitigChunkBreakpointPositions[i][j-1].first);
+				assert(result.unitigChunkBreakpointPositions[i][j].second >= result.unitigChunkBreakpointPositions[i][j-1].second);
 			}
-			assert(overlap <= chunkLength);
-			result.unitigChunkBreakpointPositions[i].emplace_back(result.unitigChunkBreakpointPositions[i].back() + chunkLength - overlap);
-			assert(result.unitigChunkBreakpointPositions[i].back() < result.unitigLengths[i]);
 		}
 	}
 	return std::make_tuple(result, paths, consensuses);

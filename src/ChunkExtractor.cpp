@@ -73,6 +73,7 @@ void readFilesAndAddToSequenceIndex(const std::string& filename, FastaCompressor
 	std::vector<std::tuple<size_t, std::string*, std::string*>> sequenceStack;
 	std::vector<std::thread> threads;
 	std::atomic<bool> allDone;
+	allDone = false;
 	std::mutex stackMutex;
 	size_t nextNum = 0;
 	for (size_t i = 0; i < numThreads; i++)

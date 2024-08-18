@@ -100,7 +100,7 @@ void writeUnitigGraph(const std::string& filename, const ChunkUnitigGraph& uniti
 		for (size_t j = 0; j < unitigGraph.unitigChunkBreakpointPositions[i].size(); j++)
 		{
 			if (j > 0) file << ",";
-			file << unitigGraph.unitigChunkBreakpointPositions[i][j];
+			file << unitigGraph.unitigChunkBreakpointPositions[i][j].first << "-" << unitigGraph.unitigChunkBreakpointPositions[i][j].second;
 		}
 		file << std::endl;
 	}
