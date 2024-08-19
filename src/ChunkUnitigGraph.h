@@ -27,6 +27,7 @@ class UnitigPath
 public:
 	std::vector<uint64_t> path;
 	std::vector<std::pair<size_t, size_t>> readPartInPathnode;
+	std::vector<std::pair<size_t, size_t>> chunksInPathnode;
 	size_t pathLeftClip;
 	size_t pathRightClip;
 };

@@ -376,6 +376,7 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 	{
 		std::vector<uint64_t> path;
 		std::vector<std::pair<size_t, size_t>> readPartInPathnode;
+		std::vector<std::pair<size_t, size_t>> chunksInPathnode;
 		uint64_t currentUnitig = std::numeric_limits<uint64_t>::max();
 		size_t currentUnitigIndex = std::numeric_limits<size_t>::max();
 		size_t currentPathLeftClip = std::numeric_limits<size_t>::max();
@@ -391,9 +392,11 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 					result[i].back().pathLeftClip = currentPathLeftClip;
 					result[i].back().pathRightClip = currentPathRightClip;
 					result[i].back().readPartInPathnode = readPartInPathnode;
+					result[i].back().chunksInPathnode = chunksInPathnode;
 				}
 				path.clear();
 				readPartInPathnode.clear();
+				chunksInPathnode.clear();
 				currentUnitig = std::numeric_limits<size_t>::max();
 				currentUnitigIndex = 0;
 				currentPathLeftClip= 0;
@@ -428,6 +431,7 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 				currentPathLeftClip = unitigStartPos;
 				currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
 				readPartInPathnode.emplace_back(readStart, readEnd);
+				chunksInPathnode.emplace_back(j, j);
 				continue;
 			}
 			if (currentUnitig == unitig && currentUnitigIndex+1 == unitigIndex)
@@ -436,6 +440,7 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 				assert(graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos < currentPathRightClip);
 				currentUnitigIndex = unitigIndex;
 				readPartInPathnode.back().second = readEnd;
+				chunksInPathnode.back().second = j;
 				currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
 				continue;
 			}
@@ -448,6 +453,7 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 					assert(readEnd >= readPartInPathnode.back().second);
 					path.emplace_back(unitig);
 					readPartInPathnode.emplace_back(readStart, readEnd);
+					chunksInPathnode.emplace_back(j, j);
 					currentUnitig = unitig;
 					currentUnitigIndex = unitigIndex;
 					currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
@@ -459,14 +465,17 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 			result[i].back().pathLeftClip = currentPathLeftClip;
 			result[i].back().pathRightClip = currentPathRightClip;
 			result[i].back().readPartInPathnode = readPartInPathnode;
+			result[i].back().chunksInPathnode = chunksInPathnode;
 			path.clear();
 			readPartInPathnode.clear();
+			chunksInPathnode.clear();
 			path.emplace_back(unitig);
 			currentUnitig = unitig;
 			currentUnitigIndex = unitigIndex;
 			currentPathLeftClip = unitigStartPos;
 			currentPathRightClip = graph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
 			readPartInPathnode.emplace_back(readStart, readEnd);
+			chunksInPathnode.emplace_back(j, j);
 		}
 		if (path.size() >= 1)
 		{
@@ -475,6 +484,7 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 			result[i].back().pathLeftClip = currentPathLeftClip;
 			result[i].back().pathRightClip = currentPathRightClip;
 			result[i].back().readPartInPathnode = readPartInPathnode;
+			result[i].back().chunksInPathnode = chunksInPathnode;
 		}
 	}
 	return result;

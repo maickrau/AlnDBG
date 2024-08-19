@@ -698,7 +698,7 @@ void resolveSemiAmbiguousUnitigs(std::vector<std::vector<std::tuple<size_t, size
 				assert(alleleBefore == alleleAfter || alleleBefore == std::numeric_limits<size_t>::max() || alleleAfter == std::numeric_limits<size_t>::max());
 				size_t allele = alleleBefore;
 				if (alleleBefore == std::numeric_limits<size_t>::max()) allele = alleleAfter;
-				unitigAllelesInThisRead.emplace_back(readPaths[i][j].readPartInPathnode[k].first, readPaths[i][j].readPartInPathnode[k].second, readPaths[i][j].path[k] & maskUint64_t, allele);
+				unitigAllelesInThisRead.emplace_back(readPaths[i][j].chunksInPathnode[k].first, readPaths[i][j].chunksInPathnode[k].second, readPaths[i][j].path[k] & maskUint64_t, allele);
 			}
 		}
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
@@ -721,8 +721,8 @@ void resolveSemiAmbiguousUnitigs(std::vector<std::vector<std::tuple<size_t, size
 					for (auto t : unitigAllelesInThisRead)
 					{
 						if (std::get<2>(t) != unitig) continue;
-						if (std::get<0>(t) > std::get<0>(chunksPerRead[i][j])) continue;
-						if (std::get<1>(t) < std::get<1>(chunksPerRead[i][j])) continue;
+						if (std::get<0>(t) > j) continue;
+						if (std::get<1>(t) < j) continue;
 						assert(allele == std::numeric_limits<size_t>::max());
 						allele = std::get<3>(t);
 					}
@@ -1108,7 +1108,7 @@ void resolveUnambiguouslyResolvableUnitigs(std::vector<std::vector<std::tuple<si
 				assert(alleleBefore == alleleAfter || alleleBefore == std::numeric_limits<size_t>::max() || alleleAfter == std::numeric_limits<size_t>::max());
 				size_t allele = alleleBefore;
 				if (alleleBefore == std::numeric_limits<size_t>::max()) allele = alleleAfter;
-				unitigAllelesInThisRead.emplace_back(readPaths[i][j].readPartInPathnode[k].first, readPaths[i][j].readPartInPathnode[k].second, readPaths[i][j].path[k] & maskUint64_t, allele);
+				unitigAllelesInThisRead.emplace_back(readPaths[i][j].chunksInPathnode[k].first, readPaths[i][j].chunksInPathnode[k].second, readPaths[i][j].path[k] & maskUint64_t, allele);
 			}
 		}
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
@@ -1124,8 +1124,8 @@ void resolveUnambiguouslyResolvableUnitigs(std::vector<std::vector<std::tuple<si
 					for (auto t : unitigAllelesInThisRead)
 					{
 						if (std::get<2>(t) != unitig) continue;
-						if (std::get<0>(t) > std::get<0>(chunksPerRead[i][j])) continue;
-						if (std::get<1>(t) < std::get<1>(chunksPerRead[i][j])) continue;
+						if (std::get<0>(t) > j) continue;
+						if (std::get<1>(t) < j) continue;
 						assert(allele == std::numeric_limits<size_t>::max());
 						allele = std::get<3>(t);
 					}
