@@ -799,6 +799,91 @@ std::vector<std::vector<size_t>> getPairPhasingGroups(const std::vector<std::vec
 	return result;
 }
 
+bool tripletsArePhasable(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const size_t i, const size_t j, const size_t k)
+{
+	phmap::flat_hash_map<std::tuple<uint8_t, uint8_t, uint8_t>, size_t> tripletCoverage;
+	for (size_t l = 0; l < readFakeMSABases.size(); l++)
+	{
+		tripletCoverage[std::make_tuple(readFakeMSABases[l][i], readFakeMSABases[l][j], readFakeMSABases[l][k])] += 1;
+	}
+	phmap::flat_hash_map<std::tuple<uint8_t, uint8_t, uint8_t>, std::tuple<uint8_t, uint8_t, uint8_t>> parent;
+	for (auto pair : tripletCoverage)
+	{
+		parent[pair.first] = pair.first;
+	}
+	for (auto pair : tripletCoverage)
+	{
+		for (auto pair2 : tripletCoverage)
+		{
+			size_t distance = 0;
+			if (std::get<0>(pair.first) != std::get<0>(pair2.first)) distance += 1;
+			if (std::get<1>(pair.first) != std::get<1>(pair2.first)) distance += 1;
+			if (std::get<2>(pair.first) != std::get<2>(pair2.first)) distance += 1;
+			if (distance <= 1)
+			{
+				merge(parent, pair.first, pair2.first);
+			}
+		}
+	}
+	phmap::flat_hash_map<std::tuple<uint8_t, uint8_t, uint8_t>, size_t> clusterCoverage;
+	for (auto pair : tripletCoverage)
+	{
+		clusterCoverage[find(parent, pair.first)] += pair.second;
+	}
+	if (clusterCoverage.size() < 2) return false;
+	for (auto pair : clusterCoverage)
+	{
+		if (pair.second < 5) return false;
+	}
+	return true;
+}
+
+std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const double estimatedAverageErrorRate)
+{
+	assert(readFakeMSABases.size() >= 1);
+	assert(readFakeMSABases[0].size() >= 1);
+	std::vector<size_t> coveredIndices;
+	for (size_t i = 0; i < readFakeMSABases[0].size(); i++)
+	{
+		phmap::flat_hash_map<uint8_t, size_t> alleles;
+		for (size_t j = 0; j < readFakeMSABases.size(); j++)
+		{
+			alleles[readFakeMSABases[j][i]] += 1;
+		}
+		size_t countCovered = 0;
+		for (auto pair : alleles)
+		{
+			if (pair.second < 3) continue;
+			if (pair.second < readFakeMSABases.size() * estimatedAverageErrorRate) continue;
+			if (pair.first == '-') continue;
+			countCovered += 1;
+		}
+		if (countCovered < 2) continue;
+		coveredIndices.emplace_back(i);
+	}
+	if (coveredIndices.size() < 3) return std::vector<std::vector<uint8_t>> { readFakeMSABases.size(), std::vector<uint8_t> {}};
+	for (size_t i = 2; i < coveredIndices.size(); i++)
+	{
+		for (size_t j = 1; j < i; j++)
+		{
+			for (size_t k = 0; k < j; k++)
+			{
+				if (!tripletsArePhasable(readFakeMSABases, coveredIndices[i], coveredIndices[j], coveredIndices[k])) continue;
+				std::vector<std::vector<uint8_t>> result;
+				for (size_t l = 0; l < readFakeMSABases.size(); l++)
+				{
+					result.emplace_back();
+					result.back().emplace_back(readFakeMSABases[l][coveredIndices[i]]);
+					result.back().emplace_back(readFakeMSABases[l][coveredIndices[j]]);
+					result.back().emplace_back(readFakeMSABases[l][coveredIndices[k]]);
+				}
+				return result;
+			}
+		}
+	}
+	return std::vector<std::vector<uint8_t>> { readFakeMSABases.size(), std::vector<uint8_t> {}};
+}
+
 std::tuple<std::vector<std::vector<uint8_t>>, size_t, size_t> getSNPMSA(const std::vector<std::string>& strings)
 {
 	std::vector<std::vector<uint8_t>> readSNPMSA;
@@ -1171,6 +1256,33 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 						nextNum += 1;
 					}
 					assert(keyToNode.size() >= 2);
+				}
+			}
+			if (keyToNode.size() == 1)
+			{
+				readFakeMSABases = filterByTriplets(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
+				{
+					std::lock_guard<std::mutex> lock { resultMutex };
+					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " triplets check has " << readFakeMSABases[0].size() << " covered" << std::endl;
+				}
+				if (readFakeMSABases[0].size() > 0)
+				{
+					countCovered = readFakeMSABases[0].size();
+					maxEdits = countCovered * mismatchFraction + 1;
+					parent = getFastTransitiveClosure(chunkBeingDone.size(), maxEdits, [&readFakeMSABases](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(readFakeMSABases[i], readFakeMSABases[j], maxDist); });
+					nextNum = 0;
+					keyToNode.clear();
+					for (size_t j = 0; j < parent.size(); j++)
+					{
+						size_t key = find(parent, j);
+						if (keyToNode.count(key) == 1) continue;
+						keyToNode[key] = nextNum;
+						nextNum += 1;
+					}
+					{
+						std::lock_guard<std::mutex> lock { resultMutex };
+						std::cerr << "chunk with coverage " << chunkBeingDone.size() << " triplets check has " << nextNum << " clusters" << std::endl;
+					}
 				}
 			}
 			auto endTime = getTime();
