@@ -647,7 +647,7 @@ std::vector<std::vector<uint8_t>> filterByOccurrenceLinkage(const std::vector<st
 	for (size_t i = 0; i < unfiltered[0].size(); i++)
 	{
 		if (readsPerAllelePerSite[i].size() < 2) continue;
-		if (readsPerAllelePerSite[i][1].size() < 10) continue;
+		if (readsPerAllelePerSite[i][1].size() < 5) continue;
 		possibleSites.emplace_back(i);
 	}
 	std::sort(possibleSites.begin(), possibleSites.end(), [&readsPerAllelePerSite](const size_t left, const size_t right) { return readsPerAllelePerSite[left][0].size() > readsPerAllelePerSite[right][0].size(); });
@@ -661,7 +661,7 @@ std::vector<std::vector<uint8_t>> filterByOccurrenceLinkage(const std::vector<st
 			if (readsPerAllelePerSite[possibleSites[j]][0].size() < readsPerAllelePerSite[possibleSites[i]][0].size() * 0.95) break;
 			if (possibleSites[j] + 10 > possibleSites[i] && possibleSites[j] < possibleSites[i] + 10) continue;
 			if (covered[possibleSites[i]] && covered[possibleSites[j]]) continue;
-			if (allelesMatchApproximately(readsPerAllelePerSite[possibleSites[i]], readsPerAllelePerSite[possibleSites[j]]))
+			if (allelesMatchApproximately(readsPerAllelePerSite[possibleSites[i]], readsPerAllelePerSite[possibleSites[j]]) || allelesMatchPerfectly(readsPerAllelePerSite[possibleSites[i]], readsPerAllelePerSite[possibleSites[j]]))
 			{
 				covered[possibleSites[i]] = true;
 				covered[possibleSites[j]] = true;
