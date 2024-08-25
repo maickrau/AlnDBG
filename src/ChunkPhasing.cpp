@@ -985,10 +985,125 @@ std::tuple<std::vector<std::vector<uint8_t>>, size_t, size_t> getSNPMSA(const st
 	return std::make_tuple(std::move(readSNPMSA), totalMismatches, sequenceLengthSum);
 }
 
+std::vector<std::vector<size_t>> getSNPTransitiveClosure(const std::vector<std::vector<uint8_t>>& readSNPMSA, const size_t edits)
+{
+	std::vector<size_t> parent = getFastTransitiveClosure(readSNPMSA.size(), edits, [&readSNPMSA](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(readSNPMSA[i], readSNPMSA[j], maxDist); });
+	size_t nextNum = 0;
+	phmap::flat_hash_map<size_t, size_t> keyToNode;
+	for (size_t j = 0; j < parent.size(); j++)
+	{
+		size_t key = find(parent, j);
+		if (keyToNode.count(key) == 1) continue;
+		keyToNode[key] = nextNum;
+		nextNum += 1;
+	}
+	std::vector<std::vector<size_t>> result;
+	result.resize(nextNum);
+	for (size_t j = 0; j < parent.size(); j++)
+	{
+		result[keyToNode.at(find(parent, j))].push_back(j);
+	}
+	return result;
+}
+
+std::vector<std::vector<uint8_t>> filterMSAByCoverage(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const double estimatedAverageErrorRate)
+{
+	const size_t minSolidBaseCoverage = 10;
+	std::vector<bool> coveredSite;
+	size_t consensusLength = unfilteredReadFakeMSABases[0].size();
+	coveredSite.resize(consensusLength, false);
+	size_t countCovered = 0;
+	// {
+	// 	std::lock_guard<std::mutex> lock { resultMutex };
+	// 	std::cerr << "chunk with coverage " << chunkBeingDone.size() << " get covered bases time " << formatTime(startTime, getTime()) << std::endl;
+	// }
+	for (size_t j = 0; j < consensusLength; j++)
+	{
+		phmap::flat_hash_map<uint8_t, uint32_t> counts;
+		for (size_t k = 0; k < unfilteredReadFakeMSABases.size(); k++)
+		{
+			assert(unfilteredReadFakeMSABases[k].size() == consensusLength);
+			counts[unfilteredReadFakeMSABases[k][j]] += 1;
+		}
+		if (counts.size() < 2) continue;
+		size_t countSolid = 0;
+		for (auto pair : counts)
+		{
+			if (pair.second < minSolidBaseCoverage) continue;
+			if (pair.second < unfilteredReadFakeMSABases.size() * estimatedAverageErrorRate) continue;
+			if (pair.first == '-') continue;
+			countSolid += 1;
+		}
+		if (countSolid < 2) continue;
+		coveredSite[j] = true;
+		countCovered += 1;
+	}
+	std::vector<std::vector<uint8_t>> readFakeMSABases = unfilteredReadFakeMSABases;
+	for (size_t j = 0; j < unfilteredReadFakeMSABases.size(); j++)
+	{
+		filterVector(readFakeMSABases[j], coveredSite);
+	}
+	return readFakeMSABases;
+}
+
+std::vector<std::vector<size_t>> trySNPSplittingLowerMismatchRate(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
+{
+	std::vector<std::vector<uint8_t>> readFakeMSABases = filterMSAByCoverage(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
+	size_t maxEdits = readFakeMSABases[0].size() * estimatedAverageErrorRate + 1;
+	return getSNPTransitiveClosure(readFakeMSABases, maxEdits);
+}
+
+std::vector<std::vector<size_t>> trySNPSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
+{
+	std::vector<std::vector<uint8_t>> readFakeMSABases = filterMSAByCoverage(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
+	size_t maxEdits = readFakeMSABases[0].size() * mismatchFraction + 1;
+	return getSNPTransitiveClosure(readFakeMSABases, maxEdits);
+}
+
+std::vector<std::vector<size_t>> tryOccurrenceLinkageSNPSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
+{
+	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
+	size_t maxEdits = readFakeMSABases[0].size() * mismatchFraction + 1;
+	return getSNPTransitiveClosure(readFakeMSABases, maxEdits);
+}
+
+std::vector<std::vector<size_t>> tryTripletSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
+{
+	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByTriplets(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
+	return getSNPTransitiveClosure(readFakeMSABases, 1);
+}
+
+std::vector<std::vector<size_t>> tryPairPhasingGroupSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
+{
+	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
+	std::vector<std::vector<size_t>> pairPhasingGroups = getPairPhasingGroups(readFakeMSABases);
+	if (pairPhasingGroups[0].size() == 0 && unfilteredReadFakeMSABases.size() > 1000)
+	{
+		pairPhasingGroups = getPairPhasingGroupsDiscardSingletons(readFakeMSABases);
+	}
+	std::vector<size_t> parent = getFastTransitiveClosure(unfilteredReadFakeMSABases.size(), 0, [&pairPhasingGroups](const size_t i, const size_t j, const size_t maxEdits) { return (pairPhasingGroups[i] == pairPhasingGroups[j]) ? 0 : 1; });
+	size_t nextNum = 0;
+	phmap::flat_hash_map<size_t, size_t> keyToNode;
+	for (size_t j = 0; j < parent.size(); j++)
+	{
+		size_t key = find(parent, j);
+		if (keyToNode.count(key) == 1) continue;
+		keyToNode[key] = nextNum;
+		nextNum += 1;
+	}
+	std::vector<std::vector<size_t>> result;
+	result.resize(nextNum);
+	for (size_t j = 0; j < parent.size(); j++)
+	{
+		result[keyToNode.at(find(parent, j))].push_back(j);
+	}
+	return result;
+}
+
 void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
-	std::cerr << "splitting by SNP transitive closure clustering" << std::endl;
 	const size_t minSolidBaseCoverage = 10;
+	std::cerr << "splitting by SNP transitive closure clustering" << std::endl;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
 	std::atomic<size_t> threadsRunning;
@@ -1034,6 +1149,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				std::this_thread::sleep_for(std::chrono::milliseconds(10));
 				continue;
 			}
+			ScopedCounterIncrementer threadCounter { threadsRunning };
 			auto startTime = getTime();
 			if (chunkBeingDone.size() < 10 || chunkBeingDone.size() < 2*minSolidBaseCoverage)
 			{
@@ -1047,8 +1163,6 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				std::lock_guard<std::mutex> lock { resultMutex };
 				std::cerr << "SNP transitive closure clustering begin chunk with coverage " << chunkBeingDone.size() << std::endl;
 			}
-			ScopedCounterIncrementer threadCounter { threadsRunning };
-			phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>> readAnchorPoints;
 			size_t lengthSum = 0;
 			for (size_t j = 0; j < chunkBeingDone.size(); j++)
 			{
@@ -1086,233 +1200,53 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			assert(unfilteredReadFakeMSABases.size() == chunkBeingDone.size());
 			double estimatedAverageErrorRate = (double)totalMismatches/(double)sequenceLengthSum; // not really error rate, actually error+divergence rate
 			assert(unfilteredReadFakeMSABases.size() == chunkBeingDone.size());
-			std::vector<bool> coveredSite;
-			coveredSite.resize(consensusLength, false);
-			size_t countCovered = 0;
-			auto getCoveredTime = getTime();
-			// {
-			// 	std::lock_guard<std::mutex> lock { resultMutex };
-			// 	std::cerr << "chunk with coverage " << chunkBeingDone.size() << " get covered bases time " << formatTime(startTime, getTime()) << std::endl;
-			// }
-			for (size_t j = 0; j < consensusLength; j++)
+			std::vector<std::vector<size_t>> clusters = trySNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+			assert(clusters.size() >= 1);
+			if (clusters.size() == 1)
 			{
-				phmap::flat_hash_map<uint8_t, uint32_t> counts;
-				for (size_t k = 0; k < unfilteredReadFakeMSABases.size(); k++)
-				{
-					assert(unfilteredReadFakeMSABases[k].size() == consensusLength);
-					counts[unfilteredReadFakeMSABases[k][j]] += 1;
-				}
-				if (counts.size() < 2) continue;
-				size_t countSolid = 0;
-				for (auto pair : counts)
-				{
-					if (pair.second < minSolidBaseCoverage) continue;
-					if (pair.second < chunkBeingDone.size() * estimatedAverageErrorRate) continue;
-					if (pair.first == '-') continue;
-					countSolid += 1;
-				}
-				if (countSolid < 2) continue;
-				coveredSite[j] = true;
-				countCovered += 1;
+				clusters = tryOccurrenceLinkageSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				assert(clusters.size() >= 1);
 			}
-			std::vector<std::vector<uint8_t>> readFakeMSABases = unfilteredReadFakeMSABases;
-			bool filtered = false;
-			auto filterTime = getTime();
-			for (size_t j = 0; j < chunkBeingDone.size(); j++)
+			if (clusters.size() == 1 && chunkBeingDone.size() > 1000)
 			{
-				filterVector(readFakeMSABases[j], coveredSite);
+				clusters = trySNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				assert(clusters.size() >= 1);
 			}
-			if (readFakeMSABases[0].size() < 2)
+			if (clusters.size() == 1)
 			{
-				filtered = true;
-//				{
-//					std::lock_guard<std::mutex> lock { resultMutex };
-//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " begin filter stage 1" << std::endl;
-//				}
-				readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
-//				{
-//					std::lock_guard<std::mutex> lock { resultMutex };
-//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did filter stage 1 from " << countCovered << " to " << readFakeMSABases[0].size() << " covered, sites " << consensusLength << std::endl;
-//				}
-				countCovered = readFakeMSABases[0].size();
+				clusters = tryPairPhasingGroupSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				assert(clusters.size() >= 1);
 			}
-			if (readFakeMSABases[0].size() < 2)
+			if (clusters.size() == 1)
 			{
-				auto endTime = getTime();
-				std::lock_guard<std::mutex> lock { resultMutex };
-				std::cerr << "SNP transitive closure clustering skipped chunk with coverage " << chunkBeingDone.size() << " due to no covered sites, sites: " << consensusLength << " covered: " << countCovered << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
-				//std::cerr << "times " << formatTime(startTime, getSequencesTime) << " " << formatTime(getSequencesTime, getConsensusTime) << " " << formatTime(getConsensusTime, alignTime) << " " << formatTime(alignTime, getCoveredTime) << " " << formatTime(getCoveredTime, filterTime) << " " << formatTime(filterTime, transitiveClosureTime) << " " << formatTime(transitiveClosureTime, endTime) << std::endl;
-/*				std::cerr << "sites:";
-				for (size_t k = 0; k < coveredSite.size(); k++)
-				{
-					if (coveredSite[k]) std::cerr << " " << k;
-				}
-				std::cerr << std::endl;*/
-				chunksDoneProcessing.emplace_back();
-				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
-				continue;
-			}
-			std::vector<size_t> parent;
-			size_t maxEdits = countCovered * mismatchFraction + 1;
-//			{
-//				std::lock_guard<std::mutex> lock { resultMutex };
-//				std::cerr << "chunk with coverage " << chunkBeingDone.size() << " get transitive closure time " << formatTime(startTime, getTime()) << std::endl;
-//			}
-			parent = getFastTransitiveClosure(chunkBeingDone.size(), maxEdits, [&readFakeMSABases](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(readFakeMSABases[i], readFakeMSABases[j], maxDist); });
-			auto transitiveClosureTime = getTime();
-			size_t nextNum = 0;
-			phmap::flat_hash_map<size_t, size_t> keyToNode;
-			for (size_t j = 0; j < parent.size(); j++)
-			{
-				size_t key = find(parent, j);
-				if (keyToNode.count(key) == 1) continue;
-				keyToNode[key] = nextNum;
-				nextNum += 1;
-			}
-			if (keyToNode.size() == 1)
-			{
-				size_t smallerDist = countCovered * estimatedAverageErrorRate + 1;
-//				{
-//					std::lock_guard<std::mutex> lock { resultMutex };
-//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " check smaller dist " << smallerDist << " vs " << maxEdits << " time " << formatTime(startTime, getTime()) << std::endl;
-//				}
-				if (smallerDist < maxEdits && chunkBeingDone.size() > 1000)
-				{
-//					{
-//						std::lock_guard<std::mutex> lock { resultMutex };
-//						std::cerr << "chunk with coverage " << chunkBeingDone.size() << " get transitive closure with smaller dist " << smallerDist << " time " << formatTime(startTime, getTime()) << std::endl;
-//					}
-					parent = getFastTransitiveClosure(chunkBeingDone.size(), smallerDist, [&readFakeMSABases](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(readFakeMSABases[i], readFakeMSABases[j], maxDist); });
-					nextNum = 0;
-					keyToNode.clear();
-					for (size_t j = 0; j < parent.size(); j++)
-					{
-						size_t key = find(parent, j);
-						if (keyToNode.count(key) == 1) continue;
-						keyToNode[key] = nextNum;
-						nextNum += 1;
-					}
-//					{
-//						std::lock_guard<std::mutex> lock { resultMutex };
-//						std::cerr << "chunk with coverage " << chunkBeingDone.size() << " clusters " << keyToNode.size() << " with smaller dist " << smallerDist << " time  " << formatTime(startTime, getTime()) << std::endl;
-//					}
-				}
-			}
-			if (keyToNode.size() == 1 && !filtered)
-			{
-//				{
-//					std::lock_guard<std::mutex> lock { resultMutex };
-//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " begin filter stage 2" << std::endl;
-//				}
-				filtered = true;
-				readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
-//				{
-//					std::lock_guard<std::mutex> lock { resultMutex };
-//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did filter stage 2 from " << countCovered << " to " << readFakeMSABases[0].size() << " covered, sites " << consensusSeq.size() << std::endl;
-//				}
-				countCovered = readFakeMSABases[0].size();
-				maxEdits = countCovered * mismatchFraction + 1;
-				parent = getFastTransitiveClosure(chunkBeingDone.size(), maxEdits, [&readFakeMSABases](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(readFakeMSABases[i], readFakeMSABases[j], maxDist); });
-				nextNum = 0;
-				keyToNode.clear();
-				for (size_t j = 0; j < parent.size(); j++)
-				{
-					size_t key = find(parent, j);
-					if (keyToNode.count(key) == 1) continue;
-					keyToNode[key] = nextNum;
-					nextNum += 1;
-				}
-			}
-			if (keyToNode.size() == 1)
-			{
-				assert(filtered);
-//				{
-//					std::lock_guard<std::mutex> lock { resultMutex };
-//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " do pair phasing" << std::endl;
-//				}
-				std::vector<std::vector<size_t>> pairPhasingGroups = getPairPhasingGroups(readFakeMSABases);
-//				{
-//					std::lock_guard<std::mutex> lock { resultMutex };
-//					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did pair phasing, num groups " << pairPhasingGroups[0].size() << std::endl;
-//				}
-				if (pairPhasingGroups[0].size() == 0 && chunkBeingDone.size() > 1000)
-				{
-					pairPhasingGroups = getPairPhasingGroupsDiscardSingletons(readFakeMSABases);
-//					{
-//						std::lock_guard<std::mutex> lock { resultMutex };
-//						std::cerr << "chunk with coverage " << chunkBeingDone.size() << " did pair phasing discard singletons, num groups " << pairPhasingGroups[0].size() << std::endl;
-//					}
-				}
-				if (pairPhasingGroups[0].size() >= 1)
-				{
-					parent = getFastTransitiveClosure(chunkBeingDone.size(), 0, [&pairPhasingGroups](const size_t i, const size_t j, const size_t maxEdits) { return (pairPhasingGroups[i] == pairPhasingGroups[j]) ? 0 : 1; });
-					nextNum = 0;
-					keyToNode.clear();
-					for (size_t j = 0; j < parent.size(); j++)
-					{
-						size_t key = find(parent, j);
-						if (keyToNode.count(key) == 1) continue;
-						keyToNode[key] = nextNum;
-						nextNum += 1;
-					}
-					assert(keyToNode.size() >= 2);
-				}
-			}
-			if (keyToNode.size() == 1)
-			{
-				readFakeMSABases = filterByTriplets(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
-				{
-					std::lock_guard<std::mutex> lock { resultMutex };
-					std::cerr << "chunk with coverage " << chunkBeingDone.size() << " triplets check has " << readFakeMSABases[0].size() << " covered" << std::endl;
-				}
-				if (readFakeMSABases[0].size() > 0)
-				{
-					countCovered = readFakeMSABases[0].size();
-					maxEdits = countCovered * mismatchFraction + 1;
-					parent = getFastTransitiveClosure(chunkBeingDone.size(), maxEdits, [&readFakeMSABases](const size_t i, const size_t j, const size_t maxDist) { return getHammingdistance(readFakeMSABases[i], readFakeMSABases[j], maxDist); });
-					nextNum = 0;
-					keyToNode.clear();
-					for (size_t j = 0; j < parent.size(); j++)
-					{
-						size_t key = find(parent, j);
-						if (keyToNode.count(key) == 1) continue;
-						keyToNode[key] = nextNum;
-						nextNum += 1;
-					}
-					{
-						std::lock_guard<std::mutex> lock { resultMutex };
-						std::cerr << "chunk with coverage " << chunkBeingDone.size() << " triplets check has " << nextNum << " clusters" << std::endl;
-					}
-				}
+				clusters = tryTripletSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				assert(clusters.size() >= 1);
 			}
 			auto endTime = getTime();
-			if (keyToNode.size() == 1)
-			{
-				std::lock_guard<std::mutex> lock { resultMutex };
-				std::cerr << "SNP transitive closure clustering splitted chunk with coverage " << chunkBeingDone.size() << " to " << keyToNode.size() << " chunks, sites: " << consensusLength << " covered: " << countCovered << " maxedits: " << maxEdits << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
-				// std::cerr << "times " << formatTime(startTime, getSequencesTime) << " " << formatTime(getSequencesTime, getConsensusTime) << " " << formatTime(getConsensusTime, alignTime) << " " << formatTime(alignTime, getCoveredTime) << " " << formatTime(getCoveredTime, filterTime) << " " << formatTime(filterTime, transitiveClosureTime) << " " << formatTime(transitiveClosureTime, endTime) << std::endl;
-/*				std::cerr << "sites:";
-				for (size_t k = 0; k < coveredSite.size(); k++)
-				{
-					if (coveredSite[k]) std::cerr << " " << k;
-				}
-				std::cerr << std::endl;*/
-				chunksDoneProcessing.emplace_back();
-				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
-				continue;
-			}
-			std::vector<std::vector<std::pair<size_t, size_t>>> chunkResult;
-			chunkResult.resize(keyToNode.size());
-			for (size_t j = 0; j < parent.size(); j++)
-			{
-				chunkResult[keyToNode.at(find(parent, j))].emplace_back(chunkBeingDone[j]);
-			}
 			// sort smallest last, so emplace-pop-swap puts biggest on top of chunksNeedProcessing
+			assert(clusters.size() >= 1);
+			std::vector<std::vector<std::pair<size_t, size_t>>> chunkResult;
+			chunkResult.resize(clusters.size());
+			for (size_t i = 0; i < clusters.size(); i++)
+			{
+				for (size_t j = 0; j < clusters[i].size(); j++)
+				{
+					assert(clusters[i][j] < chunkBeingDone.size());
+					chunkResult[i].emplace_back(chunkBeingDone[clusters[i][j]]);
+				}
+			}
+			assert(chunkResult.size() >= 1);
 			std::sort(chunkResult.begin(), chunkResult.end(), [](const auto& left, const auto& right) { return left.size() > right.size(); });
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
-				if (keyToNode.size() >= 2) countSplitted += 1;
-				std::cerr << "SNP transitive closure clustering splitted chunk with coverage " << chunkBeingDone.size() << " to " << keyToNode.size() << " chunks, biggest chunk size: " << chunkResult[0].size() << ", sites: " << consensusLength << " covered: " << countCovered << " maxedits: " << maxEdits << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
+				if (chunkResult.size() >= 2) countSplitted += 1;
+				std::cerr << "SNP transitive closure clustering splitted chunk with coverage " << chunkBeingDone.size() << " to " << chunkResult.size() << " chunks, biggest chunk size: " << chunkResult[0].size() << ", sites: " << consensusLength << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
+				if (chunkResult.size() == 1)
+				{
+					chunksDoneProcessing.emplace_back();
+					std::swap(chunksDoneProcessing.back(), chunkResult.back());
+					chunkResult.pop_back();
+				}
 				// std::cerr << "times " << formatTime(startTime, getSequencesTime) << " " << formatTime(getSequencesTime, getConsensusTime) << " " << formatTime(getConsensusTime, alignTime) << " " << formatTime(alignTime, getCoveredTime) << " " << formatTime(getCoveredTime, filterTime) << " " << formatTime(filterTime, transitiveClosureTime) << " " << formatTime(transitiveClosureTime, endTime) << std::endl;
 /*				std::cerr << "sites:";
 				for (size_t k = 0; k < coveredSite.size(); k++)
