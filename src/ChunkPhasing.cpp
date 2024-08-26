@@ -1,5 +1,6 @@
 #include <cassert>
 #include <iostream>
+#include <fstream>
 #include "ChunkPhasing.h"
 #include "Common.h"
 #include "SequenceHelper.h"
@@ -597,16 +598,16 @@ bool allelesMatchApproximately(const std::vector<std::vector<size_t>>& left, con
 	if (right.size() > left.size() && right[left.size()].size() >= 10) return false;
 	for (size_t i = 0; i < left.size() && i < right.size(); i++)
 	{
-		if (left[i].size() < right[i].size() * 0.95) return false;
-		if (right[i].size() < left[i].size() * 0.95) return false;
+		if (left[i].size() < right[i].size() * 0.9) return false;
+		if (right[i].size() < left[i].size() * 0.9) return false;
 		if (left[i].size() < 10) break;
 		if (right[i].size() < 10) break;
 	}
 	for (size_t i = 0; i < left.size() && i < right.size(); i++)
 	{
 		size_t intersect = intersectSize(left[i], right[i]);
-		if (intersect < left[i].size() * 0.95) return false;
-		if (intersect < right[i].size() * 0.95) return false;
+		if (intersect < left[i].size() * 0.9) return false;
+		if (intersect < right[i].size() * 0.9) return false;
 		if (left[i].size() < 10) break;
 		if (right[i].size() < 10) break;
 	}
@@ -658,7 +659,7 @@ std::vector<std::vector<uint8_t>> filterByOccurrenceLinkage(const std::vector<st
 		for (size_t j = i+1; j < possibleSites.size(); j++)
 		{
 			assert(readsPerAllelePerSite[possibleSites[j]][0].size() <= readsPerAllelePerSite[possibleSites[i]][0].size());
-			if (readsPerAllelePerSite[possibleSites[j]][0].size() < readsPerAllelePerSite[possibleSites[i]][0].size() * 0.95) break;
+			if (readsPerAllelePerSite[possibleSites[j]][0].size() < readsPerAllelePerSite[possibleSites[i]][0].size() * 0.9) break;
 			if (possibleSites[j] + 10 > possibleSites[i] && possibleSites[j] < possibleSites[i] + 10) continue;
 			if (covered[possibleSites[i]] && covered[possibleSites[j]]) continue;
 			if (allelesMatchApproximately(readsPerAllelePerSite[possibleSites[i]], readsPerAllelePerSite[possibleSites[j]]) || allelesMatchPerfectly(readsPerAllelePerSite[possibleSites[i]], readsPerAllelePerSite[possibleSites[j]]))
@@ -799,6 +800,51 @@ std::vector<std::vector<size_t>> getPairPhasingGroups(const std::vector<std::vec
 	return result;
 }
 
+void insertTripletClusters(std::vector<std::vector<uint8_t>>& result, const std::vector<std::vector<uint8_t>>& readFakeMSABases, const size_t i, const size_t j, const size_t k)
+{
+	phmap::flat_hash_set<std::tuple<uint8_t, uint8_t, uint8_t>> triplets;
+	for (size_t l = 0; l < readFakeMSABases.size(); l++)
+	{
+		triplets.insert(std::make_tuple(readFakeMSABases[l][i], readFakeMSABases[l][j], readFakeMSABases[l][k]));
+	}
+	phmap::flat_hash_map<std::tuple<uint8_t, uint8_t, uint8_t>, std::tuple<uint8_t, uint8_t, uint8_t>> parent;
+	for (auto pair : triplets)
+	{
+		parent[pair] = pair;
+	}
+	for (auto pair : triplets)
+	{
+		for (auto pair2 : triplets)
+		{
+			size_t distance = 0;
+			if (std::get<0>(pair) != std::get<0>(pair2)) distance += 1;
+			if (std::get<1>(pair) != std::get<1>(pair2)) distance += 1;
+			if (std::get<2>(pair) != std::get<2>(pair2)) distance += 1;
+			if (distance <= 1)
+			{
+				merge(parent, pair, pair2);
+			}
+		}
+	}
+	phmap::flat_hash_map<std::tuple<size_t, size_t, size_t>, size_t> clusterToIndex;
+	size_t nextNum = 0;
+	for (auto t : triplets)
+	{
+		if (clusterToIndex.count(find(parent, t)) == 1) continue;
+		clusterToIndex[find(parent, t)] = nextNum;
+		nextNum += 1;
+	}
+	assert(nextNum >= 2);
+	assert(nextNum <= 5);
+	for (size_t l = 0; l < readFakeMSABases.size(); l++)
+	{
+		std::tuple<size_t, size_t, size_t> key { readFakeMSABases[l][i], readFakeMSABases[l][j], readFakeMSABases[l][k] };
+		assert(parent.count(key) == 1);
+		assert(clusterToIndex.count(parent.at(key)) == 1);
+		result[l].emplace_back(clusterToIndex.at(parent.at(key)));
+	}
+}
+
 bool tripletsArePhasable(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const size_t i, const size_t j, const size_t k)
 {
 	phmap::flat_hash_map<std::tuple<uint8_t, uint8_t, uint8_t>, size_t> tripletCoverage;
@@ -861,27 +907,35 @@ std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector
 		if (countCovered < 2) continue;
 		coveredIndices.emplace_back(i);
 	}
-	if (coveredIndices.size() < 3) return std::vector<std::vector<uint8_t>> { readFakeMSABases.size(), std::vector<uint8_t> {}};
+	std::vector<std::vector<uint8_t>> result;
+	result.resize(readFakeMSABases.size());
+	if (coveredIndices.size() < 3) return result;
+	std::vector<bool> indexUsed;
+	indexUsed.resize(coveredIndices.size(), false);
 	for (size_t i = 2; i < coveredIndices.size(); i++)
 	{
+		if (indexUsed[i]) continue;
 		for (size_t j = 1; j < i; j++)
 		{
+			if (indexUsed[i]) break;
+			if (indexUsed[j]) continue;
+			if (coveredIndices[i]+10 > coveredIndices[j] && coveredIndices[j]+10 > coveredIndices[i]) continue;
 			for (size_t k = 0; k < j; k++)
 			{
+				if (indexUsed[i]) break;
+				if (indexUsed[j]) break;
+				if (indexUsed[k]) continue;
+				if (coveredIndices[i]+10 > coveredIndices[k] && coveredIndices[k]+10 > coveredIndices[i]) continue;
+				if (coveredIndices[k]+10 > coveredIndices[j] && coveredIndices[j]+10 > coveredIndices[k]) continue;
 				if (!tripletsArePhasable(readFakeMSABases, coveredIndices[i], coveredIndices[j], coveredIndices[k])) continue;
-				std::vector<std::vector<uint8_t>> result;
-				for (size_t l = 0; l < readFakeMSABases.size(); l++)
-				{
-					result.emplace_back();
-					result.back().emplace_back(readFakeMSABases[l][coveredIndices[i]]);
-					result.back().emplace_back(readFakeMSABases[l][coveredIndices[j]]);
-					result.back().emplace_back(readFakeMSABases[l][coveredIndices[k]]);
-				}
-				return result;
+				insertTripletClusters(result, readFakeMSABases, coveredIndices[i], coveredIndices[j], coveredIndices[k]);
+				indexUsed[i] = true;
+				indexUsed[j] = true;
+				indexUsed[k] = true;
 			}
 		}
 	}
-	return std::vector<std::vector<uint8_t>> { readFakeMSABases.size(), std::vector<uint8_t> {}};
+	return result;
 }
 
 std::tuple<std::vector<std::vector<uint8_t>>, size_t, size_t> getSNPMSA(const std::vector<std::string>& strings)
@@ -1046,16 +1100,129 @@ std::vector<std::vector<uint8_t>> filterMSAByCoverage(const std::vector<std::vec
 	return readFakeMSABases;
 }
 
+bool sitePairIsMultinomiallySignificant(const std::vector<std::vector<uint8_t>>& unfiltered, const size_t left, const size_t right)
+{
+	phmap::flat_hash_map<uint8_t, size_t> leftCoverage;
+	phmap::flat_hash_map<uint8_t, size_t> rightCoverage;
+	phmap::flat_hash_map<uint8_t, phmap::flat_hash_map<uint8_t, size_t>> leftCoverageConditionalOnRight;
+	phmap::flat_hash_map<uint8_t, phmap::flat_hash_map<uint8_t, size_t>> rightCoverageConditionalOnLeft;
+	for (size_t i = 0; i < unfiltered.size(); i++)
+	{
+		leftCoverage[unfiltered[i][left]] += 1;
+		rightCoverage[unfiltered[i][right]] += 1;
+		leftCoverageConditionalOnRight[unfiltered[i][right]][unfiltered[i][left]] += 1;
+		rightCoverageConditionalOnLeft[unfiltered[i][left]][unfiltered[i][right]] += 1;
+	}
+	// test if P(left) != P(left|right) and P(right) != P(right|left)
+	// chi squared test p=0.001, null is that P(left) == P(left|right) and P(right) == P(right|left)
+	// distributions are multinomial with five categories: A C G T -
+	const double chiSquaredCutoff = 18.467; // 4 degrees of freedom, critical value=0.999
+	for (const auto& pair : leftCoverageConditionalOnRight)
+	{
+		size_t totalCoverageHere = 0;
+		for (const auto& pair2 : pair.second)
+		{
+			totalCoverageHere += pair2.second;
+		}
+		double chiSquaredValue = 0;
+		for (const auto& pair2 : pair.second)
+		{
+			assert(leftCoverage.count(pair2.first) == 1);
+			assert(leftCoverage.at(pair2.first) > 0);
+			assert(pair2.second <= leftCoverage.at(pair2.first));
+			double expectedCount = (double)leftCoverage.at(pair2.first) * (double)totalCoverageHere / (double)unfiltered.size();
+			assert(expectedCount > 0);
+			chiSquaredValue += ((double)pair2.second - expectedCount) * ((double)pair2.second - expectedCount) / expectedCount;
+		}
+		if (chiSquaredValue >= chiSquaredCutoff) return true;
+	}
+	for (const auto& pair : rightCoverageConditionalOnLeft)
+	{
+		size_t totalCoverageHere = 0;
+		for (const auto& pair2 : pair.second)
+		{
+			totalCoverageHere += pair2.second;
+		}
+		double chiSquaredValue = 0;
+		for (const auto& pair2 : pair.second)
+		{
+			assert(rightCoverage.count(pair2.first) == 1);
+			assert(rightCoverage.at(pair2.first) > 0);
+			assert(pair2.second <= rightCoverage.at(pair2.first));
+			double expectedCount = (double)rightCoverage.at(pair2.first) * (double)totalCoverageHere / (double)unfiltered.size();
+			assert(expectedCount > 0);
+			chiSquaredValue += ((double)pair2.second - expectedCount) * ((double)pair2.second - expectedCount) / expectedCount;
+		}
+		if (chiSquaredValue >= chiSquaredCutoff) return true;
+	}
+	return false;
+}
+
+std::vector<std::vector<uint8_t>> filterByMultinomiallySignificantSNPs(const std::vector<std::vector<uint8_t>>& unfiltered, const double estimatedAverageErrorRate)
+{
+	std::vector<std::vector<uint8_t>> filtered = filterMSAByCoverage(unfiltered, estimatedAverageErrorRate);
+	size_t oldSize = filtered[0].size();
+	std::vector<bool> multinomialSignificant;
+	multinomialSignificant.resize(filtered[0].size(), false);
+	for (size_t i = 1; i < filtered[0].size(); i++)
+	{
+		for (size_t j = 0; j < i; j++)
+		{
+			if (multinomialSignificant[i] && multinomialSignificant[j]) continue;
+			if (!sitePairIsMultinomiallySignificant(filtered, i, j)) continue;
+			multinomialSignificant[i] = true;
+			multinomialSignificant[j] = true;
+		}
+	}
+	for (size_t i = 0; i < filtered.size(); i++)
+	{
+		filterVector(filtered[i], multinomialSignificant);
+	}
+	return filtered;
+}
+
 std::vector<std::vector<size_t>> trySNPSplittingLowerMismatchRate(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
 {
 	std::vector<std::vector<uint8_t>> readFakeMSABases = filterMSAByCoverage(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
-	size_t maxEdits = readFakeMSABases[0].size() * estimatedAverageErrorRate + 1;
-	return getSNPTransitiveClosure(readFakeMSABases, maxEdits);
+	size_t biggestEdits = readFakeMSABases[0].size() * mismatchFraction + 1;
+	size_t smallestEdits = readFakeMSABases[0].size() * estimatedAverageErrorRate + 1;
+	assert(biggestEdits >= smallestEdits);
+	assert(smallestEdits >= 1);
+	for (size_t edits = biggestEdits; edits >= smallestEdits; edits--)
+	{
+		auto result = getSNPTransitiveClosure(readFakeMSABases, edits);
+		if (result.size() >= 2) return result;
+		if (edits == smallestEdits) return result;
+	}
+	assert(false);
 }
 
 std::vector<std::vector<size_t>> trySNPSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
 {
 	std::vector<std::vector<uint8_t>> readFakeMSABases = filterMSAByCoverage(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
+	size_t maxEdits = readFakeMSABases[0].size() * mismatchFraction + 1;
+	return getSNPTransitiveClosure(readFakeMSABases, maxEdits);
+}
+
+std::vector<std::vector<size_t>> tryMultinomiallySignificantSNPSplittingLowerMismatchRate(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
+{
+	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByMultinomiallySignificantSNPs(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
+	size_t biggestEdits = readFakeMSABases[0].size() * mismatchFraction + 1;
+	size_t smallestEdits = readFakeMSABases[0].size() * estimatedAverageErrorRate + 1;
+	assert(biggestEdits >= smallestEdits);
+	assert(smallestEdits >= 1);
+	for (size_t edits = biggestEdits; edits >= smallestEdits; edits--)
+	{
+		auto result = getSNPTransitiveClosure(readFakeMSABases, edits);
+		if (result.size() >= 2) return result;
+		if (edits == smallestEdits) return result;
+	}
+	assert(false);
+}
+
+std::vector<std::vector<size_t>> tryMultinomiallySignificantSNPSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
+{
+	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByMultinomiallySignificantSNPs(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
 	size_t maxEdits = readFakeMSABases[0].size() * mismatchFraction + 1;
 	return getSNPTransitiveClosure(readFakeMSABases, maxEdits);
 }
@@ -1070,7 +1237,7 @@ std::vector<std::vector<size_t>> tryOccurrenceLinkageSNPSplitting(const std::vec
 std::vector<std::vector<size_t>> tryTripletSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
 {
 	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByTriplets(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
-	return getSNPTransitiveClosure(readFakeMSABases, 1);
+	return getSNPTransitiveClosure(readFakeMSABases, 0);
 }
 
 std::vector<std::vector<size_t>> tryPairPhasingGroupSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
@@ -1207,9 +1374,9 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				clusters = tryOccurrenceLinkageSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				assert(clusters.size() >= 1);
 			}
-			if (clusters.size() == 1 && chunkBeingDone.size() > 1000)
+			if (clusters.size() == 1)
 			{
-				clusters = trySNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				clusters = tryMultinomiallySignificantSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				assert(clusters.size() >= 1);
 			}
 			if (clusters.size() == 1)
@@ -1220,6 +1387,16 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			if (clusters.size() == 1)
 			{
 				clusters = tryTripletSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				assert(clusters.size() >= 1);
+			}
+			if (clusters.size() == 1 && chunkBeingDone.size() > 1000)
+			{
+				clusters = tryMultinomiallySignificantSNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				assert(clusters.size() >= 1);
+			}
+			if (clusters.size() == 1 && chunkBeingDone.size() > 1000)
+			{
+				clusters = trySNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				assert(clusters.size() >= 1);
 			}
 			auto endTime = getTime();
