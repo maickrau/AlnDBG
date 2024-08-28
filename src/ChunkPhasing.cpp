@@ -845,12 +845,12 @@ void insertTripletClusters(std::vector<std::vector<uint8_t>>& result, const std:
 	}
 }
 
-bool tripletsArePhasable(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const size_t i, const size_t j, const size_t k)
+bool tripletsArePhasable(const phmap::flat_hash_map<std::string, size_t>& alleleCoverages, const size_t i, const size_t j, const size_t k)
 {
 	phmap::flat_hash_map<std::tuple<uint8_t, uint8_t, uint8_t>, size_t> tripletCoverage;
-	for (size_t l = 0; l < readFakeMSABases.size(); l++)
+	for (const auto& pair : alleleCoverages)
 	{
-		tripletCoverage[std::make_tuple(readFakeMSABases[l][i], readFakeMSABases[l][j], readFakeMSABases[l][k])] += 1;
+		tripletCoverage[std::make_tuple(pair.first[i], pair.first[j], pair.first[k])] += pair.second;
 	}
 	phmap::flat_hash_map<std::tuple<uint8_t, uint8_t, uint8_t>, std::tuple<uint8_t, uint8_t, uint8_t>> parent;
 	for (auto pair : tripletCoverage)
@@ -912,26 +912,80 @@ std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector
 	if (coveredIndices.size() < 3) return result;
 	std::vector<bool> indexUsed;
 	indexUsed.resize(coveredIndices.size(), false);
-	for (size_t i = 2; i < coveredIndices.size(); i++)
+	for (size_t chunki = 0; chunki < (coveredIndices.size()+9)/10; chunki++)
 	{
-		if (indexUsed[i]) continue;
-		for (size_t j = 1; j < i; j++)
+		for (size_t chunkj = 0; chunkj < (coveredIndices.size()+9)/10; chunkj++)
 		{
-			if (indexUsed[i]) break;
-			if (indexUsed[j]) continue;
-			if (coveredIndices[i]+10 > coveredIndices[j] && coveredIndices[j]+10 > coveredIndices[i]) continue;
-			for (size_t k = 0; k < j; k++)
+			for (size_t chunkk = 0; chunkk < (coveredIndices.size()+9)/10; chunkk++)
 			{
-				if (indexUsed[i]) break;
-				if (indexUsed[j]) break;
-				if (indexUsed[k]) continue;
-				if (coveredIndices[i]+10 > coveredIndices[k] && coveredIndices[k]+10 > coveredIndices[i]) continue;
-				if (coveredIndices[k]+10 > coveredIndices[j] && coveredIndices[j]+10 > coveredIndices[k]) continue;
-				if (!tripletsArePhasable(readFakeMSABases, coveredIndices[i], coveredIndices[j], coveredIndices[k])) continue;
-				insertTripletClusters(result, readFakeMSABases, coveredIndices[i], coveredIndices[j], coveredIndices[k]);
-				indexUsed[i] = true;
-				indexUsed[j] = true;
-				indexUsed[k] = true;
+				phmap::flat_hash_map<std::string, size_t> alleleCoverages;
+				for (size_t l = 0; l < readFakeMSABases.size(); l++)
+				{
+					std::string allele;
+					for (size_t i = 0; i < 10; i++)
+					{
+						if (chunki*10+i < coveredIndices.size())
+						{
+							allele.push_back(readFakeMSABases[l][coveredIndices[chunki*10+i]]);
+						}
+						else
+						{
+							allele.push_back('N');
+						}
+					}
+					for (size_t i = 0; i < 10; i++)
+					{
+						if (chunkj*10+i < coveredIndices.size())
+						{
+							allele.push_back(readFakeMSABases[l][coveredIndices[chunkj*10+i]]);
+						}
+						else
+						{
+							allele.push_back('N');
+						}
+					}
+					for (size_t i = 0; i < 10; i++)
+					{
+						if (chunkk*10+i < coveredIndices.size())
+						{
+							allele.push_back(readFakeMSABases[l][coveredIndices[chunkk*10+i]]);
+						}
+						else
+						{
+							allele.push_back('N');
+						}
+					}
+					alleleCoverages[allele] += 1;
+				}
+				for (size_t offi = 0; offi < 10; offi++)
+				{
+					size_t i = chunki*10+offi;
+					if (i >= indexUsed.size()) break;
+					if (indexUsed[i]) continue;
+					for (size_t offj = 0; offj < 10; offj++)
+					{
+						if (indexUsed[i]) break;
+						size_t j = chunkj*10+offj;
+						if (j >= indexUsed.size()) break;
+						if (indexUsed[j]) continue;
+						if (coveredIndices[i]+10 > coveredIndices[j] && coveredIndices[j]+10 > coveredIndices[i]) continue;
+						for (size_t offk = 0; offk < 10; offk++)
+						{
+							if (indexUsed[i]) break;
+							if (indexUsed[j]) break;
+							size_t k = chunkk*10+offk;
+							if (k >= indexUsed.size()) break;
+							if (indexUsed[k]) continue;
+							if (coveredIndices[i]+10 > coveredIndices[k] && coveredIndices[k]+10 > coveredIndices[i]) continue;
+							if (coveredIndices[k]+10 > coveredIndices[j] && coveredIndices[j]+10 > coveredIndices[k]) continue;
+							if (!tripletsArePhasable(alleleCoverages, offi, 10+offj, 20+offk)) continue;
+							insertTripletClusters(result, readFakeMSABases, coveredIndices[i], coveredIndices[j], coveredIndices[k]);
+							indexUsed[i] = true;
+							indexUsed[j] = true;
+							indexUsed[k] = true;
+						}
+					}
+				}
 			}
 		}
 	}
