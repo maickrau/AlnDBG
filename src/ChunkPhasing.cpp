@@ -910,6 +910,16 @@ std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector
 	std::vector<std::vector<uint8_t>> result;
 	result.resize(readFakeMSABases.size());
 	if (coveredIndices.size() < 3) return result;
+	phmap::flat_hash_map<std::string, size_t> filteredCoverages;
+	for (size_t i = 0; i < readFakeMSABases.size(); i++)
+	{
+		std::string allele;
+		for (size_t j = 0; j < coveredIndices.size(); j++)
+		{
+			allele.push_back(readFakeMSABases[i][coveredIndices[j]]);
+		}
+		filteredCoverages[allele] += 1;
+	}
 	std::vector<bool> indexUsed;
 	indexUsed.resize(coveredIndices.size(), false);
 	for (size_t chunki = 0; chunki < (coveredIndices.size()+9)/10; chunki++)
@@ -919,14 +929,14 @@ std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector
 			for (size_t chunkk = 0; chunkk < (coveredIndices.size()+9)/10; chunkk++)
 			{
 				phmap::flat_hash_map<std::string, size_t> alleleCoverages;
-				for (size_t l = 0; l < readFakeMSABases.size(); l++)
+				for (auto pair : filteredCoverages)
 				{
 					std::string allele;
 					for (size_t i = 0; i < 10; i++)
 					{
 						if (chunki*10+i < coveredIndices.size())
 						{
-							allele.push_back(readFakeMSABases[l][coveredIndices[chunki*10+i]]);
+							allele.push_back(pair.first[chunki*10+i]);
 						}
 						else
 						{
@@ -937,7 +947,7 @@ std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector
 					{
 						if (chunkj*10+i < coveredIndices.size())
 						{
-							allele.push_back(readFakeMSABases[l][coveredIndices[chunkj*10+i]]);
+							allele.push_back(pair.first[chunkj*10+i]);
 						}
 						else
 						{
@@ -948,14 +958,14 @@ std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector
 					{
 						if (chunkk*10+i < coveredIndices.size())
 						{
-							allele.push_back(readFakeMSABases[l][coveredIndices[chunkk*10+i]]);
+							allele.push_back(pair.first[chunkk*10+i]);
 						}
 						else
 						{
 							allele.push_back('N');
 						}
 					}
-					alleleCoverages[allele] += 1;
+					alleleCoverages[allele] += pair.second;
 				}
 				for (size_t offi = 0; offi < 10; offi++)
 				{
