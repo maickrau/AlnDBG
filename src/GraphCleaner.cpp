@@ -239,6 +239,97 @@ double estimateCoverage(const ChunkUnitigGraph& graph)
 	return div/sum;
 }
 
+phmap::flat_hash_set<uint64_t> getValidBubbleForks(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths)
+{
+	phmap::flat_hash_set<size_t> relevantNode;
+	phmap::flat_hash_map<size_t, std::pair<uint64_t, uint64_t>> bubbleContainingNodes;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (graph.edges.getEdges(std::make_pair(i, true)).size() != 1) continue;
+		if (graph.edges.getEdges(std::make_pair(i, false)).size() != 1) continue;
+		std::pair<size_t, bool> fwEdge;
+		std::pair<size_t, bool> bwEdge;
+		fwEdge = graph.edges.getEdges(std::make_pair(i, true))[0];
+		bwEdge = graph.edges.getEdges(std::make_pair(i, false))[0];
+		if (graph.edges.getEdges(fwEdge).size() != 2) continue;
+		if (graph.edges.getEdges(bwEdge).size() != 2) continue;
+		if (graph.edges.getEdges(reverse(fwEdge)).size() != 2) continue;
+		if (graph.edges.getEdges(reverse(bwEdge)).size() != 2) continue;
+		std::pair<size_t, bool> otherNode { std::numeric_limits<size_t>::max(), true };
+		for (auto edge : graph.edges.getEdges(reverse(bwEdge)))
+		{
+			if (edge.first == i) continue;
+			assert(otherNode.first == std::numeric_limits<size_t>::max());
+			otherNode = edge;
+		}
+		if (otherNode.first == std::numeric_limits<size_t>::max()) continue;
+		if (graph.edges.getEdges(otherNode).size() != 1) continue;
+		if (graph.edges.getEdges(reverse(otherNode)).size() != 1) continue;
+		if (graph.edges.getEdges(otherNode)[0] != fwEdge) continue;
+		relevantNode.insert(fwEdge.first);
+		relevantNode.insert(bwEdge.first);
+		assert(bubbleContainingNodes.count(i) == 0);
+		bubbleContainingNodes[i] = std::make_pair(bwEdge.first + (bwEdge.second ? firstBitUint64_t : 0), fwEdge.first + (fwEdge.second ? 0 : firstBitUint64_t));
+	}
+	phmap::flat_hash_map<size_t, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> tripletsPerUnitig;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 1; k+1 < readPaths[i][j].path.size(); k++)
+			{
+				if (relevantNode.count(readPaths[i][j].path[k] & maskUint64_t) == 0) continue;
+				uint64_t prevNode = readPaths[i][j].path[k-1];
+				uint64_t nextNode = readPaths[i][j].path[k+1];
+				if (readPaths[i][j].path[k] & firstBitUint64_t)
+				{
+				}
+				else
+				{
+					std::swap(prevNode, nextNode);
+					prevNode ^= firstBitUint64_t;
+					nextNode ^= firstBitUint64_t;
+				}
+				tripletsPerUnitig[readPaths[i][j].path[k] & maskUint64_t][std::make_pair(prevNode, nextNode)] += 1;
+			}
+		}
+	}
+	phmap::flat_hash_set<size_t> unitigsWithValidTriplets;
+	for (const auto& pair : tripletsPerUnitig)
+	{
+		if (pair.second.size() != 2) continue;
+		for (auto pair2 : pair.second)
+		{
+			if (pair2.second < 2) continue;
+		}
+		phmap::flat_hash_set<uint64_t> prevs;
+		phmap::flat_hash_set<uint64_t> nexts;
+		for (auto pair2 : pair.second)
+		{
+			prevs.insert(pair2.first.first);
+			nexts.insert(pair2.first.second);
+		}
+		assert(prevs.size() >= 1);
+		assert(nexts.size() >= 1);
+		assert(prevs.size() <= 2);
+		assert(nexts.size() <= 2);
+		if (prevs.size() < 2) continue;
+		if (nexts.size() < 2) continue;
+		unitigsWithValidTriplets.insert(pair.first);
+	}
+	phmap::flat_hash_set<uint64_t> result;
+	for (auto pair : bubbleContainingNodes)
+	{
+		uint64_t bwNodePointingInwards = pair.second.first;
+		uint64_t fwNodePointingInwards = pair.second.second;
+		if (unitigsWithValidTriplets.count(bwNodePointingInwards & maskUint64_t) == 0) continue;
+		if (unitigsWithValidTriplets.count(fwNodePointingInwards & maskUint64_t) == 0) continue;
+		result.insert(bwNodePointingInwards);
+		result.insert(fwNodePointingInwards);
+	}
+	return result;
+}
+
 void cleanTips(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage, const double maxRemoveCoverage, const size_t kmerSize)
 {
 	std::cerr << "cleaning tips" << std::endl;
@@ -253,6 +344,8 @@ void cleanTips(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& c
 		std::vector<std::pair<uint64_t, std::vector<std::vector<size_t>>>> forkReads = getUnitigForkReads(graph, readPaths);
 		solidFork = getSolidForks(forkReads, std::min(approxOneHapCoverage, reestimatedCoverage) * 0.5);
 		acceptableFork = getAcceptableForks(forkReads, solidFork, 3);
+		phmap::flat_hash_set<uint64_t> bubbleForks = getValidBubbleForks(graph, readPaths);
+		acceptableFork.insert(bubbleForks.begin(), bubbleForks.end());
 	}
 	phmap::flat_hash_set<size_t> removeChunks;
 	size_t removeUnitigCount = 0;
