@@ -207,10 +207,13 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 
 void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t kmerSize)
 {
+	assert(chunksPerRead.size() % 2 == 0);
+	assert(rawReadLengths.size() == chunksPerRead.size());
 	std::vector<bool> canMergeRight;
 	std::vector<bool> canMergeLeft;
 	std::vector<size_t> uniqueRight;
 	std::vector<size_t> uniqueLeft;
+	std::vector<size_t> complementChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
@@ -220,6 +223,37 @@ void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t
 			while (canMergeLeft.size() <= chunk) canMergeLeft.emplace_back(true);
 		}
 	}
+	complementChunk.resize(canMergeLeft.size(), std::numeric_limits<size_t>::max());
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		size_t otheri = i;
+		if (i >= chunksPerRead.size()/2)
+		{
+			otheri = i - chunksPerRead.size()/2;
+		}
+		else
+		{
+			otheri = i + chunksPerRead.size()/2;
+		}
+		assert(chunksPerRead[i].size() == chunksPerRead[otheri].size());
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			size_t otherj = chunksPerRead[otheri].size() - 1 - j;
+			assert(otherj < chunksPerRead[otheri].size());
+			size_t chunkHere = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			size_t otherChunk = std::get<2>(chunksPerRead[otheri][otherj]) & maskUint64_t;
+			assert(chunkHere < complementChunk.size());
+			assert(otherChunk < complementChunk.size());
+			assert(complementChunk[chunkHere] == std::numeric_limits<size_t>::max() || complementChunk[chunkHere] == otherChunk);
+			assert(complementChunk[otherChunk] == std::numeric_limits<size_t>::max() || complementChunk[otherChunk] == chunkHere);
+			complementChunk[chunkHere] = otherChunk;
+			complementChunk[otherChunk] = chunkHere;
+		}
+	}
+	for (size_t i = 0; i < complementChunk.size(); i++)
+	{
+		assert(complementChunk[i] == std::numeric_limits<size_t>::max() || complementChunk[complementChunk[i]] == i);
+	}
 	canMergeRight.resize(canMergeLeft.size(), true);
 	uniqueRight.resize(canMergeLeft.size(), std::numeric_limits<size_t>::max());
 	uniqueLeft.resize(canMergeLeft.size(), std::numeric_limits<size_t>::max());
@@ -228,25 +262,13 @@ void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t
 		if (chunksPerRead[i].size() == 0) continue;
 		if (!NonexistantChunk(std::get<2>(chunksPerRead[i][0])))
 		{
-			if (std::get<2>(chunksPerRead[i][0]) & firstBitUint64_t)
-			{
-				canMergeLeft[std::get<2>(chunksPerRead[i][0]) & maskUint64_t] = false;
-			}
-			else
-			{
-				canMergeRight[std::get<2>(chunksPerRead[i][0]) & maskUint64_t] = false;
-			}
+			assert(std::get<2>(chunksPerRead[i][0]) & firstBitUint64_t);
+			canMergeLeft[std::get<2>(chunksPerRead[i][0]) & maskUint64_t] = false;
 		}
 		if (!NonexistantChunk(std::get<2>(chunksPerRead[i].back())))
 		{
-			if (std::get<2>(chunksPerRead[i].back()) & firstBitUint64_t)
-			{
-				canMergeRight[std::get<2>(chunksPerRead[i].back()) & maskUint64_t] = false;
-			}
-			else
-			{
-				canMergeLeft[std::get<2>(chunksPerRead[i].back()) & maskUint64_t] = false;
-			}
+			assert(std::get<2>(chunksPerRead[i].back()) & firstBitUint64_t);
+			canMergeRight[std::get<2>(chunksPerRead[i].back()) & maskUint64_t] = false;
 		}
 		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
 		{
@@ -254,139 +276,85 @@ void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t
 			{
 				if (!NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
 				{
-					if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t)
-					{
-						canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
-					}
-					else
-					{
-						canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
-					}
+					assert(std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t);
+					canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
 				}
 				continue;
 			}
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
 			{
 				assert(!NonexistantChunk(std::get<2>(chunksPerRead[i][j-1])));
-				if (std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t)
-				{
-					canMergeRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;
-				}
-				else
-				{
-					canMergeLeft[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;
-				}
+				assert(std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t);
+				canMergeRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;
 				continue;
+			}
+			if (std::get<0>(chunksPerRead[i][j-1]) != std::get<0>(chunksPerRead[i][j]))
+			{
+				canMergeRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;
+			}
+			else
+			{
+				assert(std::get<1>(chunksPerRead[i][j-1]) < std::get<1>(chunksPerRead[i][j]));
+			}
+			if (std::get<1>(chunksPerRead[i][j-1]) != std::get<1>(chunksPerRead[i][j]))
+			{
+				canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+			}
+			else
+			{
+				assert(std::get<0>(chunksPerRead[i][j-1]) < std::get<0>(chunksPerRead[i][j]));
 			}
 			assert(!NonexistantChunk(std::get<2>(chunksPerRead[i][j])));
 			assert(!NonexistantChunk(std::get<2>(chunksPerRead[i][j-1])));
-			if (std::get<2>(chunksPerRead[i][j-1]))
-			{
-				if (uniqueRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] == std::numeric_limits<size_t>::max()) uniqueRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = std::get<2>(chunksPerRead[i][j]);
-				if (uniqueRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] != std::get<2>(chunksPerRead[i][j])) canMergeRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;;
-			}
-			else
-			{
-				if (uniqueLeft[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] == std::numeric_limits<size_t>::max()) uniqueLeft[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t;
-				if (uniqueLeft[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] != (std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t)) canMergeLeft[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;;
-			}
-			if (std::get<2>(chunksPerRead[i][j]))
-			{
-				if (uniqueLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] == std::numeric_limits<size_t>::max()) uniqueLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = std::get<2>(chunksPerRead[i][j-1]);
-				if (uniqueLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] != std::get<2>(chunksPerRead[i][j-1])) canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;;
-			}
-			else
-			{
-				if (uniqueRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] == std::numeric_limits<size_t>::max()) uniqueRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = std::get<2>(chunksPerRead[i][j-1]) ^ firstBitUint64_t;
-				if (uniqueRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] != (std::get<2>(chunksPerRead[i][j-1]) ^ firstBitUint64_t)) canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;;
-			}
+			assert(std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t);
+			if (uniqueRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] == std::numeric_limits<size_t>::max()) uniqueRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = std::get<2>(chunksPerRead[i][j]);
+			if (uniqueRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] != std::get<2>(chunksPerRead[i][j])) canMergeRight[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;
+			assert(std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t);
+			if (uniqueLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] == std::numeric_limits<size_t>::max()) uniqueLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = std::get<2>(chunksPerRead[i][j-1]);
+			if (uniqueLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] != std::get<2>(chunksPerRead[i][j-1])) canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
 		}
 	}
-	std::map<std::vector<uint64_t>, size_t> chunkmerToNewChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		if (complementChunk[i] == std::numeric_limits<size_t>::max())
+		{
+			assert(uniqueRight[i] == std::numeric_limits<size_t>::max());
+			assert(uniqueLeft[i] == std::numeric_limits<size_t>::max());
+			continue;
+		}
+		size_t other = complementChunk[i];
+		if (other == i) continue; // palindrome!
+		assert(canMergeLeft[i] == canMergeRight[other]);
+		assert(canMergeRight[i] == canMergeLeft[other]);
+	}
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		if (chunksPerRead[i].size() == 0) continue;
 		std::vector<std::tuple<size_t, size_t, uint64_t>> newChunksHere;
-		size_t currentStart = 0;
-		size_t currentEnd = 0;
-		std::vector<uint64_t> currentMer;
-		currentMer.emplace_back(std::get<2>(chunksPerRead[i][0]));
-		for (size_t j = 1; j <= chunksPerRead[i].size(); j++)
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			assert(currentMer.size() >= 1);
-			assert(currentEnd == j-1);
-			bool canContinueMerge = true;
-			if (j == chunksPerRead[i].size() || NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || NonexistantChunk(currentMer.back()))
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
 			{
-				canContinueMerge = false;
-			}
-			else
-			{
-				if (currentMer.back() & firstBitUint64_t)
-				{
-					if (!canMergeRight[currentMer.back() & maskUint64_t])
-					{
-						canContinueMerge = false;
-					}
-				}
-				else
-				{
-					if (!canMergeLeft[currentMer.back() & maskUint64_t])
-					{
-						canContinueMerge = false;
-					}
-				}
-				if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t)
-				{
-					if (!canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
-					{
-						canContinueMerge = false;
-					}
-				}
-				else
-				{
-					if (!canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
-					{
-						canContinueMerge = false;
-					}
-				}
-			}
-			if (canContinueMerge)
-			{
-				currentEnd = j;
-				currentMer.emplace_back(std::get<2>(chunksPerRead[i][j]));
+				newChunksHere.emplace_back(chunksPerRead[i][j]);
 				continue;
 			}
-			size_t newMer = std::numeric_limits<size_t>::max();
-			bool validmer = true;
-			for (size_t k = currentStart; k <= currentEnd; k++)
+			if (canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
 			{
-				if (NonexistantChunk(std::get<2>(chunksPerRead[i][k]))) validmer = false;
+				assert(j >= 1);
+				assert(std::get<0>(chunksPerRead[i][j-1]) < std::get<0>(chunksPerRead[i][j]));
+				assert(std::get<1>(chunksPerRead[i][j-1]) == std::get<1>(chunksPerRead[i][j]));
+				continue;
 			}
-			if (validmer)
+			if (canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
 			{
-				if (chunkmerToNewChunk.count(currentMer) == 1)
-				{
-					newMer = chunkmerToNewChunk.at(currentMer);
-				}
-				else
-				{
-					newMer = chunkmerToNewChunk.size();
-					chunkmerToNewChunk[currentMer] = newMer;
-				}
+				assert(j+1 < chunksPerRead[i].size());
+				assert(std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j+1]));
+				assert(std::get<1>(chunksPerRead[i][j]) < std::get<1>(chunksPerRead[i][j+1]));
+				continue;
 			}
-			else
-			{
-				newMer = std::numeric_limits<size_t>::max() ^ firstBitUint64_t;
-			}
-			newChunksHere.emplace_back(std::get<0>(chunksPerRead[i][currentStart]), std::get<1>(chunksPerRead[i][currentEnd]), newMer + firstBitUint64_t);
-			currentMer.clear();
-			currentStart = j;
-			currentEnd = j;
-			if (j < chunksPerRead[i].size()) currentMer.emplace_back(std::get<2>(chunksPerRead[i][j]));
+			newChunksHere.emplace_back(chunksPerRead[i][j]);
+			continue;
 		}
-		assert(currentEnd == chunksPerRead[i].size());
-		assert(currentMer.size() == 0);
 		std::swap(chunksPerRead[i], newChunksHere);
 	}
 }
