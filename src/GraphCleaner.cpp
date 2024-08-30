@@ -298,10 +298,12 @@ phmap::flat_hash_set<uint64_t> getValidBubbleForks(const ChunkUnitigGraph& graph
 	for (const auto& pair : tripletsPerUnitig)
 	{
 		if (pair.second.size() != 2) continue;
+		bool valid = true;
 		for (auto pair2 : pair.second)
 		{
-			if (pair2.second < 2) continue;
+			if (pair2.second < 2) valid = false;
 		}
+		if (!valid) continue;
 		phmap::flat_hash_set<uint64_t> prevs;
 		phmap::flat_hash_set<uint64_t> nexts;
 		for (auto pair2 : pair.second)
