@@ -269,7 +269,7 @@ phmap::flat_hash_set<uint64_t> getValidBubbleForks(const ChunkUnitigGraph& graph
 		relevantNode.insert(fwEdge.first);
 		relevantNode.insert(bwEdge.first);
 		assert(bubbleContainingNodes.count(i) == 0);
-		bubbleContainingNodes[i] = std::make_pair(bwEdge.first + (bwEdge.second ? firstBitUint64_t : 0), fwEdge.first + (fwEdge.second ? 0 : firstBitUint64_t));
+		bubbleContainingNodes[i] = std::make_pair(bwEdge.first + (bwEdge.second ? 0 : firstBitUint64_t), fwEdge.first + (fwEdge.second ? 0 : firstBitUint64_t));
 	}
 	phmap::flat_hash_map<size_t, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> tripletsPerUnitig;
 	for (size_t i = 0; i < readPaths.size(); i++)
