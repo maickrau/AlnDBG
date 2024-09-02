@@ -17,6 +17,85 @@ uint64_t hashFwAndBw(const uint64_t kmer, const size_t kmerSize);
 size_t charToInt(const unsigned char c);
 
 template <typename CallbackF>
+void iterateGapEnclosingMinimizers(const std::string& str, const size_t kmerSize, const size_t windowSize, const size_t gapSize, CallbackF callback)
+{
+	assert(kmerSize * 2 <= sizeof(size_t) * 8);
+	assert(kmerSize <= windowSize);
+	if (str.size() < kmerSize + windowSize*2 + gapSize) return;
+	const size_t mask = ~(0xFFFFFFFFFFFFFFFF << (kmerSize * 2));
+	assert(mask == pow(4, kmerSize)-1);
+	// in case of equal hash, front window prefers rightmost kmer and rear prefers leftmost
+	// this makes it consistent between fw & rev-comp, and prefers largest gap
+	thread_local std::vector<std::tuple<size_t, size_t>> frontwindow;
+	thread_local std::vector<std::tuple<size_t, size_t>> rearwindow;
+	frontwindow.clear();
+	rearwindow.clear();
+	size_t frontkmer = 0;
+	size_t rearkmer = 0;
+	for (size_t i = 0; i < kmerSize; i++)
+	{
+		frontkmer <<= 2;
+		frontkmer |= charToInt(str[i+gapSize+windowSize]);
+		rearkmer <<= 2;
+		rearkmer |= charToInt(str[i]);
+	}
+	frontwindow.emplace_back(0, hashFwAndBw(frontkmer, kmerSize));
+	rearwindow.emplace_back(0, hashFwAndBw(rearkmer, kmerSize));
+	for (size_t i = kmerSize; i < kmerSize + windowSize; i++)
+	{
+		frontkmer <<= 2;
+		frontkmer &= mask;
+		frontkmer |= charToInt(str[i+gapSize+windowSize]);
+		rearkmer <<= 2;
+		rearkmer &= mask;
+		rearkmer |= charToInt(str[i]);
+		size_t hashHere = hashFwAndBw(frontkmer, kmerSize);
+		while (!frontwindow.empty() && std::get<1>(frontwindow.back()) >= hashHere) frontwindow.pop_back();
+		frontwindow.emplace_back(i-kmerSize+1, hashHere);
+		hashHere = hashFwAndBw(rearkmer, kmerSize);
+		while (!rearwindow.empty() && std::get<1>(rearwindow.back()) > hashHere) rearwindow.pop_back();
+		rearwindow.emplace_back(i-kmerSize+1, hashHere);
+	}
+	callback(std::get<0>(rearwindow[0]), std::get<0>(frontwindow[0]) + gapSize + windowSize);
+	std::pair<size_t, size_t> lastCallbackPos { std::get<0>(rearwindow[0]), std::get<0>(frontwindow[0]) };
+	for (size_t i = kmerSize+windowSize; i+gapSize+windowSize < str.size(); i++)
+	{
+		frontkmer <<= 2;
+		frontkmer &= mask;
+		frontkmer |= charToInt(str[i+gapSize+windowSize]);
+		rearkmer <<= 2;
+		rearkmer &= mask;
+		rearkmer |= charToInt(str[i]);
+		auto hashHere = hashFwAndBw(frontkmer, kmerSize);
+		assert(frontwindow.size() >= 1);
+		if (std::get<0>(frontwindow[0]) <= i - windowSize - kmerSize)
+		{
+			frontwindow.erase(frontwindow.begin());
+		}
+		assert(frontwindow.size() == 0 || std::get<0>(frontwindow[0]) > i - windowSize - kmerSize);
+		while (frontwindow.size() >= 1 && std::get<1>(frontwindow.back()) >= hashHere) frontwindow.pop_back();
+		frontwindow.emplace_back(i-kmerSize+1, hashHere);
+		assert(frontwindow.size() >= 1);
+		hashHere = hashFwAndBw(rearkmer, kmerSize);
+		assert(rearwindow.size() >= 1);
+		if (std::get<0>(rearwindow[0]) <= i - windowSize - kmerSize)
+		{
+			rearwindow.erase(rearwindow.begin());
+		}
+		assert(rearwindow.size() == 0 || std::get<0>(rearwindow[0]) > i - windowSize - kmerSize);
+		while (rearwindow.size() >= 1 && std::get<1>(rearwindow.back()) > hashHere) rearwindow.pop_back();
+		rearwindow.emplace_back(i-kmerSize+1, hashHere);
+		assert(rearwindow.size() >= 1);
+		if (std::get<0>(rearwindow[0]) != lastCallbackPos.first || std::get<0>(frontwindow[0]) != lastCallbackPos.second)
+		{
+			callback(std::get<0>(rearwindow[0]), std::get<0>(frontwindow[0]) + gapSize + windowSize);
+			lastCallbackPos.first = std::get<0>(rearwindow[0]);
+			lastCallbackPos.second = std::get<0>(frontwindow[0]);
+		}
+	}
+}
+
+template <typename CallbackF>
 void iterateMinimizers(const std::string& str, const size_t kmerSize, const size_t windowSize, CallbackF callback)
 {
 	assert(kmerSize * 2 <= sizeof(size_t) * 8);
