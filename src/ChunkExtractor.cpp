@@ -75,7 +75,7 @@ void readFilesAndAddToSequenceIndex(const std::string& filename, FastaCompressor
 	std::atomic<bool> allDone;
 	allDone = false;
 	std::mutex stackMutex;
-	size_t nextNum = 0;
+	size_t nextNum = sequenceIndex.size();
 	for (size_t i = 0; i < numThreads; i++)
 	{
 		threads.emplace_back([&allDone, &stackMutex, &sequenceStack, &sequenceIndex]()
