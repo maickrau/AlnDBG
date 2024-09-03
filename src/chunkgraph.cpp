@@ -627,6 +627,69 @@ void mergeFakeBubbles(std::vector<std::vector<std::tuple<size_t, size_t, uint64_
 	}
 }
 
+bool approxChunkMatchIsGood(const size_t leftLength, const size_t rightLength, const phmap::flat_hash_map<size_t, std::vector<std::pair<size_t, size_t>>>& positionsInLeft, const std::vector<std::tuple<size_t, size_t, uint64_t>>& chunks)
+{
+	// diagonal, leftstart, leftend, rightstart, rightend
+	std::vector<std::tuple<int, size_t, size_t, size_t, size_t>> matches;
+	for (auto t : chunks)
+	{
+		if (positionsInLeft.count(std::get<2>(t)) == 0) continue;
+		for (auto pos : positionsInLeft.at(std::get<2>(t)))
+		{
+			matches.emplace_back((int)pos.first - (int)std::get<0>(t), pos.first, pos.second, std::get<0>(t), std::get<1>(t));
+		}
+	}
+	assert(matches.size() >= 1);
+	std::sort(matches.begin(), matches.end());
+	size_t currentClusterLeftMin = std::get<1>(matches[0]);
+	size_t currentClusterLeftMax = std::get<2>(matches[0]);
+	size_t currentClusterRightMin = std::get<3>(matches[0]);
+	size_t currentClusterRightMax = std::get<4>(matches[0]);
+	int lastDiagonal = std::get<0>(matches[0]);
+	for (auto t : matches)
+	{
+		assert(std::get<0>(t) >= lastDiagonal);
+		if (std::get<0>(t) > lastDiagonal + 100)
+		{
+			if (currentClusterLeftMax - currentClusterLeftMin > 5000 && currentClusterRightMax - currentClusterRightMin > 5000 && (currentClusterLeftMin < 10000 || currentClusterRightMin < 10000) && (currentClusterLeftMax + 10000 > leftLength || currentClusterRightMax + 10000 > rightLength))
+			{
+				return true;
+			}
+			currentClusterLeftMin = std::get<1>(t);
+			currentClusterLeftMax = std::get<2>(t);
+			currentClusterRightMin = std::get<3>(t);
+			currentClusterRightMax = std::get<4>(t);
+			lastDiagonal = std::get<0>(t);
+		}
+		currentClusterLeftMin = std::min(currentClusterLeftMin, std::get<1>(t));
+		currentClusterLeftMax = std::max(currentClusterLeftMax, std::get<2>(t));
+		currentClusterRightMin = std::min(currentClusterRightMin, std::get<3>(t));
+		currentClusterRightMax = std::max(currentClusterRightMax, std::get<4>(t));
+		lastDiagonal = std::get<0>(t);
+	}
+	if (currentClusterLeftMax - currentClusterLeftMin > 5000 && currentClusterRightMax - currentClusterRightMin > 5000 && (currentClusterLeftMin < 10000 || currentClusterRightMin < 10000) && (currentClusterLeftMax + 10000 > leftLength || currentClusterRightMax + 10000 > rightLength))
+	{
+		return true;
+	}
+	return false;
+}
+
+phmap::flat_hash_set<size_t> filterGoodChunkMatches(const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunks, const phmap::flat_hash_set<size_t>& unfiltered, const size_t refRead)
+{
+	phmap::flat_hash_map<size_t, std::vector<std::pair<size_t, size_t>>> positionsInRef;
+	for (size_t i = 0; i < chunks[refRead].size(); i++)
+	{
+		positionsInRef[std::get<2>(chunks[refRead][i])].emplace_back(std::get<0>(chunks[refRead][i]), std::get<1>(chunks[refRead][i]));
+	}
+	phmap::flat_hash_set<size_t> result;
+	for (auto read : unfiltered)
+	{
+		if (!approxChunkMatchIsGood(rawReadLengths[refRead], rawReadLengths[read], positionsInRef, chunks[read])) continue;
+		result.insert(read);
+	}
+	return result;
+}
+
 std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t kmerSize, const size_t windowSize, const size_t middleSkip)
 {
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -679,14 +742,6 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 		}
 		size_t countOversizedChunks = 0;
 		phmap::flat_hash_set<size_t> fwmatchingReads;
-		if (rawReadLengths[i] == 225685)
-		{
-			std::lock_guard<std::mutex> lock { printMutex };
-			for (size_t j = 0; j < chunks[i].size(); j++)
-			{
-				std::cerr << "chunk " << std::get<0>(chunks[i][j]) << " " << std::get<1>(chunks[i][j]) << " coverage " << readsPerChunk[std::get<2>(chunks[i][j]) & maskUint64_t].size() << std::endl;
-			}
-		}
 		for (size_t j = 0; j < chunks[i].size(); j++)
 		{
 			size_t chunk = std::get<2>(chunks[i][j]) & maskUint64_t;
@@ -700,10 +755,14 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 				countOversizedChunks += 1;
 			}
 		}
+		assert(fwmatchingReads.count(i) == 1);
+		fwmatchingReads.erase(i);
+		if (fwmatchingReads.count(i + sequenceIndex.size()) == 1) fwmatchingReads.erase(i + sequenceIndex.size());
+		phmap::flat_hash_set<size_t> filteredFwMatchingReads = filterGoodChunkMatches(rawReadLengths, chunks, fwmatchingReads, i);
 		size_t lastRead = std::numeric_limits<size_t>::max();
 		size_t lastPos = 0;
 		size_t countFwMatchingReads = 0;
-		iterateUniqueKmerMatches(sequenceIndex, i, fwmatchingReads, kmerSize, [&kmerIsGood, &lastRead, &lastPos, &countFwMatchingReads, i](const size_t otherReadIndex, const size_t thisReadPos, const size_t otherReadPos)
+		iterateUniqueKmerMatches(sequenceIndex, i, filteredFwMatchingReads, kmerSize, [&kmerIsGood, &lastRead, &lastPos, &countFwMatchingReads, i](const size_t otherReadIndex, const size_t thisReadPos, const size_t otherReadPos)
 		{
 			if (lastRead == otherReadIndex)
 			{
@@ -724,7 +783,7 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 		auto endTime = getTime();
 		{
 			std::lock_guard<std::mutex> lock { printMutex };
-			std::cerr << "read " << i << " name " << readName << " length " << rawReadLengths[i] << " has " << countFwMatchingReads << " matches, time " << formatTime(startTime, endTime) << ", pre-kmer overlaps " << fwmatchingReads.size() << ", oversized chunks " << countOversizedChunks << std::endl;
+			std::cerr << "read " << i << " name " << readName << " length " << rawReadLengths[i] << " has " << countFwMatchingReads << " matches, time " << formatTime(startTime, endTime) << ", pre-filter overlaps " << fwmatchingReads.size() << ", pre-kmer overlaps " << filteredFwMatchingReads.size() << ", oversized chunks " << countOversizedChunks << std::endl;
 		}
 	});
 	return kmerIsGood;
