@@ -14,6 +14,7 @@ bool hasMicrosatelliteMotifLengthTwo(uint64_t kmer, const size_t kmerSize);
 uint64_t weightedHash(uint64_t kmer, const size_t kmerSize);
 uint64_t reverseKmer(uint64_t kmer, const size_t kmerSize);
 uint64_t hashFwAndBw(const uint64_t kmer, const size_t kmerSize);
+uint64_t hashFwAndBw(const uint64_t kmer, const size_t kmerSize, const bool goodKmer);
 size_t charToInt(const unsigned char c);
 
 template <typename CallbackF>
@@ -91,6 +92,89 @@ void iterateGapEnclosingMinimizers(const std::string& str, const size_t kmerSize
 			callback(std::get<0>(rearwindow[0]), std::get<0>(frontwindow[0]) + gapSize + windowSize);
 			lastCallbackPos.first = std::get<0>(rearwindow[0]);
 			lastCallbackPos.second = std::get<0>(frontwindow[0]);
+		}
+	}
+}
+
+template <typename CallbackF>
+void iterateMinimizers(const std::string& str, const size_t kmerSize, const size_t windowSize, const std::vector<bool>& kmerIsGood, CallbackF callback)
+{
+	assert(kmerSize * 2 <= sizeof(size_t) * 8);
+	assert(kmerSize <= windowSize);
+	if (str.size() < kmerSize + windowSize) return;
+	const size_t mask = ~(0xFFFFFFFFFFFFFFFF << (kmerSize * 2));
+	assert(mask == pow(4, kmerSize)-1);
+	thread_local std::vector<std::tuple<size_t, size_t>> window;
+	window.clear();
+	size_t kmer = 0;
+	for (size_t i = 0; i < kmerSize; i++)
+	{
+		kmer <<= 2;
+		kmer |= charToInt(str[i]);
+	}
+	window.clear();
+	window.emplace_back(0, hashFwAndBw(kmer, kmerSize, kmerIsGood[0]));
+	for (size_t i = kmerSize; i < kmerSize + windowSize; i++)
+	{
+		kmer <<= 2;
+		kmer &= mask;
+		kmer |= charToInt(str[i]);
+		size_t hashHere = hashFwAndBw(kmer, kmerSize, kmerIsGood[i-kmerSize+1]);
+		while (!window.empty() && std::get<1>(window.back()) > hashHere) window.pop_back();
+		window.emplace_back(i-kmerSize+1, hashHere);
+	}
+	callback(std::get<0>(window[0]));
+	size_t lastCallbackPos = std::get<0>(window[0]);
+	for (size_t i = kmerSize+windowSize; i < str.size(); i++)
+	{
+		kmer <<= 2;
+		kmer &= mask;
+		kmer |= charToInt(str[i]);
+		auto hashHere = hashFwAndBw(kmer, kmerSize, kmerIsGood[i-kmerSize+1]);
+		assert(window.size() >= 1);
+		bool frontPopped = false;
+		if (std::get<0>(window[0]) <= i - windowSize - kmerSize)
+		{
+			frontPopped = true;
+			window.erase(window.begin());
+		}
+		assert(window.size() == 0 || std::get<0>(window[0]) > i - windowSize - kmerSize);
+		if (hashHere < std::get<1>(window[0]))
+		{
+			for (size_t j = 1; j < window.size(); j++)
+			{
+				if (std::get<1>(window[j]) == std::get<1>(window[0]))
+				{
+					assert(std::get<0>(window[j]) > lastCallbackPos);
+					callback(std::get<0>(window[j]));
+					lastCallbackPos = std::get<0>(window[j]);
+				}
+			}
+		}
+		while (window.size() >= 1 && std::get<1>(window.back()) > hashHere) window.pop_back();
+		if (window.size() == 0) frontPopped = true;
+		window.emplace_back(i-kmerSize+1, hashHere);
+		assert(window.size() >= 1);
+		if (frontPopped)
+		{
+			assert(std::get<0>(window[0]) > lastCallbackPos);
+			callback(std::get<0>(window[0]));
+			lastCallbackPos = std::get<0>(window[0]);
+		}
+		else
+		{
+			assert(std::get<0>(window[0]) == lastCallbackPos);
+		}
+	}
+	assert(window.size() >= 1);
+	assert(lastCallbackPos == std::get<0>(window[0]));
+	for (size_t j = 1; j < window.size(); j++)
+	{
+		if (std::get<1>(window[j]) == std::get<0>(window[j]))
+		{
+			assert(std::get<0>(window[j]) > lastCallbackPos);
+			callback(std::get<0>(window[j]));
+			lastCallbackPos = std::get<0>(window[j]);
 		}
 	}
 }

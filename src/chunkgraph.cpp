@@ -23,6 +23,7 @@
 #include "TransitiveClosure.h"
 #include "ChunkPhasing.h"
 #include "ChunkResolution.h"
+#include "OverlapMatcher.h"
 
 double mismatchFraction;
 
@@ -626,6 +627,118 @@ void mergeFakeBubbles(std::vector<std::vector<std::tuple<size_t, size_t, uint64_
 	}
 }
 
+std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t kmerSize, const size_t windowSize, const size_t middleSkip)
+{
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	std::cerr << "getting good kmers" << std::endl;
+	std::vector<std::vector<bool>> kmerIsGood;
+	kmerIsGood.resize(sequenceIndex.size());
+	for (size_t i = 0; i < kmerIsGood.size(); i++)
+	{
+		kmerIsGood[i].resize(rawReadLengths[i], true);
+	}
+	auto chunks = getGapEnclosingChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, 1000, 3000);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerFirstLastKmers(sequenceIndex, chunks, kmerSize);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerLength(chunks, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//	splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunks, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//	splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunks, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	assert(chunks.size() == sequenceIndex.size()*2);
+	assert(rawReadLengths.size() == sequenceIndex.size()*2);
+	assert(chunks.size() == rawReadLengths.size());
+	std::vector<std::vector<size_t>> readsPerChunk;
+	for (size_t i = 0; i < chunks.size(); i++)
+	{
+		for (size_t j = 0; j < chunks[i].size(); j++)
+		{
+			size_t chunk = std::get<2>(chunks[i][j]) & maskUint64_t;
+			while (readsPerChunk.size() <= chunk) readsPerChunk.emplace_back();
+			readsPerChunk[chunk].emplace_back(i);
+		}
+	}
+	for (size_t i = 0; i < readsPerChunk.size(); i++)
+	{
+		phmap::flat_hash_set<size_t> uniqs { readsPerChunk[i].begin(), readsPerChunk[i].end() };
+		readsPerChunk[i].clear();
+		readsPerChunk[i].insert(readsPerChunk[i].end(), uniqs.begin(), uniqs.end());
+	}
+	std::mutex printMutex;
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	std::cerr << "begin overlapping" << std::endl;
+	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&sequenceIndex, &readsPerChunk, &chunks, &kmerIsGood, &rawReadLengths, &printMutex, kmerSize](const size_t i)
+	{
+		auto startTime = getTime();
+		std::string readName = sequenceIndex.getName(i);
+		{
+			std::lock_guard<std::mutex> lock { printMutex };
+			std::cerr << "begin overlapping read " << i << "/" << sequenceIndex.size() << " name " << readName << std::endl;
+		}
+		size_t countOversizedChunks = 0;
+		phmap::flat_hash_set<size_t> fwmatchingReads;
+		if (rawReadLengths[i] == 225685)
+		{
+			std::lock_guard<std::mutex> lock { printMutex };
+			for (size_t j = 0; j < chunks[i].size(); j++)
+			{
+				std::cerr << "chunk " << std::get<0>(chunks[i][j]) << " " << std::get<1>(chunks[i][j]) << " coverage " << readsPerChunk[std::get<2>(chunks[i][j]) & maskUint64_t].size() << std::endl;
+			}
+		}
+		for (size_t j = 0; j < chunks[i].size(); j++)
+		{
+			size_t chunk = std::get<2>(chunks[i][j]) & maskUint64_t;
+			assert(chunk < readsPerChunk.size());
+			if (readsPerChunk[chunk].size() < 1000)
+			{
+				fwmatchingReads.insert(readsPerChunk[chunk].begin(), readsPerChunk[chunk].end());
+			}
+			else
+			{
+				countOversizedChunks += 1;
+			}
+		}
+		size_t lastRead = std::numeric_limits<size_t>::max();
+		size_t lastPos = 0;
+		size_t countFwMatchingReads = 0;
+		iterateUniqueKmerMatches(sequenceIndex, i, fwmatchingReads, kmerSize, [&kmerIsGood, &lastRead, &lastPos, &countFwMatchingReads, i](const size_t otherReadIndex, const size_t thisReadPos, const size_t otherReadPos)
+		{
+			if (lastRead == otherReadIndex)
+			{
+				assert(thisReadPos > lastPos);
+				for (size_t j = lastPos+1; j < thisReadPos; j++)
+				{
+					kmerIsGood[i][j] = false;
+				}
+			}
+			else
+			{
+				countFwMatchingReads += 1;
+			}
+			lastRead = otherReadIndex;
+			lastPos = thisReadPos;
+		});
+		phmap::flat_hash_set<size_t> bwmatchingReads;
+		auto endTime = getTime();
+		{
+			std::lock_guard<std::mutex> lock { printMutex };
+			std::cerr << "read " << i << " name " << readName << " length " << rawReadLengths[i] << " has " << countFwMatchingReads << " matches, time " << formatTime(startTime, endTime) << ", pre-kmer overlaps " << fwmatchingReads.size() << ", oversized chunks " << countOversizedChunks << std::endl;
+		}
+	});
+	return kmerIsGood;
+}
+
+std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getCorrectnessWeightedChunksPerRead(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t kmerSize, const size_t windowSize, const size_t middleSkip)
+{
+	std::vector<std::vector<bool>> kmerIsGood = getGoodKmersFromAlignments(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize, middleSkip);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	std::cerr << "getting chunks with good kmers" << std::endl;
+	auto result = getWeightedMinimizerBoundedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize, kmerIsGood);
+	return result;
+}
+
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t middleSkip, const size_t startStage)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
@@ -641,7 +754,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	{
 		case 0:
 			std::cerr << "getting chunks from reads" << std::endl;
-			chunksPerRead = getMinimizerBoundedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize);
+			chunksPerRead = getCorrectnessWeightedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize, middleSkip);
 			//addMissingPiecesBetweenChunks(chunksPerRead, k);
 			{
 				size_t numChunks = 0;

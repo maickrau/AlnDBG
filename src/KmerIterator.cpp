@@ -30,12 +30,13 @@ bool hasMicrosatelliteMotifLengthTwo(uint64_t kmer, const size_t kmerSize)
 	return kmer != 0;
 }
 
-uint64_t weightedHash(uint64_t kmer, const size_t kmerSize)
+uint64_t weightedHash(uint64_t kmer, const size_t kmerSize, const bool goodKmer)
 {
 	const size_t hashmask = 0x1FFFFFFFFFFFFFFFull;
 	uint64_t result = hash(kmer) & hashmask;
-	if (hasHomopolymerWithLengthThreeOrMore(kmer, kmerSize)) result |= 0x8000000000000000ull;
-	if (hasMicrosatelliteMotifLengthTwo(kmer, kmerSize)) result |= 0x4000000000000000ull;
+	if (!goodKmer) result |= 0x8000000000000000ull;
+	if (hasHomopolymerWithLengthThreeOrMore(kmer, kmerSize)) result |= 0x4000000000000000ull;
+	if (hasMicrosatelliteMotifLengthTwo(kmer, kmerSize)) result |= 0x2000000000000000ull;
 	return result;
 }
 
@@ -53,8 +54,15 @@ uint64_t reverseKmer(uint64_t kmer, const size_t kmerSize)
 
 uint64_t hashFwAndBw(const uint64_t kmer, const size_t kmerSize)
 {
-	uint64_t fwHash = weightedHash(kmer, kmerSize);
-	uint64_t bwHash = weightedHash(reverseKmer(kmer, kmerSize), kmerSize);
+	uint64_t fwHash = weightedHash(kmer, kmerSize, true);
+	uint64_t bwHash = weightedHash(reverseKmer(kmer, kmerSize), kmerSize, true);
+	return std::min(fwHash, bwHash);
+}
+
+uint64_t hashFwAndBw(const uint64_t kmer, const size_t kmerSize, const bool goodKmer)
+{
+	uint64_t fwHash = weightedHash(kmer, kmerSize, goodKmer);
+	uint64_t bwHash = weightedHash(reverseKmer(kmer, kmerSize), kmerSize, goodKmer);
 	return std::min(fwHash, bwHash);
 }
 

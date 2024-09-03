@@ -29,6 +29,36 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getGapEnclosingCh
 	return result;
 }
 
+std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getWeightedMinimizerBoundedChunksPerRead(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t k, const size_t windowSize, const std::vector<std::vector<bool>>& kmerIsGood)
+{
+	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
+	result.resize(sequenceIndex.size()*2);
+	const size_t backwardOffset = sequenceIndex.size();
+	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&result, &sequenceIndex, &kmerIsGood, backwardOffset, k, windowSize](const size_t readIndex)
+	{
+		std::string readSequence = sequenceIndex.getSequence(readIndex);
+		std::vector<size_t> minimizerPositions;
+		iterateMinimizers(readSequence, k, windowSize, kmerIsGood[readIndex], [&minimizerPositions](const size_t pos)
+		{
+			assert(minimizerPositions.size() == 0 || pos > minimizerPositions.back());
+			minimizerPositions.emplace_back(pos);
+		});
+		for (size_t i = 1; i < minimizerPositions.size(); i++)
+		{
+			assert(minimizerPositions[i] > minimizerPositions[i-1]);
+			result[readIndex].emplace_back(minimizerPositions[i-1], minimizerPositions[i]+k-1, 0);
+		};
+		for (size_t i = 0; i < result[readIndex].size(); i++)
+		{
+			result[readIndex+backwardOffset].emplace_back(result[readIndex][result[readIndex].size()-1-i]);
+			std::swap(std::get<0>(result[readIndex+backwardOffset].back()), std::get<1>(result[readIndex+backwardOffset].back()));
+			std::get<0>(result[readIndex+backwardOffset].back()) = readSequence.size()-1-std::get<0>(result[readIndex+backwardOffset].back());
+			std::get<1>(result[readIndex+backwardOffset].back()) = readSequence.size()-1-std::get<1>(result[readIndex+backwardOffset].back());
+		}
+	});
+	return result;
+}
+
 std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getMinimizerBoundedChunksPerRead(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t k, const size_t windowSize)
 {
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
