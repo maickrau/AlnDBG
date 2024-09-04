@@ -9,11 +9,21 @@
 #include "CompressedStringIndex.h"
 #include "phmap.h"
 
+class ReadOverlapInformation
+{
+public:
+	std::vector<std::pair<size_t, size_t>> readKmers;
+	phmap::flat_hash_map<size_t, std::array<size_t, 5>> lowCountKmers;
+	size_t readIndex;
+	size_t readLength;
+};
+
 std::vector<std::pair<size_t, size_t>> getLocallyUniqueKmers(const std::string& readSeq, const size_t kmerSize);
 phmap::flat_hash_map<size_t, std::array<size_t, 5>> getLowCountKmers(const std::vector<std::pair<size_t, size_t>>& readKmers);
 // plus: starts at positive location in ref. minus: starts at negative location in ref. starts at 0 in query
 int getBestDiagonal(const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& refKmers, const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& queryKmers);
 void filterOutDoubleMatchedPositions(std::vector<std::pair<size_t, size_t>>& matches);
+ReadOverlapInformation getReadOverlapInformation(const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t readIndex, const size_t kmerSize);
 
 // kmers with same sequence are iterated ordered by their position, but kmers with different sequence will not be
 template <typename F>
@@ -126,12 +136,12 @@ void iterateMatchingKmersInDiagonal(const std::vector<std::pair<size_t, size_t>>
 }
 
 template <typename F>
-void iterateUniqueKmerMatches(const std::vector<std::pair<size_t, size_t>>& refReadKmers, const size_t refreadIndex, const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& lowCountRefKmers, const size_t refLength, const std::vector<std::pair<size_t, size_t>>& queryReadKmers, const size_t queryreadIndex, const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& lowCountQueryKmers, const size_t queryLength, const size_t kmerSize, F callback)
+void iterateUniqueKmerMatches(const ReadOverlapInformation& refRead, const ReadOverlapInformation& queryRead, F callback)
 {
-	int bestDiagonal = getBestDiagonal(lowCountRefKmers, lowCountQueryKmers);
+	int bestDiagonal = getBestDiagonal(refRead.lowCountKmers, queryRead.lowCountKmers);
 	if (bestDiagonal == std::numeric_limits<int>::max()) return;
 	std::vector<std::pair<size_t, size_t>> matches;
-	iterateMatchingKmersInDiagonal(refReadKmers, queryReadKmers, bestDiagonal, [&matches](const size_t refPos, const size_t queryPos)
+	iterateMatchingKmersInDiagonal(refRead.readKmers, refRead.readKmers, bestDiagonal, [&matches](const size_t refPos, const size_t queryPos)
 	{
 		matches.emplace_back(refPos, queryPos);
 	});
@@ -143,7 +153,7 @@ void iterateUniqueKmerMatches(const std::vector<std::pair<size_t, size_t>>& refR
 	std::sort(matches.begin(), matches.end(), [](auto left, auto right) { return left.second < right.second; });
 	size_t minMaxMatchLength = matches.back().second - matches[0].second;
 	if (matches[0].second < 1000) matchesStart = true;
-	if (matches.back().second + 1000 >= queryLength) matchesEnd = true;
+	if (matches.back().second + 1000 >= queryRead.readLength) matchesEnd = true;
 	for (size_t i = 1; i < matches.size(); i++)
 	{
 		assert(matches[i].second >= matches[i-1].second);
@@ -156,7 +166,7 @@ void iterateUniqueKmerMatches(const std::vector<std::pair<size_t, size_t>>& refR
 	std::sort(matches.begin(), matches.end());
 	minMaxMatchLength = std::min(minMaxMatchLength, matches.back().first - matches[0].first);
 	if (matches[0].first < 1000) matchesStart = true;
-	if (matches.back().first + 1000 >= refLength) matchesEnd = true;
+	if (matches.back().first + 1000 >= refRead.readLength) matchesEnd = true;
 	for (size_t i = 1; i < matches.size(); i++)
 	{
 		assert(matches[i].first >= matches[i-1].first);
@@ -172,43 +182,21 @@ void iterateUniqueKmerMatches(const std::vector<std::pair<size_t, size_t>>& refR
 	if (minMaxMatchLength < 5000) return;
 	for (size_t i = 0; i < matches.size(); i++)
 	{
-		callback(queryreadIndex, matches[i].first, matches[i].second);
+		callback(queryRead.readIndex, matches[i].first, matches[i].second);
 	}
 }
 
 template <typename F>
 void iterateUniqueKmerMatches(const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t refreadIndex, const phmap::flat_hash_set<size_t>& matchingReads, const size_t kmerSize, F callback)
 {
-	std::string refSeq;
-	if (refreadIndex < sequenceIndex.size())
-	{
-		refSeq = sequenceIndex.getSequence(refreadIndex);
-	}
-	else
-	{
-		refSeq = revCompRaw(sequenceIndex.getSequence(refreadIndex - sequenceIndex.size()));
-	}
-	std::vector<std::pair<size_t, size_t>> refReadKmers = getLocallyUniqueKmers(refSeq, kmerSize);
-	if (refReadKmers.size() < 10) return;
-	phmap::flat_hash_map<size_t, std::array<size_t, 5>> lowCountRefKmers = getLowCountKmers(refReadKmers);
+	ReadOverlapInformation refRead = getReadOverlapInformation(sequenceIndex, refreadIndex, kmerSize);
 	for (size_t read : matchingReads)
 	{
 		if (read == refreadIndex) continue;
 		if (refreadIndex < sequenceIndex.size() && read == refreadIndex + sequenceIndex.size()) continue;
 		if (refreadIndex >= sequenceIndex.size() && read == refreadIndex - sequenceIndex.size()) continue;
-		std::string querySeq;
-		if (read < sequenceIndex.size())
-		{
-			querySeq = sequenceIndex.getSequence(read);
-		}
-		else
-		{
-			querySeq = revCompRaw(sequenceIndex.getSequence(read - sequenceIndex.size()));
-		}
-		std::vector<std::pair<size_t, size_t>> queryReadKmers = getLocallyUniqueKmers(querySeq, kmerSize);
-		if (queryReadKmers.size() < 10) continue;
-		phmap::flat_hash_map<size_t, std::array<size_t, 5>> lowCountQueryKmers = getLowCountKmers(queryReadKmers);
-		iterateUniqueKmerMatches(refReadKmers, refreadIndex, lowCountRefKmers, refSeq.size(), queryReadKmers, read, lowCountQueryKmers, querySeq.size(), kmerSize, callback);
+		ReadOverlapInformation queryRead = getReadOverlapInformation(sequenceIndex, read, kmerSize);
+		iterateUniqueKmerMatches(refRead, queryRead, callback);
 	}
 }
 

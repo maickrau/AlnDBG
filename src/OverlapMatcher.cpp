@@ -125,3 +125,22 @@ void filterOutDoubleMatchedPositions(std::vector<std::pair<size_t, size_t>>& mat
 		}
 	}
 }
+
+ReadOverlapInformation getReadOverlapInformation(const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t readIndex, const size_t kmerSize)
+{
+	ReadOverlapInformation result;
+	std::string readSeq;
+	if (readIndex < sequenceIndex.size())
+	{
+		readSeq = sequenceIndex.getSequence(readIndex);
+	}
+	else
+	{
+		readSeq = revCompRaw(sequenceIndex.getSequence(readIndex - sequenceIndex.size()));
+	}
+	result.readKmers = getLocallyUniqueKmers(readSeq, kmerSize);
+	result.lowCountKmers = getLowCountKmers(result.readKmers);
+	result.readIndex = readIndex;
+	result.readLength = readSeq.size();
+	return result;
+}
