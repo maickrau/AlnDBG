@@ -779,7 +779,6 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 			lastRead = otherReadIndex;
 			lastPos = thisReadPos;
 		});
-		phmap::flat_hash_set<size_t> bwmatchingReads;
 		auto endTime = getTime();
 		{
 			std::lock_guard<std::mutex> lock { printMutex };
