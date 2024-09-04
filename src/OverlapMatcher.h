@@ -18,7 +18,6 @@ public:
 };
 
 std::vector<std::pair<size_t, size_t>> getLocallyUniqueKmers(const std::string& readSeq, const size_t kmerSize);
-void filterOutDoubleMatchedPositions(std::vector<std::pair<size_t, size_t>>& matches);
 ReadOverlapInformation getReadOverlapInformation(const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t readIndex, const size_t kmerSize);
 
 // kmers with same sequence are iterated ordered by their position, but kmers with different sequence will not be
@@ -140,45 +139,135 @@ void iterateUniqueKmerMatches(const ReadOverlapInformation& refRead, const ReadO
 	{
 		matches.emplace_back(refPos, queryPos);
 	});
-	filterOutDoubleMatchedPositions(matches);
 	if (matches.size() < 10) return;
-	bool hasBigGap = false;
 	bool matchesStart = false;
 	bool matchesEnd = false;
-	std::sort(matches.begin(), matches.end(), [](auto left, auto right) { return left.second < right.second; });
-	size_t minMaxMatchLength = matches.back().second - matches[0].second;
-	if (matches[0].second < 1000) matchesStart = true;
-	if (matches.back().second + 1000 >= queryRead.readLength) matchesEnd = true;
-	for (size_t i = 1; i < matches.size(); i++)
+	size_t lastValidMatchPos = std::numeric_limits<size_t>::max();
+	size_t lastAnyMatchPos = std::numeric_limits<size_t>::max();
+	size_t maxMatchPos = std::numeric_limits<size_t>::max();
+	size_t minMatchPos = std::numeric_limits<size_t>::max();
+	for (size_t i = matches.size()-1; i > 0; i--)
 	{
 		assert(matches[i].second >= matches[i-1].second);
-		if (matches[i].second - matches[i-1].second > 1000)
+		if (matches[i].second == matches[i-1].second || matches[i].second == lastAnyMatchPos)
 		{
-			hasBigGap = true;
-			break;
+			lastAnyMatchPos = matches[i].second;
+			std::swap(matches[i], matches.back());
+			matches.pop_back();
+			if (matches.size() < 10) return;
+			continue;
+		}
+		assert(matches[i].second > matches[i-1].second);
+		assert(matches[i].second < lastAnyMatchPos);
+		if (maxMatchPos == std::numeric_limits<size_t>::max())
+		{
+			maxMatchPos = matches[i].second;
+		}
+		assert(minMatchPos > matches[i].second);
+		minMatchPos = matches[i].second;
+		if (lastValidMatchPos != std::numeric_limits<size_t>::max())
+		{
+			assert(lastValidMatchPos > matches[i].second);
+			if (lastValidMatchPos - matches[i].second > 1000)
+			{
+				return; // has big gap
+			}
+		}
+		lastValidMatchPos = matches[i].second;
+		lastAnyMatchPos = matches[i].second;
+	}
+	if (lastAnyMatchPos > matches[0].second)
+	{
+		assert(minMatchPos > matches[0].second);
+		minMatchPos = matches[0].second;
+		assert(lastValidMatchPos != std::numeric_limits<size_t>::max());
+		assert(lastValidMatchPos > matches[0].second);
+		if (lastValidMatchPos - matches[0].second > 1000)
+		{
+			return; // has big gap
 		}
 	}
-	if (hasBigGap) return;
+	if (minMatchPos < 1000) matchesStart = true;
+	if (maxMatchPos+1000 > queryRead.readLength) matchesEnd = true;
+	size_t minMaxMatchLength = maxMatchPos - minMatchPos;
 	if (minMaxMatchLength < 5000) return;
 	std::sort(matches.begin(), matches.end());
-	minMaxMatchLength = std::min(minMaxMatchLength, matches.back().first - matches[0].first);
-	if (matches[0].first < 1000) matchesStart = true;
-	if (matches.back().first + 1000 >= refRead.readLength) matchesEnd = true;
-	for (size_t i = 1; i < matches.size(); i++)
+	std::vector<size_t> skipMatchSites; // so no need to sort matches again
+	lastValidMatchPos = std::numeric_limits<size_t>::max();
+	lastAnyMatchPos = std::numeric_limits<size_t>::max();
+	maxMatchPos = std::numeric_limits<size_t>::max();
+	minMatchPos = std::numeric_limits<size_t>::max();
+	for (size_t i = 0; i+1 < matches.size(); i++)
 	{
-		assert(matches[i].first >= matches[i-1].first);
-		if (matches[i].first - matches[i-1].first > 1000)
+		assert(matches[i].first <= matches[i+1].first);
+		if (matches[i].first == matches[i+1].first || matches[i].first == lastAnyMatchPos)
 		{
-			hasBigGap = true;
-			break;
+			lastAnyMatchPos = matches[i].first;
+			skipMatchSites.emplace_back(i);
+			assert(matches.size() > skipMatchSites.size());
+			if (matches.size() - skipMatchSites.size() < 10) return;
+			continue;
+		}
+		assert(matches[i].first < matches[i+1].first);
+		assert(lastAnyMatchPos == std::numeric_limits<size_t>::max() || matches[i].first > lastAnyMatchPos);
+		assert(lastValidMatchPos == std::numeric_limits<size_t>::max() || matches[i].first > lastValidMatchPos);
+		if (lastValidMatchPos != std::numeric_limits<size_t>::max())
+		{
+			assert(matches[i].first > lastValidMatchPos);
+			if (matches[i].first - lastValidMatchPos > 1000)
+			{
+				return; // has big gap
+			}
+		}
+		if (minMatchPos == std::numeric_limits<size_t>::max())
+		{
+			minMatchPos = matches[i].first;
+			if (minMatchPos > 1000 && !matchesStart) return;
+		}
+		assert(maxMatchPos == std::numeric_limits<size_t>::max() || matches[i].first > maxMatchPos);
+		maxMatchPos = matches[i].first;
+		lastValidMatchPos = matches[i].first;
+		lastAnyMatchPos = matches[i].first;
+	}
+	if (matches.back().first > lastAnyMatchPos)
+	{
+		assert(maxMatchPos == std::numeric_limits<size_t>::max() || matches.back().first > maxMatchPos);
+		maxMatchPos = matches.back().first;
+		assert(lastValidMatchPos != std::numeric_limits<size_t>::max());
+		assert(matches.back().first > lastValidMatchPos);
+		if (matches.back().first - lastValidMatchPos > 1000)
+		{
+			return; // has big gap
 		}
 	}
-	if (hasBigGap) return;
+	else
+	{
+		skipMatchSites.push_back(matches.size()-1);
+	}
+	if (minMatchPos < 1000) matchesStart = true;
+	if (maxMatchPos + 1000 > refRead.readLength) matchesEnd = true;
+	minMaxMatchLength = std::min(minMaxMatchLength, maxMatchPos - minMatchPos);
 	if (!matchesStart) return;
 	if (!matchesEnd) return;
 	if (minMaxMatchLength < 5000) return;
+	assert(matches.size() > skipMatchSites.size());
+	if (matches.size() - skipMatchSites.size() < 10) return;
+	size_t skipIndex = 0;
 	for (size_t i = 0; i < matches.size(); i++)
 	{
+		if (skipIndex < skipMatchSites.size())
+		{
+			while (skipMatchSites[skipIndex] < i)
+			{
+				assert(skipIndex+1 < skipMatchSites.size());
+				skipIndex += 1;
+			}
+			if (skipMatchSites[skipIndex] == i)
+			{
+				skipIndex += 1;
+				continue;
+			}
+		}
 		callback(queryRead.readIndex, matches[i].first, matches[i].second);
 	}
 }
