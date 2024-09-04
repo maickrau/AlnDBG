@@ -141,7 +141,7 @@ void iterateUniqueKmerMatches(const ReadOverlapInformation& refRead, const ReadO
 	int bestDiagonal = getBestDiagonal(refRead.lowCountKmers, queryRead.lowCountKmers);
 	if (bestDiagonal == std::numeric_limits<int>::max()) return;
 	std::vector<std::pair<size_t, size_t>> matches;
-	iterateMatchingKmersInDiagonal(refRead.readKmers, refRead.readKmers, bestDiagonal, [&matches](const size_t refPos, const size_t queryPos)
+	iterateMatchingKmersInDiagonal(refRead.readKmers, queryRead.readKmers, bestDiagonal, [&matches](const size_t refPos, const size_t queryPos)
 	{
 		matches.emplace_back(refPos, queryPos);
 	});
