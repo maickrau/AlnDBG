@@ -719,15 +719,14 @@ phmap::flat_hash_set<size_t> getRoughMatchingReads(const std::vector<std::vector
 			result.insert(readsPerChunk[chunk].begin(), readsPerChunk[chunk].end());
 		}
 	}
-	assert(result.count(refRead) == 1);
-	result.erase(refRead);
+	if (result.count(refRead) == 1) result.erase(refRead);
 	if (result.count(refRead + reverseReadOffset) == 1) result.erase(refRead + reverseReadOffset);
 	return result;
 }
 
 std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t kmerSize, const size_t windowSize, const size_t middleSkip)
 {
-	const size_t blockSize = 10000;
+	const size_t blockSize = 1000;
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::cerr << "getting good kmers" << std::endl;
 	std::vector<std::vector<bool>> kmerIsGood;
@@ -742,9 +741,11 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerLength(chunks, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//	splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunks, numThreads);
+	splitPerBaseCounts(sequenceIndex, rawReadLengths, chunks, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//	splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunks, numThreads);
+	splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunks, numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunks, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	assert(chunks.size() == sequenceIndex.size()*2);
 	assert(rawReadLengths.size() == sequenceIndex.size()*2);
@@ -966,9 +967,9 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 				std::cerr << numChunks << " chunks" << std::endl;
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			}
+			writeStage(0, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize);
 			splitPerLength(chunksPerRead, numThreads);
-			writeStage(0, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			mergeFakeBubbles(chunksPerRead, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(1, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
