@@ -690,8 +690,27 @@ phmap::flat_hash_set<size_t> filterGoodChunkMatches(const std::vector<size_t>& r
 	return result;
 }
 
+phmap::flat_hash_set<size_t> getRoughMatchingReads(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunks, const std::vector<std::vector<size_t>>& readsPerChunk, const size_t refRead, const size_t reverseReadOffset)
+{
+	phmap::flat_hash_set<size_t> result;
+	for (size_t j = 0; j < chunks[refRead].size(); j++)
+	{
+		size_t chunk = std::get<2>(chunks[refRead][j]) & maskUint64_t;
+		assert(chunk < readsPerChunk.size());
+		if (readsPerChunk[chunk].size() < 1000)
+		{
+			result.insert(readsPerChunk[chunk].begin(), readsPerChunk[chunk].end());
+		}
+	}
+	assert(result.count(refRead) == 1);
+	result.erase(refRead);
+	if (result.count(refRead + reverseReadOffset) == 1) result.erase(refRead + reverseReadOffset);
+	return result;
+}
+
 std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t kmerSize, const size_t windowSize, const size_t middleSkip)
 {
+	const size_t blockSize = 10000;
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::cerr << "getting good kmers" << std::endl;
 	std::vector<std::vector<bool>> kmerIsGood;
@@ -729,10 +748,122 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 		readsPerChunk[i].clear();
 		readsPerChunk[i].insert(readsPerChunk[i].end(), uniqs.begin(), uniqs.end());
 	}
+	std::vector<size_t> readBelongsToBlock;
+	std::vector<std::vector<size_t>> readsWithinBlock;
+	{
+		std::vector<size_t> smallestNonsingularChunkInRead;
+		for (size_t i = 0; i < sequenceIndex.size(); i++)
+		{
+			assert(chunks[i].size() == chunks[i+sequenceIndex.size()].size());
+			size_t smallestHere = std::numeric_limits<size_t>::max();
+			for (size_t j = 0; j < chunks[i].size(); j++)
+			{
+				size_t chunk = std::get<2>(chunks[i][j]) & maskUint64_t;
+				if (readsPerChunk[chunk].size() < 2) continue;
+				smallestHere = std::min(smallestHere, chunk);
+			}
+			for (size_t j = 0; j < chunks[i + sequenceIndex.size()].size(); j++)
+			{
+				size_t chunk = std::get<2>(chunks[i + sequenceIndex.size()][j]) & maskUint64_t;
+				if (readsPerChunk[chunk].size() < 2) continue;
+				smallestHere = std::min(smallestHere, chunk);
+			}
+			smallestNonsingularChunkInRead.emplace_back(smallestHere);
+		}
+		std::vector<size_t> readOrder;
+		for (size_t i = 0; i < sequenceIndex.size(); i++)
+		{
+			readOrder.emplace_back(i);
+		}
+		std::sort(readOrder.begin(), readOrder.end(), [&smallestNonsingularChunkInRead](const size_t left, const size_t right) { return smallestNonsingularChunkInRead[left] < smallestNonsingularChunkInRead[right]; });
+		readsWithinBlock.resize((sequenceIndex.size() + blockSize - 1) / blockSize);
+		readBelongsToBlock.resize(sequenceIndex.size(), std::numeric_limits<size_t>::max());
+		for (size_t i = 0; i < sequenceIndex.size(); i++)
+		{
+			assert(readBelongsToBlock[readOrder[i]] == std::numeric_limits<size_t>::max());
+			readBelongsToBlock[readOrder[i]] = i / blockSize;
+			readsWithinBlock[i / blockSize].emplace_back(readOrder[i]);
+		}
+	}
+	assert(readsWithinBlock.size() >= 1);
 	std::mutex printMutex;
+	for (size_t block = 0; block < readsWithinBlock.size(); block++)
+	{
+		std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+		std::cerr << "begin block " << block << " / " << readsWithinBlock.size() << " reads " << readsWithinBlock[block].size() << std::endl;
+		auto startTime = getTime();
+		std::vector<ReadOverlapInformation> readInformationHere;
+		readInformationHere.resize(readsWithinBlock[block].size());
+		std::vector<ReadOverlapInformation> reverseReadInformationHere;
+		reverseReadInformationHere.resize(readsWithinBlock[block].size());
+		phmap::flat_hash_map<size_t, size_t> readIndexWithinBlock;
+		for (size_t i = 0; i < readsWithinBlock[block].size(); i++)
+		{
+			assert(readIndexWithinBlock.count(readsWithinBlock[block][i]) == 0);
+			readIndexWithinBlock[readsWithinBlock[block][i]] = i;
+		}
+		auto getReadInfos = getTime();
+		iterateMultithreaded(0, readsWithinBlock[block].size(), numThreads, [&sequenceIndex, &readsWithinBlock, &reverseReadInformationHere, &readInformationHere, block, kmerSize](const size_t index)
+		{
+			readInformationHere[index] = getReadOverlapInformation(sequenceIndex, readsWithinBlock[block][index], kmerSize);
+			reverseReadInformationHere[index] = getReadOverlapInformation(sequenceIndex, readsWithinBlock[block][index] + sequenceIndex.size(), kmerSize);
+		});
+		auto afterReadInfos = getTime();
+		std::atomic<size_t> totalMatchesWithinBlock;
+		totalMatchesWithinBlock = 0;
+		iterateMultithreaded(0, readsWithinBlock[block].size(), numThreads, [&sequenceIndex, &readsPerChunk, &chunks, &kmerIsGood, &rawReadLengths, &totalMatchesWithinBlock, &readIndexWithinBlock, &readsWithinBlock, &printMutex, &readInformationHere, &reverseReadInformationHere, &readBelongsToBlock, block](const size_t readIndex)
+		{
+			std::string readName = sequenceIndex.getName(readsWithinBlock[block][readIndex]);
+			{
+				std::lock_guard<std::mutex> lock { printMutex };
+				std::cerr << "block " << block << " begin overlapping read " << readsWithinBlock[block][readIndex] << "/" << sequenceIndex.size() << " name " << readName << std::endl;
+			}
+			auto readStartTime = getTime();
+			phmap::flat_hash_set<size_t> fwmatchingReadsBeforeFilter = getRoughMatchingReads(chunks, readsPerChunk, readsWithinBlock[block][readIndex], sequenceIndex.size());
+			phmap::flat_hash_set<size_t> fwMatchingReads;
+			for (auto t : fwmatchingReadsBeforeFilter)
+			{
+				size_t check = t < sequenceIndex.size() ? t : t - sequenceIndex.size();
+				if (readBelongsToBlock[check] != block) continue;
+				fwMatchingReads.emplace(t);
+			}
+			phmap::flat_hash_set<size_t> filteredFwMatchingReads = filterGoodChunkMatches(rawReadLengths, chunks, fwMatchingReads, readsWithinBlock[block][readIndex]);
+			size_t countFwMatchingReads = 0;
+			for (size_t otherRead : filteredFwMatchingReads)
+			{
+				size_t lastPos = std::numeric_limits<size_t>::max();
+				ReadOverlapInformation& otherReadInfo = (otherRead < sequenceIndex.size()) ? (readInformationHere[readIndexWithinBlock[otherRead]]) : (reverseReadInformationHere[readIndexWithinBlock[otherRead - sequenceIndex.size()]]);
+				iterateUniqueKmerMatches(readInformationHere[readIndex], otherReadInfo, [&kmerIsGood, &lastPos, &countFwMatchingReads, &readsWithinBlock, block, readIndex](const size_t otherReadIndex, const size_t thisReadPos, const size_t otherReadPos)
+				{
+					if (lastPos != std::numeric_limits<size_t>::max())
+					{
+						assert(thisReadPos > lastPos);
+						for (size_t j = lastPos+1; j < thisReadPos; j++)
+						{
+							kmerIsGood[readsWithinBlock[block][readIndex]][j] = false;
+						}
+					}
+					else
+					{
+						countFwMatchingReads += 1;
+					}
+					lastPos = thisReadPos;
+				});
+			}
+			auto readEndTime = getTime();
+			totalMatchesWithinBlock += countFwMatchingReads;
+			{
+				std::lock_guard<std::mutex> lock { printMutex };
+				std::cerr << "block " << block << " read " << readsWithinBlock[block][readIndex] << " name " << readName << " length " << rawReadLengths[readsWithinBlock[block][readIndex]] << " has " << countFwMatchingReads << " matches, time " << formatTime(readStartTime, readEndTime) << ", pre-filter overlaps " << fwMatchingReads.size() << ", pre-kmer overlaps " << filteredFwMatchingReads.size() << std::endl;
+			}
+		});
+		auto endTime = getTime();
+		std::cerr << "finished block " << block << " / " << readsWithinBlock.size() << ", total matches " << totalMatchesWithinBlock << ", total time: " << formatTime(startTime, endTime) << std::endl;
+		std::cerr << "times: " << formatTime(startTime, getReadInfos) << " " << formatTime(getReadInfos, afterReadInfos) << " " << formatTime(afterReadInfos, endTime) << std::endl;
+	}
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::cerr << "begin overlapping" << std::endl;
-	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&sequenceIndex, &readsPerChunk, &chunks, &kmerIsGood, &rawReadLengths, &printMutex, kmerSize](const size_t i)
+	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&sequenceIndex, &readsPerChunk, &chunks, &kmerIsGood, &rawReadLengths, &printMutex, &readBelongsToBlock, kmerSize](const size_t i)
 	{
 		auto startTime = getTime();
 		std::string readName = sequenceIndex.getName(i);
@@ -740,24 +871,14 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 			std::lock_guard<std::mutex> lock { printMutex };
 			std::cerr << "begin overlapping read " << i << "/" << sequenceIndex.size() << " name " << readName << std::endl;
 		}
-		size_t countOversizedChunks = 0;
+		phmap::flat_hash_set<size_t> fwmatchingReadsBeforeFilter = getRoughMatchingReads(chunks, readsPerChunk, i, sequenceIndex.size());
 		phmap::flat_hash_set<size_t> fwmatchingReads;
-		for (size_t j = 0; j < chunks[i].size(); j++)
+		for (auto t : fwmatchingReadsBeforeFilter)
 		{
-			size_t chunk = std::get<2>(chunks[i][j]) & maskUint64_t;
-			assert(chunk < readsPerChunk.size());
-			if (readsPerChunk[chunk].size() < 1000)
-			{
-				fwmatchingReads.insert(readsPerChunk[chunk].begin(), readsPerChunk[chunk].end());
-			}
-			else
-			{
-				countOversizedChunks += 1;
-			}
+			size_t check = t < sequenceIndex.size() ? t : t - sequenceIndex.size();
+			if (readBelongsToBlock[i] == readBelongsToBlock[check]) continue;
+			fwmatchingReads.emplace(t);
 		}
-		assert(fwmatchingReads.count(i) == 1);
-		fwmatchingReads.erase(i);
-		if (fwmatchingReads.count(i + sequenceIndex.size()) == 1) fwmatchingReads.erase(i + sequenceIndex.size());
 		phmap::flat_hash_set<size_t> filteredFwMatchingReads = filterGoodChunkMatches(rawReadLengths, chunks, fwmatchingReads, i);
 		size_t lastRead = std::numeric_limits<size_t>::max();
 		size_t lastPos = 0;
@@ -782,7 +903,7 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 		auto endTime = getTime();
 		{
 			std::lock_guard<std::mutex> lock { printMutex };
-			std::cerr << "read " << i << " name " << readName << " length " << rawReadLengths[i] << " has " << countFwMatchingReads << " matches, time " << formatTime(startTime, endTime) << ", pre-filter overlaps " << fwmatchingReads.size() << ", pre-kmer overlaps " << filteredFwMatchingReads.size() << ", oversized chunks " << countOversizedChunks << std::endl;
+			std::cerr << "read " << i << " name " << readName << " length " << rawReadLengths[i] << " has " << countFwMatchingReads << " matches, time " << formatTime(startTime, endTime) << ", pre-filter overlaps " << fwmatchingReads.size() << ", pre-kmer overlaps " << filteredFwMatchingReads.size() << std::endl;
 		}
 	});
 	return kmerIsGood;
