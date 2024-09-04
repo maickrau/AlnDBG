@@ -10,9 +10,9 @@
 #include "phmap.h"
 
 std::vector<std::pair<size_t, size_t>> getLocallyUniqueKmers(const std::string& readSeq, const size_t kmerSize);
-phmap::flat_hash_map<size_t, std::vector<size_t>> getLowCountKmers(const std::vector<std::pair<size_t, size_t>>& readKmers);
+phmap::flat_hash_map<size_t, std::array<size_t, 5>> getLowCountKmers(const std::vector<std::pair<size_t, size_t>>& readKmers);
 // plus: starts at positive location in ref. minus: starts at negative location in ref. starts at 0 in query
-int getBestDiagonal(const phmap::flat_hash_map<size_t, std::vector<size_t>>& refKmers, const phmap::flat_hash_map<size_t, std::vector<size_t>>& queryKmers);
+int getBestDiagonal(const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& refKmers, const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& queryKmers);
 void filterOutDoubleMatchedPositions(std::vector<std::pair<size_t, size_t>>& matches);
 
 // kmers with same sequence are iterated ordered by their position, but kmers with different sequence will not be
@@ -139,7 +139,7 @@ void iterateUniqueKmerMatches(const FastaCompressor::CompressedStringIndex& sequ
 	}
 	std::vector<std::pair<size_t, size_t>> refReadKmers = getLocallyUniqueKmers(refSeq, kmerSize);
 	if (refReadKmers.size() < 10) return;
-	phmap::flat_hash_map<size_t, std::vector<size_t>> lowCountRefKmers = getLowCountKmers(refReadKmers);
+	phmap::flat_hash_map<size_t, std::array<size_t, 5>> lowCountRefKmers = getLowCountKmers(refReadKmers);
 	for (size_t read : matchingReads)
 	{
 		if (read == refreadIndex) continue;
@@ -156,7 +156,7 @@ void iterateUniqueKmerMatches(const FastaCompressor::CompressedStringIndex& sequ
 		}
 		std::vector<std::pair<size_t, size_t>> queryReadKmers = getLocallyUniqueKmers(querySeq, kmerSize);
 		if (queryReadKmers.size() < 10) continue;
-		phmap::flat_hash_map<size_t, std::vector<size_t>> lowCountQueryKmers = getLowCountKmers(queryReadKmers);
+		phmap::flat_hash_map<size_t, std::array<size_t, 5>> lowCountQueryKmers = getLowCountKmers(queryReadKmers);
 		int bestDiagonal = getBestDiagonal(lowCountRefKmers, lowCountQueryKmers);
 		if (bestDiagonal == std::numeric_limits<int>::max()) continue;
 		std::vector<std::pair<size_t, size_t>> matches;

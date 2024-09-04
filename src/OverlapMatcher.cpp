@@ -1,6 +1,16 @@
 #include <limits>
 #include "OverlapMatcher.h"
 
+size_t arraySize(const std::array<size_t, 5>& array)
+{
+	if (array[0] == std::numeric_limits<size_t>::max()) return 0;
+	if (array[1] == std::numeric_limits<size_t>::max()) return 1;
+	if (array[2] == std::numeric_limits<size_t>::max()) return 2;
+	if (array[3] == std::numeric_limits<size_t>::max()) return 3;
+	if (array[4] == std::numeric_limits<size_t>::max()) return 4;
+	return 5;
+}
+
 std::vector<std::pair<size_t, size_t>> getLocallyUniqueKmers(const std::string& readSeq, const size_t kmerSize)
 {
 	std::vector<std::pair<size_t, size_t>> result;
@@ -12,22 +22,32 @@ std::vector<std::pair<size_t, size_t>> getLocallyUniqueKmers(const std::string& 
 	return result;
 }
 
-phmap::flat_hash_map<size_t, std::vector<size_t>> getLowCountKmers(const std::vector<std::pair<size_t, size_t>>& readKmers)
+phmap::flat_hash_map<size_t, std::array<size_t, 5>> getLowCountKmers(const std::vector<std::pair<size_t, size_t>>& readKmers)
 {
 	const size_t maxSize = 5;
-	phmap::flat_hash_map<size_t, std::vector<size_t>> result;
+	phmap::flat_hash_map<size_t, std::array<size_t, 5>> result;
 	for (auto pair : readKmers)
 	{
-		if (result.count(pair.second) == 0 || result.at(pair.second).size() < maxSize)
+		if (result.count(pair.second) == 0)
 		{
-			result[pair.second].emplace_back(pair.first);
+			result[pair.second][0] = pair.first;
+			result[pair.second][1] = std::numeric_limits<size_t>::max();
+			result[pair.second][2] = std::numeric_limits<size_t>::max();
+			result[pair.second][3] = std::numeric_limits<size_t>::max();
+			result[pair.second][4] = std::numeric_limits<size_t>::max();
+		}
+		else
+		{
+			std::array<size_t, 5>& arr = result[pair.second];
+			if (arraySize(arr) < 5) arr[arraySize(arr)] = pair.first;
 		}
 	}
 	phmap::flat_hash_set<size_t> removeThese;
 	for (auto pair : result)
 	{
-		assert(pair.second.size() <= maxSize);
-		if (pair.second.size() == maxSize)
+		size_t s = arraySize(pair.second);
+		assert(s <= maxSize);
+		if (s == maxSize)
 		{
 			removeThese.insert(pair.first);
 		}
@@ -39,7 +59,7 @@ phmap::flat_hash_map<size_t, std::vector<size_t>> getLowCountKmers(const std::ve
 	return result;
 }
 
-int getBestDiagonal(const phmap::flat_hash_map<size_t, std::vector<size_t>>& refKmers, const phmap::flat_hash_map<size_t, std::vector<size_t>>& queryKmers)
+int getBestDiagonal(const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& refKmers, const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& queryKmers)
 {
 	std::vector<int> diagonalMatches;
 	for (const auto& pair : refKmers)
@@ -47,8 +67,10 @@ int getBestDiagonal(const phmap::flat_hash_map<size_t, std::vector<size_t>>& ref
 		if (queryKmers.count(pair.first) == 0) continue;
 		for (auto pos : pair.second)
 		{
+			if (pos == std::numeric_limits<size_t>::max()) break;
 			for (auto pos2 : queryKmers.at(pair.first))
 			{
+				if (pos2 == std::numeric_limits<size_t>::max()) break;
 				int diagonal = (int)pos - (int)pos2;
 				diagonalMatches.emplace_back(diagonal);
 			}
