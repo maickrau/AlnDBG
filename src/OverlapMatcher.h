@@ -103,30 +103,74 @@ void iterateMatchingKmersInDiagonal(const std::vector<std::pair<size_t, size_t>>
 	size_t queryIndex = 0;
 	while (refIndex < refReadKmers.size() && queryIndex < queryReadKmers.size())
 	{
-		int diagonalHere = (int)refReadKmers[refIndex].first - (int)queryReadKmers[queryIndex].first;
-		activeRefKmers[refReadKmers[refIndex].second] = refReadKmers[refIndex].first;
-		size_t queryKmer = queryReadKmers[queryIndex].second;
-		if (activeRefKmers.count(queryKmer) == 1)
-		{
-			int matchDiagonal = (int)activeRefKmers.at(queryKmer) - (int)queryReadKmers[queryIndex].first;
-			if (matchDiagonal >= diagonal-100 && matchDiagonal <= diagonal+100)
-			{
-				callback(activeRefKmers.at(queryKmer), queryReadKmers[queryIndex].first);
-			}
-		}
-		if (diagonalHere < diagonal+100)
+		if (refReadKmers[refIndex].first < queryReadKmers[queryIndex].first)
 		{
 			refIndex += 1;
 			continue;
 		}
-		if (diagonalHere > diagonal+100)
+		if (refReadKmers[refIndex].first > queryReadKmers[queryIndex].first)
 		{
 			queryIndex += 1;
 			continue;
 		}
-		refIndex += 1;
-		queryIndex += 1;
-		continue;
+		assert(refReadKmers[refIndex].first == queryReadKmers[queryIndex].first);
+		if ((refIndex+1 == refReadKmers.size() || refReadKmers[refIndex+1].first != refReadKmers[refIndex].first) && (queryIndex+1 == queryReadKmers.size() || queryReadKmers[queryIndex+1].first != queryReadKmers[queryIndex].first))
+		{
+			int diagonalHere = (int)refReadKmers[refIndex].second - (int)queryReadKmers[queryIndex].second;
+			if (diagonalHere >= diagonal-100 && diagonalHere <= diagonal+100)
+			{
+				callback(refReadKmers[refIndex].second, queryReadKmers[queryIndex].second);
+			}
+			refIndex += 1;
+			queryIndex += 1;
+			continue;
+		}
+		while (refIndex < refReadKmers.size() && queryIndex < queryReadKmers.size() && refReadKmers[refIndex].first == queryReadKmers[queryIndex].first)
+		{
+			int diagonalHere = (int)refReadKmers[refIndex].second - (int)queryReadKmers[queryIndex].second;
+			if (diagonalHere >= diagonal-100 && diagonalHere <= diagonal+100)
+			{
+				bool matchedByAnother = false;
+				if (refIndex > 0 && refReadKmers[refIndex-1].first == refReadKmers[refIndex].first)
+				{
+					int otherDiagonal = (int)refReadKmers[refIndex-1].second - (int)queryReadKmers[queryIndex].second;
+					if (otherDiagonal >= diagonal-100 && otherDiagonal <= diagonal+100) matchedByAnother = true;
+				}
+				if (refIndex+1 < refReadKmers.size() && refReadKmers[refIndex+1].first == refReadKmers[refIndex].first)
+				{
+					int otherDiagonal = (int)refReadKmers[refIndex+1].second - (int)queryReadKmers[queryIndex].second;
+					if (otherDiagonal >= diagonal-100 && otherDiagonal <= diagonal+100) matchedByAnother = true;
+				}
+				if (queryIndex > 0 && queryReadKmers[queryIndex-1].first == queryReadKmers[queryIndex].first)
+				{
+					int otherDiagonal = (int)refReadKmers[refIndex].second - (int)queryReadKmers[queryIndex-1].second;
+					if (otherDiagonal >= diagonal-100 && otherDiagonal <= diagonal+100) matchedByAnother = true;
+				}
+				if (queryIndex+1 < queryReadKmers.size() && queryReadKmers[queryIndex+1].first == queryReadKmers[queryIndex].first)
+				{
+					int otherDiagonal = (int)refReadKmers[refIndex].second - (int)queryReadKmers[queryIndex+1].second;
+					if (otherDiagonal >= diagonal-100 && otherDiagonal <= diagonal+100) matchedByAnother = true;
+				}
+				if (!matchedByAnother) callback(refReadKmers[refIndex].second, queryReadKmers[queryIndex].second);
+			}
+			if (diagonalHere < diagonal)
+			{
+				refIndex += 1;
+				continue;
+			}
+			if (diagonalHere > diagonal)
+			{
+				queryIndex += 1;
+				continue;
+			}
+			assert(diagonalHere == diagonal);
+			refIndex += 1;
+			queryIndex += 1;
+			if (refIndex == refReadKmers.size() || refReadKmers[refIndex].first != refReadKmers[refIndex-1].first)
+			{
+				break;
+			}
+		}
 	}
 }
 
@@ -140,6 +184,7 @@ void iterateUniqueKmerMatches(const ReadOverlapInformation& refRead, const ReadO
 		matches.emplace_back(refPos, queryPos);
 	});
 	if (matches.size() < 10) return;
+	std::sort(matches.begin(), matches.end(), [](auto left, auto right) { return left.second < right.second; });
 	bool matchesStart = false;
 	bool matchesEnd = false;
 	size_t lastValidMatchPos = std::numeric_limits<size_t>::max();

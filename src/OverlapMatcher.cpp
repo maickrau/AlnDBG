@@ -6,7 +6,7 @@ std::vector<std::pair<size_t, size_t>> getLocallyUniqueKmers(const std::string& 
 	std::vector<std::pair<size_t, size_t>> result;
 	iterateLocallyUniqueKmers(readSeq, kmerSize, 100, [&result](const size_t kmer, const size_t pos)
 	{
-		result.emplace_back(pos, kmer);
+		result.emplace_back(kmer, pos);
 	});
 	std::sort(result.begin(), result.end());
 	return result;
