@@ -240,6 +240,26 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 	auto oldChunks = chunksPerRead;
 	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
+		if (occurrencesPerChunk[i].size() < 10)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + nextNum;
+			}
+			nextNum += 1;
+			return;
+		}
+		if (std::get<1>(chunksPerRead[occurrencesPerChunk[i][0].first][occurrencesPerChunk[i][0].second]) - std::get<0>(chunksPerRead[occurrencesPerChunk[i][0].first][occurrencesPerChunk[i][0].second]) < 20)
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t) + nextNum;
+			}
+			nextNum += 1;
+			return;
+		}
 		std::vector<std::vector<size_t>> countsPerOccurrence;
 		countsPerOccurrence.resize(occurrencesPerChunk[i].size());
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
