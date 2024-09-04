@@ -126,6 +126,57 @@ void iterateMatchingKmersInDiagonal(const std::vector<std::pair<size_t, size_t>>
 }
 
 template <typename F>
+void iterateUniqueKmerMatches(const std::vector<std::pair<size_t, size_t>>& refReadKmers, const size_t refreadIndex, const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& lowCountRefKmers, const size_t refLength, const std::vector<std::pair<size_t, size_t>>& queryReadKmers, const size_t queryreadIndex, const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& lowCountQueryKmers, const size_t queryLength, const size_t kmerSize, F callback)
+{
+	int bestDiagonal = getBestDiagonal(lowCountRefKmers, lowCountQueryKmers);
+	if (bestDiagonal == std::numeric_limits<int>::max()) return;
+	std::vector<std::pair<size_t, size_t>> matches;
+	iterateMatchingKmersInDiagonal(refReadKmers, queryReadKmers, bestDiagonal, [&matches](const size_t refPos, const size_t queryPos)
+	{
+		matches.emplace_back(refPos, queryPos);
+	});
+	filterOutDoubleMatchedPositions(matches);
+	if (matches.size() < 10) return;
+	bool hasBigGap = false;
+	bool matchesStart = false;
+	bool matchesEnd = false;
+	std::sort(matches.begin(), matches.end(), [](auto left, auto right) { return left.second < right.second; });
+	size_t minMaxMatchLength = matches.back().second - matches[0].second;
+	if (matches[0].second < 1000) matchesStart = true;
+	if (matches.back().second + 1000 >= queryLength) matchesEnd = true;
+	for (size_t i = 1; i < matches.size(); i++)
+	{
+		assert(matches[i].second >= matches[i-1].second);
+		if (matches[i].second - matches[i-1].second > 1000)
+		{
+			hasBigGap = true;
+			break;
+		}
+	}
+	std::sort(matches.begin(), matches.end());
+	minMaxMatchLength = std::min(minMaxMatchLength, matches.back().first - matches[0].first);
+	if (matches[0].first < 1000) matchesStart = true;
+	if (matches.back().first + 1000 >= refLength) matchesEnd = true;
+	for (size_t i = 1; i < matches.size(); i++)
+	{
+		assert(matches[i].first >= matches[i-1].first);
+		if (matches[i].first - matches[i-1].first > 1000)
+		{
+			hasBigGap = true;
+			break;
+		}
+	}
+	if (hasBigGap) return;
+	if (!matchesStart) return;
+	if (!matchesEnd) return;
+	if (minMaxMatchLength < 5000) return;
+	for (size_t i = 0; i < matches.size(); i++)
+	{
+		callback(queryreadIndex, matches[i].first, matches[i].second);
+	}
+}
+
+template <typename F>
 void iterateUniqueKmerMatches(const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t refreadIndex, const phmap::flat_hash_set<size_t>& matchingReads, const size_t kmerSize, F callback)
 {
 	std::string refSeq;
@@ -157,52 +208,7 @@ void iterateUniqueKmerMatches(const FastaCompressor::CompressedStringIndex& sequ
 		std::vector<std::pair<size_t, size_t>> queryReadKmers = getLocallyUniqueKmers(querySeq, kmerSize);
 		if (queryReadKmers.size() < 10) continue;
 		phmap::flat_hash_map<size_t, std::array<size_t, 5>> lowCountQueryKmers = getLowCountKmers(queryReadKmers);
-		int bestDiagonal = getBestDiagonal(lowCountRefKmers, lowCountQueryKmers);
-		if (bestDiagonal == std::numeric_limits<int>::max()) continue;
-		std::vector<std::pair<size_t, size_t>> matches;
-		iterateMatchingKmersInDiagonal(refReadKmers, queryReadKmers, bestDiagonal, [&matches](const size_t refPos, const size_t queryPos)
-		{
-			matches.emplace_back(refPos, queryPos);
-		});
-		filterOutDoubleMatchedPositions(matches);
-		if (matches.size() < 10) continue;
-		bool hasBigGap = false;
-		bool matchesStart = false;
-		bool matchesEnd = false;
-		std::sort(matches.begin(), matches.end(), [](auto left, auto right) { return left.second < right.second; });
-		size_t minMaxMatchLength = matches.back().second - matches[0].second;
-		if (matches[0].second < 1000) matchesStart = true;
-		if (matches.back().second + 1000 >= querySeq.size()) matchesEnd = true;
-		for (size_t i = 1; i < matches.size(); i++)
-		{
-			assert(matches[i].second >= matches[i-1].second);
-			if (matches[i].second - matches[i-1].second > 1000)
-			{
-				hasBigGap = true;
-				break;
-			}
-		}
-		std::sort(matches.begin(), matches.end());
-		minMaxMatchLength = std::min(minMaxMatchLength, matches.back().first - matches[0].first);
-		if (matches[0].first < 1000) matchesStart = true;
-		if (matches.back().first + 1000 >= refSeq.size()) matchesEnd = true;
-		for (size_t i = 1; i < matches.size(); i++)
-		{
-			assert(matches[i].first >= matches[i-1].first);
-			if (matches[i].first - matches[i-1].first > 1000)
-			{
-				hasBigGap = true;
-				break;
-			}
-		}
-		if (hasBigGap) continue;
-		if (!matchesStart) continue;
-		if (!matchesEnd) continue;
-		if (minMaxMatchLength < 5000) continue;
-		for (size_t i = 0; i < matches.size(); i++)
-		{
-			callback(read, matches[i].first, matches[i].second);
-		}
+		iterateUniqueKmerMatches(refReadKmers, refreadIndex, lowCountRefKmers, refSeq.size(), queryReadKmers, read, lowCountQueryKmers, querySeq.size(), kmerSize, callback);
 	}
 }
 
