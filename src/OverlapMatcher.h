@@ -47,8 +47,6 @@ void iterateLocallyUniqueKmers(const std::string& sequence, const size_t kmerSiz
 		}
 	}
 	lastKmerPosition[kmer] = 0;
-	phmap::flat_hash_map<size_t, size_t> kmers;
-	kmers[kmer] += 1;
 	for (size_t i = kmerSize; i < sequence.size(); i++)
 	{
 		kmer <<= 2;
@@ -70,7 +68,6 @@ void iterateLocallyUniqueKmers(const std::string& sequence, const size_t kmerSiz
 				assert(false);
 		}
 		kmer &= mask;
-		kmers[kmer] += 1;
 		size_t posHere = i-kmerSize+1;
 		if (lastKmerPosition.count(kmer) == 0)
 		{
@@ -90,11 +87,6 @@ void iterateLocallyUniqueKmers(const std::string& sequence, const size_t kmerSiz
 	{
 		if (pair.second & kmerIsNotLocallyUniqueBit) continue;
 		callback(pair.first, pair.second);
-	}
-	size_t uniqueKmers = 0;
-	for (auto pair : kmers)
-	{
-		if (pair.second == 1) uniqueKmers += 1;
 	}
 }
 
