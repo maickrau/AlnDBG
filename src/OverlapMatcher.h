@@ -163,6 +163,8 @@ void iterateUniqueKmerMatches(const ReadOverlapInformation& refRead, const ReadO
 			break;
 		}
 	}
+	if (hasBigGap) return;
+	if (minMaxMatchLength < 5000) return;
 	std::sort(matches.begin(), matches.end());
 	minMaxMatchLength = std::min(minMaxMatchLength, matches.back().first - matches[0].first);
 	if (matches[0].first < 1000) matchesStart = true;
