@@ -98,7 +98,6 @@ void iterateLocallyUniqueKmers(const std::string& sequence, const size_t kmerSiz
 template <typename F>
 void iterateMatchingKmersInDiagonal(const std::vector<std::pair<size_t, size_t>>& refReadKmers, const std::vector<std::pair<size_t, size_t>>& queryReadKmers, const int diagonal, F callback)
 {
-	phmap::flat_hash_map<size_t, size_t> activeRefKmers;
 	size_t refIndex = 0;
 	size_t queryIndex = 0;
 	while (refIndex < refReadKmers.size() && queryIndex < queryReadKmers.size())
