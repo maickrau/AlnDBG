@@ -627,7 +627,7 @@ void mergeFakeBubbles(std::vector<std::vector<std::tuple<size_t, size_t, uint64_
 	}
 }
 
-bool approxChunkMatchIsGood(const size_t leftLength, const size_t rightLength, const phmap::flat_hash_map<size_t, std::vector<std::pair<size_t, size_t>>>& positionsInLeft, const std::vector<std::tuple<size_t, size_t, uint64_t>>& chunks)
+int approxChunkMatchGoodDiagonal(const size_t leftLength, const size_t rightLength, const phmap::flat_hash_map<size_t, std::vector<std::pair<size_t, size_t>>>& positionsInLeft, const std::vector<std::tuple<size_t, size_t, uint64_t>>& chunks)
 {
 	// diagonal, leftstart, leftend, rightstart, rightend
 	std::vector<std::tuple<int, size_t, size_t, size_t, size_t>> matches;
@@ -645,21 +645,31 @@ bool approxChunkMatchIsGood(const size_t leftLength, const size_t rightLength, c
 	size_t currentClusterLeftMax = std::get<2>(matches[0]);
 	size_t currentClusterRightMin = std::get<3>(matches[0]);
 	size_t currentClusterRightMax = std::get<4>(matches[0]);
+	size_t currentClusterStart = 0;
 	int lastDiagonal = std::get<0>(matches[0]);
-	for (auto t : matches)
+	int bestDiagonal = std::numeric_limits<int>::max();
+	size_t bestDiagonalMatchSize = 0;
+	for (size_t i = 0; i < matches.size(); i++)
 	{
+		auto t = matches[i];
 		assert(std::get<0>(t) >= lastDiagonal);
 		if (std::get<0>(t) > lastDiagonal + 100)
 		{
 			if (currentClusterLeftMax - currentClusterLeftMin > 5000 && currentClusterRightMax - currentClusterRightMin > 5000 && (currentClusterLeftMin < 10000 || currentClusterRightMin < 10000) && (currentClusterLeftMax + 10000 > leftLength || currentClusterRightMax + 10000 > rightLength))
 			{
-				return true;
+				size_t matchLength = std::min(currentClusterLeftMax - currentClusterLeftMin, currentClusterRightMax - currentClusterRightMin);
+				if (matchLength > bestDiagonalMatchSize)
+				{
+					bestDiagonalMatchSize = matchLength;
+					bestDiagonal = std::get<0>(matches[currentClusterStart + (i-currentClusterStart)/2]);
+				}
 			}
 			currentClusterLeftMin = std::get<1>(t);
 			currentClusterLeftMax = std::get<2>(t);
 			currentClusterRightMin = std::get<3>(t);
 			currentClusterRightMax = std::get<4>(t);
 			lastDiagonal = std::get<0>(t);
+			currentClusterStart = i;
 		}
 		currentClusterLeftMin = std::min(currentClusterLeftMin, std::get<1>(t));
 		currentClusterLeftMax = std::max(currentClusterLeftMax, std::get<2>(t));
@@ -669,23 +679,30 @@ bool approxChunkMatchIsGood(const size_t leftLength, const size_t rightLength, c
 	}
 	if (currentClusterLeftMax - currentClusterLeftMin > 5000 && currentClusterRightMax - currentClusterRightMin > 5000 && (currentClusterLeftMin < 10000 || currentClusterRightMin < 10000) && (currentClusterLeftMax + 10000 > leftLength || currentClusterRightMax + 10000 > rightLength))
 	{
-		return true;
+		size_t matchLength = std::min(currentClusterLeftMax - currentClusterLeftMin, currentClusterRightMax - currentClusterRightMin);
+		if (matchLength > bestDiagonalMatchSize)
+		{
+			bestDiagonalMatchSize = matchLength;
+			bestDiagonal = std::get<0>(matches[currentClusterStart + (matches.size()-currentClusterStart)/2]);
+		}
 	}
-	return false;
+	return bestDiagonal;
 }
 
-phmap::flat_hash_set<size_t> filterGoodChunkMatches(const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunks, const phmap::flat_hash_set<size_t>& unfiltered, const size_t refRead)
+std::pair<std::vector<size_t>, std::vector<int>> filterGoodChunkMatches(const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunks, const phmap::flat_hash_set<size_t>& unfiltered, const size_t refRead)
 {
 	phmap::flat_hash_map<size_t, std::vector<std::pair<size_t, size_t>>> positionsInRef;
 	for (size_t i = 0; i < chunks[refRead].size(); i++)
 	{
 		positionsInRef[std::get<2>(chunks[refRead][i])].emplace_back(std::get<0>(chunks[refRead][i]), std::get<1>(chunks[refRead][i]));
 	}
-	phmap::flat_hash_set<size_t> result;
+	std::pair<std::vector<size_t>, std::vector<int>> result;
 	for (auto read : unfiltered)
 	{
-		if (!approxChunkMatchIsGood(rawReadLengths[refRead], rawReadLengths[read], positionsInRef, chunks[read])) continue;
-		result.insert(read);
+		int diagonal = approxChunkMatchGoodDiagonal(rawReadLengths[refRead], rawReadLengths[read], positionsInRef, chunks[read]);
+		if (diagonal == std::numeric_limits<int>::max()) continue;
+		result.first.emplace_back(read);
+		result.second.emplace_back(diagonal);
 	}
 	return result;
 }
@@ -827,13 +844,16 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 				if (readBelongsToBlock[check] != block) continue;
 				fwMatchingReads.emplace(t);
 			}
-			phmap::flat_hash_set<size_t> filteredFwMatchingReads = filterGoodChunkMatches(rawReadLengths, chunks, fwMatchingReads, readsWithinBlock[block][readIndex]);
+			std::vector<size_t> filteredFwMatchingReads;
+			std::vector<int> filteredFwMatchingDiagonals;
+			std::tie(filteredFwMatchingReads, filteredFwMatchingDiagonals) = filterGoodChunkMatches(rawReadLengths, chunks, fwMatchingReads, readsWithinBlock[block][readIndex]);
 			size_t countFwMatchingReads = 0;
-			for (size_t otherRead : filteredFwMatchingReads)
+			for (size_t k = 0; k < filteredFwMatchingReads.size(); k++)
 			{
+				const size_t otherRead = filteredFwMatchingReads[k];
 				size_t lastPos = std::numeric_limits<size_t>::max();
 				ReadOverlapInformation& otherReadInfo = (otherRead < sequenceIndex.size()) ? (readInformationHere[readIndexWithinBlock[otherRead]]) : (reverseReadInformationHere[readIndexWithinBlock[otherRead - sequenceIndex.size()]]);
-				iterateUniqueKmerMatches(readInformationHere[readIndex], otherReadInfo, [&kmerIsGood, &lastPos, &countFwMatchingReads, &readsWithinBlock, block, readIndex](const size_t otherReadIndex, const size_t thisReadPos, const size_t otherReadPos)
+				iterateUniqueKmerMatches(readInformationHere[readIndex], otherReadInfo, filteredFwMatchingDiagonals[k], [&kmerIsGood, &lastPos, &countFwMatchingReads, &readsWithinBlock, block, readIndex](const size_t otherReadIndex, const size_t thisReadPos, const size_t otherReadPos)
 				{
 					if (lastPos != std::numeric_limits<size_t>::max())
 					{
@@ -879,11 +899,13 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 			if (readBelongsToBlock[i] == readBelongsToBlock[check]) continue;
 			fwmatchingReads.emplace(t);
 		}
-		phmap::flat_hash_set<size_t> filteredFwMatchingReads = filterGoodChunkMatches(rawReadLengths, chunks, fwmatchingReads, i);
+		std::vector<size_t> filteredFwMatchingReads;
+		std::vector<int> filteredFwMatchingDiagonals;
+		std::tie(filteredFwMatchingReads, filteredFwMatchingDiagonals) = filterGoodChunkMatches(rawReadLengths, chunks, fwmatchingReads, i);
 		size_t lastRead = std::numeric_limits<size_t>::max();
 		size_t lastPos = 0;
 		size_t countFwMatchingReads = 0;
-		iterateUniqueKmerMatches(sequenceIndex, i, filteredFwMatchingReads, kmerSize, [&kmerIsGood, &lastRead, &lastPos, &countFwMatchingReads, i](const size_t otherReadIndex, const size_t thisReadPos, const size_t otherReadPos)
+		iterateUniqueKmerMatches(sequenceIndex, i, filteredFwMatchingReads, filteredFwMatchingDiagonals, kmerSize, [&kmerIsGood, &lastRead, &lastPos, &countFwMatchingReads, i](const size_t otherReadIndex, const size_t thisReadPos, const size_t otherReadPos)
 		{
 			if (lastRead == otherReadIndex)
 			{

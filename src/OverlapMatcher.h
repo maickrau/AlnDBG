@@ -13,15 +13,11 @@ class ReadOverlapInformation
 {
 public:
 	std::vector<std::pair<size_t, size_t>> readKmers;
-	phmap::flat_hash_map<size_t, std::array<size_t, 5>> lowCountKmers;
 	size_t readIndex;
 	size_t readLength;
 };
 
 std::vector<std::pair<size_t, size_t>> getLocallyUniqueKmers(const std::string& readSeq, const size_t kmerSize);
-phmap::flat_hash_map<size_t, std::array<size_t, 5>> getLowCountKmers(const std::vector<std::pair<size_t, size_t>>& readKmers);
-// plus: starts at positive location in ref. minus: starts at negative location in ref. starts at 0 in query
-int getBestDiagonal(const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& refKmers, const phmap::flat_hash_map<size_t, std::array<size_t, 5>>& queryKmers);
 void filterOutDoubleMatchedPositions(std::vector<std::pair<size_t, size_t>>& matches);
 ReadOverlapInformation getReadOverlapInformation(const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t readIndex, const size_t kmerSize);
 
@@ -136,12 +132,11 @@ void iterateMatchingKmersInDiagonal(const std::vector<std::pair<size_t, size_t>>
 }
 
 template <typename F>
-void iterateUniqueKmerMatches(const ReadOverlapInformation& refRead, const ReadOverlapInformation& queryRead, F callback)
+void iterateUniqueKmerMatches(const ReadOverlapInformation& refRead, const ReadOverlapInformation& queryRead, const int diagonal, F callback)
 {
-	int bestDiagonal = getBestDiagonal(refRead.lowCountKmers, queryRead.lowCountKmers);
-	if (bestDiagonal == std::numeric_limits<int>::max()) return;
+	if (diagonal == std::numeric_limits<int>::max()) return;
 	std::vector<std::pair<size_t, size_t>> matches;
-	iterateMatchingKmersInDiagonal(refRead.readKmers, queryRead.readKmers, bestDiagonal, [&matches](const size_t refPos, const size_t queryPos)
+	iterateMatchingKmersInDiagonal(refRead.readKmers, queryRead.readKmers, diagonal, [&matches](const size_t refPos, const size_t queryPos)
 	{
 		matches.emplace_back(refPos, queryPos);
 	});
@@ -189,16 +184,19 @@ void iterateUniqueKmerMatches(const ReadOverlapInformation& refRead, const ReadO
 }
 
 template <typename F>
-void iterateUniqueKmerMatches(const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t refreadIndex, const phmap::flat_hash_set<size_t>& matchingReads, const size_t kmerSize, F callback)
+void iterateUniqueKmerMatches(const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t refreadIndex, const std::vector<size_t>& matchingReads, const std::vector<int>& matchingDiagonals, const size_t kmerSize, F callback)
 {
 	ReadOverlapInformation refRead = getReadOverlapInformation(sequenceIndex, refreadIndex, kmerSize);
-	for (size_t read : matchingReads)
+	assert(matchingReads.size() == matchingDiagonals.size());
+	for (size_t i = 0; i < matchingReads.size(); i++)
 	{
+		const size_t read = matchingReads[i];
+		const int diagonal = matchingDiagonals[i];
 		if (read == refreadIndex) continue;
 		if (refreadIndex < sequenceIndex.size() && read == refreadIndex + sequenceIndex.size()) continue;
 		if (refreadIndex >= sequenceIndex.size() && read == refreadIndex - sequenceIndex.size()) continue;
 		ReadOverlapInformation queryRead = getReadOverlapInformation(sequenceIndex, read, kmerSize);
-		iterateUniqueKmerMatches(refRead, queryRead, callback);
+		iterateUniqueKmerMatches(refRead, queryRead, diagonal, callback);
 	}
 }
 
