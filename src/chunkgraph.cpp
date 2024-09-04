@@ -816,7 +816,7 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 			std::string readName = sequenceIndex.getName(readsWithinBlock[block][readIndex]);
 			{
 				std::lock_guard<std::mutex> lock { printMutex };
-				std::cerr << "block " << block << " begin overlapping read " << readsWithinBlock[block][readIndex] << "/" << sequenceIndex.size() << " name " << readName << std::endl;
+				std::cerr << "block " << block << " begin overlapping read " << readIndex << "/" << sequenceIndex.size() << " id " << readsWithinBlock[block][readIndex] << " name " << readName << std::endl;
 			}
 			auto readStartTime = getTime();
 			phmap::flat_hash_set<size_t> fwmatchingReadsBeforeFilter = getRoughMatchingReads(chunks, readsPerChunk, readsWithinBlock[block][readIndex], sequenceIndex.size());
@@ -854,7 +854,7 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 			totalMatchesWithinBlock += countFwMatchingReads;
 			{
 				std::lock_guard<std::mutex> lock { printMutex };
-				std::cerr << "block " << block << " read " << readsWithinBlock[block][readIndex] << " name " << readName << " length " << rawReadLengths[readsWithinBlock[block][readIndex]] << " has " << countFwMatchingReads << " matches, time " << formatTime(readStartTime, readEndTime) << ", pre-filter overlaps " << fwMatchingReads.size() << ", pre-kmer overlaps " << filteredFwMatchingReads.size() << std::endl;
+				std::cerr << "block " << block << " read " << readIndex << "/" << readsWithinBlock[block].size() << " id " << readsWithinBlock[block][readIndex] << " name " << readName << " length " << rawReadLengths[readsWithinBlock[block][readIndex]] << " has " << countFwMatchingReads << " matches, time " << formatTime(readStartTime, readEndTime) << ", pre-filter overlaps " << fwMatchingReads.size() << ", pre-kmer overlaps " << filteredFwMatchingReads.size() << std::endl;
 			}
 		});
 		auto endTime = getTime();
