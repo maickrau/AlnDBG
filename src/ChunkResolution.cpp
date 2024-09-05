@@ -238,7 +238,9 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 	size_t nextNum = 0;
 	std::mutex resultMutex;
 	auto oldChunks = chunksPerRead;
-	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	size_t countSplitted = 0;
+	size_t countSplittedTo = 0;
+	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &countSplitted, &countSplittedTo, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		if (occurrencesPerChunk[i].size() < 10)
 		{
@@ -327,6 +329,11 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 				keyToNode[key] = nextNum;
 				nextNum += 1;
 			}
+			if (keyToNode.size() >= 2)
+			{
+				countSplitted += 1;
+				countSplittedTo += keyToNode.size();
+			}
 //			std::cerr << "base count splitted chunk " << i << " coverage " << occurrencesPerChunk[i].size() << " to " << keyToNode.size() << " chunks" << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
@@ -335,6 +342,7 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 		}
 	});
 	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
+	std::cerr << "base count splitted " << countSplitted << " chunks to " << countSplittedTo << " chunks" << std::endl;
 }
 
 void splitPerMinHashes(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)

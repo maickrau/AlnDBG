@@ -726,7 +726,7 @@ phmap::flat_hash_set<size_t> getRoughMatchingReads(const std::vector<std::vector
 
 std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t kmerSize, const size_t windowSize, const size_t middleSkip)
 {
-	const size_t blockSize = 1000;
+	const size_t blockSize = 2000;
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::cerr << "getting good kmers" << std::endl;
 	std::vector<std::vector<bool>> kmerIsGood;
@@ -743,9 +743,9 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerBaseCounts(sequenceIndex, rawReadLengths, chunks, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunks, numThreads);
+//	splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunks, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunks, numThreads);
+//	splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunks, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	assert(chunks.size() == sequenceIndex.size()*2);
 	assert(rawReadLengths.size() == sequenceIndex.size()*2);
@@ -938,6 +938,14 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getCorrectnessWei
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::cerr << "getting chunks with good kmers" << std::endl;
 	auto result = getWeightedMinimizerBoundedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize, kmerIsGood);
+	for (size_t i = 0; i < result.size(); i++)
+	{
+		for (size_t j = 0; j < result[i].size(); j++)
+		{
+			assert((std::get<2>(result[i][j]) & firstBitUint64_t) == 0);
+			std::get<2>(result[i][j]) |= firstBitUint64_t;
+		}
+	}
 	return result;
 }
 
@@ -967,14 +975,16 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 				std::cerr << numChunks << " chunks" << std::endl;
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			}
-			writeStage(0, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeStage(1, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			[[fallthrough]];
+		case 1:
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize);
 			splitPerLength(chunksPerRead, numThreads);
 			mergeFakeBubbles(chunksPerRead, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(1, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
-		case 1:
+		case 2:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerBaseCounts(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -987,12 +997,6 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 //			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 2:
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			splitPerMinHashes(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeStage(3, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 3:
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
