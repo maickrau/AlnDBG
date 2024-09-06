@@ -964,7 +964,16 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	{
 		case 0:
 			std::cerr << "getting chunks from reads" << std::endl;
-			chunksPerRead = getCorrectnessWeightedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize, middleSkip);
+			//chunksPerRead = getCorrectnessWeightedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize, middleSkip);
+			chunksPerRead = getMinimizerBoundedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize);
+			for (size_t i = 0; i < chunksPerRead.size(); i++)
+			{
+				for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+				{
+					assert((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) == 0);
+					std::get<2>(chunksPerRead[i][j]) |= firstBitUint64_t;
+				}
+			}
 			//addMissingPiecesBetweenChunks(chunksPerRead, k);
 			{
 				size_t numChunks = 0;
