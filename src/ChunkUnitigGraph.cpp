@@ -490,53 +490,204 @@ std::vector<std::vector<UnitigPath>> getUnitigPaths(const ChunkUnitigGraph& grap
 	return result;
 }
 
-std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& chunkLengths, const std::vector<size_t>& chunkCoverages, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps, const size_t numThreads)
+std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& chunkLengths, const std::vector<size_t>& chunkCoverages, const std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>& chunkLocationInUnitig, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps, const size_t numThreads, const size_t kmerSize)
 {
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::cerr << "getting unitig consensuses" << std::endl;
 	std::vector<phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>>> readAnchorPoints; // unitigpos -> read, fw, readpos
-	readAnchorPoints.resize(unitigGraph.unitigLengths.size());
+	readAnchorPoints.resize(unitigGraph.chunksInUnitig.size());
+	std::vector<std::vector<size_t>> chunkEndToKmerIndex;
+	chunkEndToKmerIndex.resize(unitigGraph.chunksInUnitig.size());
+	{
+		assert(chunksPerRead.size() == sequenceIndex.size()); // bidirected chunks! not directed as usual
+		size_t maxChunk = 0;
+		for (size_t i = 0; i < readPaths.size(); i++)
+		{
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+				maxChunk = std::max(maxChunk, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+			}
+		}
+		maxChunk += 1;
+		std::vector<size_t> chunkForwardNeighbor;
+		std::vector<size_t> chunkBackwardNeighbor;
+		std::vector<bool> chunkStartPosEqualToBack;
+		std::vector<bool> chunkEndPosEqualToFront;
+		chunkForwardNeighbor.resize(maxChunk, std::numeric_limits<size_t>::max());
+		chunkBackwardNeighbor.resize(maxChunk, std::numeric_limits<size_t>::max());
+		chunkStartPosEqualToBack.resize(maxChunk, true);
+		chunkEndPosEqualToFront.resize(maxChunk, true);
+		for (size_t i = 0; i < unitigGraph.chunksInUnitig.size(); i++)
+		{
+			for (size_t j = 1; j < unitigGraph.chunksInUnitig[i].size(); j++)
+			{
+				if (unitigGraph.chunksInUnitig[i][j-1] & firstBitUint64_t)
+				{
+					chunkForwardNeighbor[unitigGraph.chunksInUnitig[i][j-1] & maskUint64_t] = unitigGraph.chunksInUnitig[i][j];
+				}
+				else
+				{
+					chunkBackwardNeighbor[unitigGraph.chunksInUnitig[i][j-1] & maskUint64_t] = unitigGraph.chunksInUnitig[i][j] ^ firstBitUint64_t;
+				}
+				if (unitigGraph.chunksInUnitig[i][j] & firstBitUint64_t)
+				{
+					chunkBackwardNeighbor[unitigGraph.chunksInUnitig[i][j] & maskUint64_t] = unitigGraph.chunksInUnitig[i][j-1];
+				}
+				else
+				{
+					chunkForwardNeighbor[unitigGraph.chunksInUnitig[i][j] & maskUint64_t] = unitigGraph.chunksInUnitig[i][j-1] ^ firstBitUint64_t;
+				}
+			}
+		}
+		std::vector<bool> chunkCheckedForward;
+		std::vector<bool> chunkCheckedBackward;
+		chunkCheckedForward.resize(maxChunk, false);
+		chunkCheckedBackward.resize(maxChunk, false);
+		for (size_t i = 0; i < chunksPerRead.size(); i++)
+		{
+			for (size_t j = 1; j < chunksPerRead[i].size(); j++)
+			{
+				if (std::get<2>(chunksPerRead[i][j-1]) & firstBitUint64_t)
+				{
+					if (chunkForwardNeighbor[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] != std::numeric_limits<size_t>::max())
+					{
+						if (chunkForwardNeighbor[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] == std::get<2>(chunksPerRead[i][j]))
+						{
+							chunkCheckedForward[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = true;
+							if (std::get<1>(chunksPerRead[i][j-1]) != std::get<1>(chunksPerRead[i][j]))
+							{
+								chunkEndPosEqualToFront[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;
+							}
+						}
+					}
+				}
+				else
+				{
+					if (chunkBackwardNeighbor[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] != std::numeric_limits<size_t>::max())
+					{
+						if (chunkBackwardNeighbor[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] == (std::get<2>(chunksPerRead[i][j]) ^ firstBitUint64_t))
+						{
+							chunkCheckedBackward[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = true;
+							if (std::get<1>(chunksPerRead[i][j-1]) != std::get<1>(chunksPerRead[i][j]))
+							{
+								chunkStartPosEqualToBack[std::get<2>(chunksPerRead[i][j-1]) & maskUint64_t] = false;
+							}
+						}
+					}
+				}
+				if (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t)
+				{
+					if (chunkBackwardNeighbor[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] != std::numeric_limits<size_t>::max())
+					{
+						if (chunkBackwardNeighbor[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] == std::get<2>(chunksPerRead[i][j-1]))
+						{
+							chunkCheckedBackward[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = true;
+							if (std::get<0>(chunksPerRead[i][j-1]) != std::get<0>(chunksPerRead[i][j]))
+							{
+								chunkStartPosEqualToBack[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+							}
+						}
+					}
+				}
+				else
+				{
+					if (chunkForwardNeighbor[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] != std::numeric_limits<size_t>::max())
+					{
+						if (chunkForwardNeighbor[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] == (std::get<2>(chunksPerRead[i][j-1]) ^ firstBitUint64_t))
+						{
+							chunkCheckedForward[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = true;
+							if (std::get<0>(chunksPerRead[i][j-1]) != std::get<0>(chunksPerRead[i][j]))
+							{
+								chunkEndPosEqualToFront[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+							}
+						}
+					}
+				}
+			}
+		}
+		for (size_t i = 0; i < maxChunk; i++)
+		{
+			assert(chunkForwardNeighbor[i] == std::numeric_limits<size_t>::max() || chunkCheckedForward[i]);
+			assert(chunkBackwardNeighbor[i] == std::numeric_limits<size_t>::max() || chunkCheckedBackward[i]);
+			assert(chunkForwardNeighbor[i] != std::numeric_limits<size_t>::max() || !chunkCheckedForward[i]);
+			assert(chunkBackwardNeighbor[i] != std::numeric_limits<size_t>::max() || !chunkCheckedBackward[i]);
+		}
+		for (size_t i = 0; i < unitigGraph.chunksInUnitig.size(); i++)
+		{
+			chunkEndToKmerIndex[i].emplace_back(unitigGraph.unitigChunkBreakpointPositions[i][0].second - kmerSize + 1);
+			size_t index = unitigGraph.unitigChunkBreakpointPositions[i][0].second;
+			for (size_t j = 1; j < unitigGraph.chunksInUnitig[i].size(); j++)
+			{
+				if (unitigGraph.chunksInUnitig[i][j-1] & firstBitUint64_t)
+				{
+					if (chunkEndPosEqualToFront[unitigGraph.chunksInUnitig[i][j-1] & maskUint64_t])
+					{
+						chunkEndToKmerIndex[i].emplace_back(index);
+						continue;
+					}
+				}
+				else
+				{
+					if (chunkStartPosEqualToBack[unitigGraph.chunksInUnitig[i][j-1] & maskUint64_t])
+					{
+						chunkEndToKmerIndex[i].emplace_back(index);
+						continue;
+					}
+				}
+				assert(unitigGraph.unitigChunkBreakpointPositions[i][j].second > kmerSize - 1);
+				assert(unitigGraph.unitigChunkBreakpointPositions[i][j].second - kmerSize + 1 > index);
+				index = unitigGraph.unitigChunkBreakpointPositions[i][j].second - kmerSize + 1;
+				chunkEndToKmerIndex[i].emplace_back(index);
+			}
+		}
+	}
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (auto t : chunksPerRead[i])
 		{
 			if (NonexistantChunk(std::get<2>(t))) continue;
 			size_t readStart = std::get<0>(t);
-			size_t readEnd = std::get<1>(t);
+			size_t readEnd = std::get<1>(t) - kmerSize + 1;
 			uint64_t node = std::get<2>(t);
 			assert((node & maskUint64_t) < chunkLocationInUnitig.size());
 			uint64_t unitig = std::get<0>(chunkLocationInUnitig[node & maskUint64_t]);
 			if (unitig == std::numeric_limits<size_t>::max()) continue;
-			size_t unitigStartPos = std::get<2>(chunkLocationInUnitig[node & maskUint64_t]);
-			size_t unitigEndPos = std::get<3>(chunkLocationInUnitig[node & maskUint64_t]);
+			size_t unitigPos = std::get<1>(chunkLocationInUnitig[node & maskUint64_t]);
+			assert(unitigPos < unitigGraph.chunksInUnitig[unitig & maskUint64_t].size());
+			assert((unitig & maskUint64_t) < readAnchorPoints.size());
 			bool fw = true;
-			if (unitig & firstBitUint64_t)
-			{
-			}
-			else
-			{
-				std::swap(unitigStartPos, unitigEndPos);
-				unitigStartPos = unitigGraph.unitigLengths[unitig & maskUint64_t] - unitigStartPos;
-				unitigEndPos = unitigGraph.unitigLengths[unitig & maskUint64_t] - unitigEndPos;
-				node ^= firstBitUint64_t;
-			}
-			unitig = unitig & maskUint64_t;
 			if (node & firstBitUint64_t)
 			{
 			}
 			else
 			{
-				std::swap(unitigStartPos, unitigEndPos);
-				fw = !fw;
+				std::swap(readEnd, readStart);
+				fw = false;
 			}
-			assert(unitig < readAnchorPoints.size());
-			readAnchorPoints[unitig][unitigStartPos].emplace_back(i, fw, readStart);
-			readAnchorPoints[unitig][unitigEndPos].emplace_back(i, fw, readEnd);
+			if (unitig & firstBitUint64_t)
+			{
+				if (unitigPos == 0)
+				{
+					readAnchorPoints[unitig & maskUint64_t][0].emplace_back(i, fw, readStart);
+				}
+				readAnchorPoints[unitig & maskUint64_t][chunkEndToKmerIndex[unitig & maskUint64_t][unitigPos]].emplace_back(i, fw, readEnd);
+			}
+			else
+			{
+				fw = !fw;
+				unitigPos = unitigGraph.chunksInUnitig[unitig & maskUint64_t].size() - 1 - unitigPos;
+				readAnchorPoints[unitig & maskUint64_t][chunkEndToKmerIndex[unitig & maskUint64_t][unitigPos]].emplace_back(i, fw, readStart);
+				if (unitigPos == 0)
+				{
+					readAnchorPoints[unitig & maskUint64_t][0].emplace_back(i, fw, readEnd);
+				}
+			}
 		}
 	}
 	std::vector<ConsensusString> result;
 	result.resize(unitigGraph.unitigLengths.size());
-	iterateMultithreaded(0, unitigGraph.unitigLengths.size(), numThreads, [&readAnchorPoints, &sequenceIndex, &result, &unitigGraph](const size_t unitigi)
+	iterateMultithreaded(0, unitigGraph.unitigLengths.size(), numThreads, [&readAnchorPoints, &sequenceIndex, &result, &unitigGraph, kmerSize](const size_t unitigi)
 	{
 		std::vector<size_t> anchorPositions;
 		for (const auto& pair : readAnchorPoints[unitigi])
@@ -546,41 +697,48 @@ std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitig
 		assert(anchorPositions.size() >= 2);
 		std::sort(anchorPositions.begin(), anchorPositions.end());
 		assert(anchorPositions[0] == 0);
-		assert(anchorPositions.back() == unitigGraph.unitigLengths[unitigi]);
+		assert(anchorPositions.back() == unitigGraph.unitigLengths[unitigi] - kmerSize+1);
 		for (size_t i = 1; i < anchorPositions.size(); i++)
 		{
-			std::string seq = getConsensusSequence(sequenceIndex, readAnchorPoints[unitigi], anchorPositions[i-1], anchorPositions[i]);
-			if (seq.size() >= 1)
-			{
-				if (i+1 < anchorPositions.size()) seq.pop_back();
-				for (size_t j = 0; j < seq.size(); j++)
-				{
-					switch(seq[j])
-					{
-					case 'A':
-						result[unitigi].bases.emplace_back(0);
-						break;
-					case 'C':
-						result[unitigi].bases.emplace_back(1);
-						break;
-					case 'G':
-						result[unitigi].bases.emplace_back(2);
-						break;
-					case 'T':
-						result[unitigi].bases.emplace_back(3);
-						break;
-					default:
-						assert(false);
-						break;
-					}
-				}
-			}
-			else
+			std::string seq = getConsensusSequence(sequenceIndex, readAnchorPoints[unitigi], anchorPositions[i-1], anchorPositions[i], kmerSize);
+			if (seq.size() == 0)
 			{
 				result[unitigi].Nchunks.emplace_back(result[unitigi].bases.size(), anchorPositions[i]-anchorPositions[i-1]);
 				for(size_t j = anchorPositions[i-1]; j < anchorPositions[i]; j++)
 				{
 					result[unitigi].bases.emplace_back(0);
+				}
+				continue;
+			}
+			assert(seq.size() >= kmerSize+1);
+			size_t startPos = 0;
+			if (i != 1)
+			{
+				assert(result[unitigi].bases.size() >= kmerSize);
+				std::string previousEnd = result[unitigi].bases.substr(result[unitigi].bases.size()-kmerSize, kmerSize);
+				std::string thisStart = seq.substr(0, kmerSize);
+				assert(previousEnd == thisStart);
+				startPos = kmerSize;
+			}
+			for (size_t j = startPos; j < seq.size(); j++)
+			{
+				switch(seq[j])
+				{
+				case 'A':
+					result[unitigi].bases.emplace_back(0);
+					break;
+				case 'C':
+					result[unitigi].bases.emplace_back(1);
+					break;
+				case 'G':
+					result[unitigi].bases.emplace_back(2);
+					break;
+				case 'T':
+					result[unitigi].bases.emplace_back(3);
+					break;
+				default:
+					assert(false);
+					break;
 				}
 			}
 		}
@@ -861,7 +1019,7 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<C
 	std::vector<ConsensusString> consensuses;
 	if (alsoConsensuses)
 	{
-		consensuses = getUnitigConsensuses(result, paths, sequenceIndex, chunksPerRead, lengths, coverages, chunkLocationInUnitig, edgeOverlaps, numThreads);
+		consensuses = getUnitigConsensuses(result, paths, sequenceIndex, chunksPerRead, lengths, coverages, chunkLocationInUnitig, edgeOverlaps, numThreads, kmerSize);
 	}
 	assert(result.unitigChunkBreakpointPositions.size() == result.unitigLengths.size());
 	for (size_t i = 0; i < result.unitigLengths.size(); i++)

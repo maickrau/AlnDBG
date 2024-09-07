@@ -13,6 +13,6 @@ std::string pickMostCentralString(const std::vector<std::string>& options, const
 std::string getConsensusFromSolidKmers(const phmap::flat_hash_map<std::string, size_t>& sequenceCount, const size_t totalCount);
 std::string getConsensusPickArbitrary(const phmap::flat_hash_map<std::string, size_t>& sequenceCount, const size_t totalCount);
 std::string getConsensus(const phmap::flat_hash_map<std::string, size_t>& sequenceCount, const size_t totalCount);
-std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>>& readAnchorPoints, const size_t start, const size_t end);
+std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>>& readAnchorPoints, const size_t start, const size_t end, const size_t kmerSize);
 
 #endif

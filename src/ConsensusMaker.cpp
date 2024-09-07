@@ -207,7 +207,7 @@ std::string getConsensus(const phmap::flat_hash_map<std::string, size_t>& sequen
 	return getConsensusFromSolidKmers(sequenceCount, totalCount);
 }
 
-std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>>& readAnchorPoints, const size_t start, const size_t end)
+std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& sequenceIndex, const phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, bool, size_t>>>& readAnchorPoints, const size_t start, const size_t end, const size_t kmerSize)
 {
 	phmap::flat_hash_map<std::string, size_t> sequenceCount;
 	size_t totalCount = 0;
@@ -223,14 +223,14 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 				if (std::get<2>(t1) >= std::get<2>(t2)) continue;
 				if (std::get<2>(t2)-std::get<2>(t1) > end - start + 50) continue;
 				if (std::get<2>(t2)-std::get<2>(t1) + 50 < end - start) continue;
-				sequenceHere = sequenceIndex.getSubstring(std::get<0>(t1), std::get<2>(t1), std::get<2>(t2)-std::get<2>(t1)+1);
+				sequenceHere = sequenceIndex.getSubstring(std::get<0>(t1), std::get<2>(t1), std::get<2>(t2)-std::get<2>(t1)+kmerSize);
 			}
 			else
 			{
 				if (std::get<2>(t1) <= std::get<2>(t2)) continue;
 				if (std::get<2>(t1)-std::get<2>(t2) > end - start + 50) continue;
 				if (std::get<2>(t1)-std::get<2>(t2) + 50 < end - start) continue;
-				sequenceHere = sequenceIndex.getSubstring(std::get<0>(t1), std::get<2>(t2), std::get<2>(t1)-std::get<2>(t2)+1);
+				sequenceHere = sequenceIndex.getSubstring(std::get<0>(t1), std::get<2>(t2), std::get<2>(t1)-std::get<2>(t2)+kmerSize);
 				sequenceHere = revCompRaw(sequenceHere);
 			}
 			sequenceCount[sequenceHere] += 1;
@@ -240,6 +240,17 @@ std::string getConsensusSequence(const FastaCompressor::CompressedStringIndex& s
 	if (sequenceCount.size() == 0)
 	{
 		return "";
+	}
+	{
+		const std::string& exampleRead = sequenceCount.begin()->first;
+		assert(exampleRead.size() >= kmerSize);
+		std::string firstKmer = exampleRead.substr(0, kmerSize);
+		std::string lastKmer = exampleRead.substr(exampleRead.size() - kmerSize, kmerSize);
+		for (const auto& pair : sequenceCount)
+		{
+			assert(pair.first.substr(0, kmerSize) == firstKmer);
+			assert(pair.first.substr(pair.first.size()-kmerSize, kmerSize) == lastKmer);
+		}
 	}
 	size_t maxCount = 0;
 	for (const auto& pair : sequenceCount)
