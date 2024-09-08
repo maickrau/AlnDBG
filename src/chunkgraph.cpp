@@ -24,6 +24,7 @@
 #include "ChunkPhasing.h"
 #include "ChunkResolution.h"
 #include "OverlapMatcher.h"
+#include "PathWalker.h"
 
 double mismatchFraction;
 
@@ -1183,17 +1184,20 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			[[fallthrough]];
 		case 19:
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			getContigPathsAndConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize, "paths-final.txt", "contigs-final.fa");
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 30000, 60000);
 //			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 30000, 60000);
 //			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 50000, 100000);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 20:
-			writeBidirectedUnitigGraph("graph-final.gfa", "paths-final.gaf", "unitigs-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeReadUnitigSequences("sequences-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+//			[[fallthrough]];
+//		case 20:
+//			writeBidirectedUnitigGraph("graph-final.gfa", "paths-final.gaf", "unitigs-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			writeReadUnitigSequences("sequences-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	}
 }
 
