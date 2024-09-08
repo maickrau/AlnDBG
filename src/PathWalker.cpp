@@ -571,12 +571,6 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<bool>> mergeContigPath
 	for (size_t i = 0; i < newContigPathPaths.size(); i++)
 	{
 		result.emplace_back();
-		std::cerr << "new pathpath: ";
-		for (size_t j = 0; j < newContigPathPaths[i].size(); j++)
-		{
-			std::cerr << ((newContigPathPaths[i][j] & firstBitUint64_t) ? ">" : "<") << (newContigPathPaths[i][j] & maskUint64_t);
-		}
-		std::cerr << std::endl;
 		for (size_t j = 0; j < newContigPathPaths[i].size(); j++)
 		{
 			std::vector<uint64_t> addedHere;
@@ -606,18 +600,6 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<bool>> mergeContigPath
 						bridgeSequence[k] ^= firstBitUint64_t;
 					}
 				}
-				std::cerr << "pathpath " << i << " index " << j << " bridge sequence: ";
-				for (size_t k = 0; k < bridgeSequence.size(); k++)
-				{
-					std::cerr << ((bridgeSequence[k] & firstBitUint64_t) ? ">" : "<") << (bridgeSequence[k] & maskUint64_t);
-				}
-				std::cerr << std::endl;
-				std::cerr << "pathpath " << i << " index " << j << " add sequence: ";
-				for (size_t k = 0; k < addedHere.size(); k++)
-				{
-					std::cerr << ((addedHere[k] & firstBitUint64_t) ? ">" : "<") << (addedHere[k] & maskUint64_t);
-				}
-				std::cerr << std::endl;
 				assert(bridgeSequence[0] == result[i].back());
 				assert(addedHere[0] == bridgeSequence.back());
 				result[i].insert(result[i].end(), bridgeSequence.begin()+1, bridgeSequence.end());
@@ -626,12 +608,6 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<bool>> mergeContigPath
 			else
 			{
 				result[i].insert(result[i].end(), addedHere.begin(), addedHere.end());
-				std::cerr << "pathpath " << i << " index " << j << " add sequence: ";
-				for (size_t k = 0; k < addedHere.size(); k++)
-				{
-					std::cerr << ((addedHere[k] & firstBitUint64_t) ? ">" : "<") << (addedHere[k] & maskUint64_t);
-				}
-				std::cerr << std::endl;
 			}
 		}
 		assert(result[i].size() >= 1);
