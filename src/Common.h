@@ -14,6 +14,7 @@ const uint64_t maskUint64_t = firstBitUint64_t-1;
 size_t popcount(uint64_t x);
 std::pair<size_t, bool> reverse(std::pair<size_t, bool> pos);
 std::pair<std::pair<size_t, bool>, std::pair<size_t, bool>> canon(std::pair<size_t, bool> from, std::pair<size_t, bool> to);
+std::pair<uint64_t, uint64_t> canonNodePair(const uint64_t from, const uint64_t to);
 std::string revCompRaw(const std::string& raw);
 bool NonexistantChunk(const uint64_t chunk);
 std::chrono::time_point<std::chrono::steady_clock> getTime();

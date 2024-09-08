@@ -90,6 +90,19 @@ std::pair<std::pair<size_t, bool>, std::pair<size_t, bool>> canon(std::pair<size
 	return std::make_pair(from, to);
 }
 
+std::pair<uint64_t, uint64_t> canonNodePair(const uint64_t from, const uint64_t to)
+{
+	if ((to & maskUint64_t) < (from & maskUint64_t))
+	{
+		return std::make_pair(to ^ firstBitUint64_t, from ^ firstBitUint64_t);
+	}
+	if ((to & maskUint64_t) == (from & maskUint64_t) && (to & firstBitUint64_t) == 0 && (from & firstBitUint64_t) == 0)
+	{
+		return std::make_pair(to ^ firstBitUint64_t, from ^ firstBitUint64_t);
+	}
+	return std::make_pair(from, to);
+}
+
 std::string revCompRaw(const std::string& raw)
 {
 	std::string result { raw.rbegin(), raw.rend() };
