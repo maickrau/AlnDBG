@@ -235,6 +235,75 @@ size_t getPathLength(const ChunkUnitigGraph& graph, const std::vector<uint64_t>&
 	return pathLength;
 }
 
+phmap::flat_hash_set<uint64_t> getTouchedUniqueTipsAfterCut(const ChunkUnitigGraph& graph, const std::vector<bool>& oldUniques, const uint64_t startNode)
+{
+	phmap::flat_hash_set<uint64_t> visited;
+	phmap::flat_hash_set<uint64_t> result;
+	std::vector<uint64_t> checkStack;
+	checkStack.emplace_back(startNode);
+	while (checkStack.size() >= 1)
+	{
+		auto top = checkStack.back();
+		checkStack.pop_back();
+		if (visited.count(top) == 1) continue;
+		visited.insert(top);
+		if (oldUniques[top & maskUint64_t]) result.insert(top);
+		if (!oldUniques[top & maskUint64_t] && (top & maskUint64_t) != (startNode & maskUint64_t)) checkStack.emplace_back(top ^ firstBitUint64_t);
+		for (auto edge : graph.edges.getEdges(std::make_pair(top & maskUint64_t, top & firstBitUint64_t)))
+		{
+			checkStack.emplace_back(edge.first + (edge.second ? 0 : firstBitUint64_t));
+		}
+	}
+	return result;
+}
+
+bool removingNodeCutsUniques(const ChunkUnitigGraph& graph, const std::vector<bool>& oldUniques, const size_t node)
+{
+	phmap::flat_hash_set<uint64_t> forwardUniquesAfterCut = getTouchedUniqueTipsAfterCut(graph, oldUniques, node + firstBitUint64_t);
+	phmap::flat_hash_set<uint64_t> backwardUniquesAfterCut = getTouchedUniqueTipsAfterCut(graph, oldUniques, node);
+	if (forwardUniquesAfterCut.size() == 0) return false;
+	if (backwardUniquesAfterCut.size() == 0) return false;
+	if (forwardUniquesAfterCut.size() != 1 && backwardUniquesAfterCut.size() != 1) return false;
+	return true;
+}
+
+std::vector<bool> getTopologyExtendedUniques(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const double estimatedSingleCopyCoverage, const std::vector<bool>& oldUniques)
+{
+	phmap::flat_hash_set<size_t> newUniques;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (oldUniques[i]) continue;
+		if (!removingNodeCutsUniques(graph, oldUniques, i)) continue;
+		newUniques.insert(i);
+	}
+	std::vector<bool> result = oldUniques;
+	for (auto i : newUniques)
+	{
+		assert(!result[i]);
+		result[i] = true;
+	}
+	if (newUniques.size() >= 1)
+	{
+		return getTopologyExtendedUniques(graph, readPaths, estimatedSingleCopyCoverage, result);
+	}
+	return result;
+}
+
+std::vector<bool> getTripletExtendedUniques(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const double estimatedSingleCopyCoverage, const std::vector<bool>& oldUniques)
+{
+	auto triplets = getNodeSpanningTriplets(graph, readPaths, estimatedSingleCopyCoverage);
+	std::vector<bool> result = oldUniques;
+	for (const auto& pair : triplets)
+	{
+		for (const auto& pair2 : pair.second)
+		{
+			result[pair2.first & maskUint64_t] = true;
+			result[pair2.second & maskUint64_t] = true;
+		}
+	}
+	return result;
+}
+
 std::vector<std::vector<uint64_t>> getTripletExtendedPaths(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const double estimatedSingleCopyCoverage)
 {
 	auto triplets = getNodeSpanningTriplets(graph, readPaths, estimatedSingleCopyCoverage);
@@ -666,14 +735,36 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 	double estimatedSingleCopyCoverage = getAverageLongNodeCoverage(graph, longUnitigThreshold);
 	std::cerr << "estimated single copy coverage " << estimatedSingleCopyCoverage << std::endl;
 	std::vector<bool> isUniqueUnitig = estimateUniqueUnitigs(graph, longUnitigThreshold, estimatedSingleCopyCoverage);
-	std::cerr << "unique unitigs: ";
+	std::cerr << "step 1 unique unitigs: ";
 	for (size_t i = 0; i < isUniqueUnitig.size(); i++)
 	{
 		if (!isUniqueUnitig[i]) continue;
 		std::cerr << i << ",";
 	}
 	std::cerr << std::endl;
-	auto paths = getTripletExtendedPaths(graph, readPaths, estimatedSingleCopyCoverage);
+	isUniqueUnitig = getTripletExtendedUniques(graph, readPaths, estimatedSingleCopyCoverage, isUniqueUnitig);
+	std::cerr << "step 2 unique unitigs: ";
+	for (size_t i = 0; i < isUniqueUnitig.size(); i++)
+	{
+		if (!isUniqueUnitig[i]) continue;
+		std::cerr << i << ",";
+	}
+	std::cerr << std::endl;
+	isUniqueUnitig = getTopologyExtendedUniques(graph, readPaths, estimatedSingleCopyCoverage, isUniqueUnitig);
+	std::cerr << "step 3 unique unitigs: ";
+	for (size_t i = 0; i < isUniqueUnitig.size(); i++)
+	{
+		if (!isUniqueUnitig[i]) continue;
+		std::cerr << i << ",";
+	}
+	std::cerr << std::endl;
+	std::vector<std::vector<uint64_t>> paths;
+	for (size_t i = 0; i < isUniqueUnitig.size(); i++)
+	{
+		if (!isUniqueUnitig[i]) continue;
+		paths.emplace_back();
+		paths.back().emplace_back(i + firstBitUint64_t);
+	}
 	std::cerr << "step 1 paths:" << std::endl;
 	for (size_t i = 0; i < paths.size(); i++)
 	{
