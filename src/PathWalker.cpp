@@ -1,3 +1,4 @@
+#include <fstream>
 #include <map>
 #include <limits>
 #include <iostream>
@@ -725,6 +726,416 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<bool>> mergeContigPath
 	return std::make_pair(result, removedNodes);
 }
 
+std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<std::pair<size_t, size_t>>>> getPathChunkRepresentation(const ChunkUnitigGraph& graph, const std::vector<std::vector<uint64_t>>& paths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	std::vector<std::vector<uint64_t>> contigPathChunks;
+	std::vector<std::vector<std::pair<size_t, size_t>>> approxChunkPositionInContigPath;
+	for (size_t i = 0; i < paths.size(); i++)
+	{
+		contigPathChunks.emplace_back();
+		for (size_t j = 0; j < paths[i].size(); j++)
+		{
+			std::vector<uint64_t> addHere = graph.chunksInUnitig[paths[i][j] & maskUint64_t];
+			if (paths[i][j] & firstBitUint64_t)
+			{
+			}
+			else
+			{
+				std::reverse(addHere.begin(), addHere.end());
+				for (size_t k = 0; k < addHere.size(); k++)
+				{
+					addHere[k] ^= firstBitUint64_t;
+				}
+			}
+			assert(addHere.size() >= 1);
+			contigPathChunks[i].insert(contigPathChunks[i].end(), addHere.begin(), addHere.end());
+		}
+	}
+	std::vector<std::vector<size_t>> lengths;
+	std::vector<size_t> coverages;
+	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> edgeOverlaps = getEdgeOverlaps(chunksPerRead);
+	for (size_t i = 0; i < contigPathChunks.size(); i++)
+	{
+		approxChunkPositionInContigPath.emplace_back();
+		size_t endPos = 0;
+		for (size_t j = 0; j < contigPathChunks[i].size(); j++)
+		{
+			size_t node = contigPathChunks[i][j] & maskUint64_t;
+			size_t size = lengths[node][lengths[node].size()/2];
+			endPos += size;
+			if (j >= 1)
+			{
+				uint64_t from = contigPathChunks[i][j-1];
+				uint64_t to = contigPathChunks[i][j];
+				auto key = canonNodePair(from, to);
+				assert(edgeOverlaps.count(key) == 1);
+				assert(endPos >= edgeOverlaps.at(key));
+				endPos -= edgeOverlaps.at(key);
+			}
+			assert(endPos >= size);
+			approxChunkPositionInContigPath[i].emplace_back(endPos-size, endPos);
+		}
+	}
+	return std::make_pair(contigPathChunks, approxChunkPositionInContigPath);
+}
+
+std::vector<std::vector<std::tuple<size_t, bool, size_t, size_t>>> getReadToContigPathAnchors(const std::vector<std::vector<uint64_t>>& contigPathChunks, const std::vector<std::vector<std::pair<size_t, size_t>>>& approxChunkPositionInContigPath, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	std::vector<std::vector<std::tuple<size_t, size_t, bool>>> chunkPositionsInContigPaths; // contig, index, fw
+	for (size_t i = 0; i < contigPathChunks.size(); i++)
+	{
+		for (size_t j = 0; j < contigPathChunks[i].size(); j++)
+		{
+			uint64_t node = contigPathChunks[i][j];
+			while (chunkPositionsInContigPaths.size() <= (node & maskUint64_t)) chunkPositionsInContigPaths.emplace_back();
+			chunkPositionsInContigPaths[node & maskUint64_t].emplace_back(i, j, node & firstBitUint64_t);
+		}
+	}
+	std::vector<std::vector<std::tuple<size_t, bool, size_t, size_t>>> readToContigPathAnchors; // read, fw, readpos, contigpos
+	readToContigPathAnchors.resize(contigPathChunks.size());
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		std::vector<std::tuple<size_t, bool, int, size_t, size_t, size_t, size_t>> readToChunkAnchors; // contigpath, fw, diagonal, readstart, readend, contigstart, contigend
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
+			if ((std::get<2>(t) & maskUint64_t) >= chunkPositionsInContigPaths.size()) continue;
+			bool readFw = std::get<2>(t) & firstBitUint64_t;
+			size_t readPos;
+			if (readFw)
+			{
+				readPos = std::get<0>(t);
+			}
+			else
+			{
+				readPos = std::get<1>(t);
+			}
+			for (auto t2 : chunkPositionsInContigPaths[std::get<2>(t) & maskUint64_t])
+			{
+				size_t contigPos;
+				size_t contigChunkStart;
+				size_t contigChunkEnd;
+				if (std::get<2>(t2))
+				{
+					contigPos = approxChunkPositionInContigPath[std::get<0>(t2)][std::get<1>(t2)].first;
+				}
+				else
+				{
+					contigPos = approxChunkPositionInContigPath[std::get<0>(t2)][std::get<1>(t2)].second;
+				}
+				bool orientationMatch = !(readFw ^ std::get<2>(t2));
+				if (orientationMatch)
+				{
+					contigChunkStart = approxChunkPositionInContigPath[std::get<0>(t2)][std::get<1>(t2)].first;
+					contigChunkEnd = approxChunkPositionInContigPath[std::get<0>(t2)][std::get<1>(t2)].second;
+				}
+				else
+				{
+					contigChunkStart = approxChunkPositionInContigPath[std::get<0>(t2)][std::get<1>(t2)].second;
+					contigChunkEnd = approxChunkPositionInContigPath[std::get<0>(t2)][std::get<1>(t2)].first;
+				}
+				readToChunkAnchors.emplace_back(std::get<0>(t2), orientationMatch, (int)readPos - (orientationMatch ? 1 : -1) * (int)contigPos, std::get<0>(t), std::get<1>(t), contigChunkStart, contigChunkEnd);
+			}
+		}
+		std::sort(readToChunkAnchors.begin(), readToChunkAnchors.end());
+		std::vector<std::tuple<size_t, bool, size_t, size_t, size_t, std::vector<std::pair<size_t, size_t>>>> unfilteredClusters; // path, fw, readclusterstart, readclusterend, matchbp, [readpos, pathpos]
+		size_t clusterStart = 0;
+		for (size_t j = 1; j <= readToChunkAnchors.size(); j++)
+		{
+			assert(j == readToChunkAnchors.size() || std::get<0>(readToChunkAnchors[j]) >= std::get<0>(readToChunkAnchors[j-1]));
+			assert(j == readToChunkAnchors.size() || std::get<1>(readToChunkAnchors[j]) >= std::get<1>(readToChunkAnchors[j-1]) || std::get<0>(readToChunkAnchors[j]) > std::get<0>(readToChunkAnchors[j-1]));
+			assert(j == readToChunkAnchors.size() || std::get<2>(readToChunkAnchors[j]) >= std::get<2>(readToChunkAnchors[j-1]) || std::get<1>(readToChunkAnchors[j]) > std::get<1>(readToChunkAnchors[j-1]) || std::get<0>(readToChunkAnchors[j]) > std::get<0>(readToChunkAnchors[j-1]));
+			if (j == readToChunkAnchors.size() || std::get<0>(readToChunkAnchors[j]) != std::get<0>(readToChunkAnchors[j-1]) || std::get<1>(readToChunkAnchors[j]) != std::get<1>(readToChunkAnchors[j-1]) || std::get<2>(readToChunkAnchors[j]) > std::get<2>(readToChunkAnchors[j-1]) + 100)
+			{
+				std::vector<std::pair<size_t, size_t>> matchPositions;
+				size_t clusterStartPosInRead = std::get<3>(readToChunkAnchors[clusterStart]);
+				size_t clusterEndPosInRead = std::get<4>(readToChunkAnchors[clusterStart]);
+				for (size_t k = clusterStart; k < j; k++)
+				{
+					clusterStartPosInRead = std::min(clusterStartPosInRead, std::get<3>(readToChunkAnchors[k]));
+					clusterEndPosInRead = std::max(clusterEndPosInRead, std::get<4>(readToChunkAnchors[k]));
+					matchPositions.emplace_back(std::get<3>(readToChunkAnchors[k]), std::get<4>(readToChunkAnchors[k]));
+				}
+				std::sort(matchPositions.begin(), matchPositions.end());
+				size_t totalMatches = 0;
+				size_t lastMatchEnd = 0;
+				for (size_t k = 0; k < matchPositions.size(); k++)
+				{
+					if (matchPositions[k].first > lastMatchEnd)
+					{
+						totalMatches += matchPositions[k].second - matchPositions[k].first;
+						lastMatchEnd = matchPositions[k].second;
+					}
+					else
+					{
+						if (matchPositions[k].second > lastMatchEnd)
+						{
+							totalMatches += matchPositions[k].second - lastMatchEnd;
+							lastMatchEnd = matchPositions[k].second;
+						}
+					}
+				}
+				assert(totalMatches > 0);
+				std::vector<std::pair<size_t, size_t>> matchPoses;
+				for (size_t k = clusterStart; k < j; k++)
+				{
+					matchPoses.emplace_back(std::get<3>(readToChunkAnchors[k]), std::get<5>(readToChunkAnchors[k]));
+					matchPoses.emplace_back(std::get<4>(readToChunkAnchors[k]), std::get<6>(readToChunkAnchors[k]));
+				}
+				assert(matchPoses.size() > 0);
+				unfilteredClusters.emplace_back(std::get<0>(readToChunkAnchors[clusterStart]), std::get<1>(readToChunkAnchors[clusterStart]), clusterStartPosInRead, clusterEndPosInRead, totalMatches, matchPoses);
+				clusterStart = j;
+			}
+		}
+		std::vector<bool> removeCluster;
+		removeCluster.resize(unfilteredClusters.size(), false);
+		for (size_t j = 1; j < unfilteredClusters.size(); j++)
+		{
+			for (size_t k = 0; k < j; k++)
+			{
+				if (std::get<2>(unfilteredClusters[j]) >= std::get<3>(unfilteredClusters[k])) continue;
+				if (std::get<2>(unfilteredClusters[k]) >= std::get<3>(unfilteredClusters[j])) continue;
+				if (std::get<4>(unfilteredClusters[j]) > std::get<4>(unfilteredClusters[k]))
+				{
+					removeCluster[k] = true;
+				}
+				if (std::get<4>(unfilteredClusters[k]) > std::get<4>(unfilteredClusters[j]))
+				{
+					removeCluster[j] = true;
+				}
+			}
+		}
+		for (size_t j = unfilteredClusters.size()-1; j < unfilteredClusters.size(); j--)
+		{
+			if (!removeCluster[j]) continue;
+			std::swap(unfilteredClusters[j], unfilteredClusters.back());
+			unfilteredClusters.pop_back();
+		}
+		for (size_t j = 0; j < unfilteredClusters.size(); j++)
+		{
+			for (size_t k = 0; k < std::get<5>(unfilteredClusters[j]).size(); k++)
+			{
+				readToContigPathAnchors[std::get<0>(unfilteredClusters[j])].emplace_back(i, std::get<1>(unfilteredClusters[j]), std::get<5>(unfilteredClusters[j])[k].first, std::get<5>(unfilteredClusters[j])[k].second);
+			}
+		}
+	}
+	for (size_t i = 0; i < readToContigPathAnchors.size(); i++)
+	{
+		std::sort(readToContigPathAnchors[i].begin(), readToContigPathAnchors[i].end());
+	}
+	return readToContigPathAnchors;
+}
+
+std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> getAnchorPaths(const std::vector<std::vector<std::tuple<size_t, bool, size_t, size_t>>>& readToContigPathAnchors)
+{
+	std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> result;
+	for (size_t i = 0; i < readToContigPathAnchors.size(); i++)
+	{
+		phmap::flat_hash_map<std::tuple<size_t, size_t, bool>, std::tuple<size_t, size_t, bool>> anchorParent;
+		phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, size_t, bool>>> anchorsPerPosition;
+		for (auto t : readToContigPathAnchors[i])
+		{
+			auto key = std::make_tuple(std::get<0>(t), std::get<2>(t), std::get<1>(t));
+			anchorParent[key] = key;
+			anchorsPerPosition[std::get<3>(t)].emplace_back(key);
+		}
+		for (const auto& pair : anchorsPerPosition)
+		{
+			for (auto t : pair.second)
+			{
+				merge(anchorParent, t, *pair.second.begin());
+			}
+		}
+		phmap::flat_hash_map<std::tuple<size_t, size_t, bool>, size_t> anchorToCluster;
+		for (auto t : readToContigPathAnchors[i])
+		{
+			auto key = std::make_tuple(std::get<0>(t), std::get<2>(t), std::get<1>(t));
+			auto p = find(anchorParent, key);
+			if (anchorToCluster.count(p) == 1) continue;
+			size_t nextNum = anchorToCluster.size();
+			anchorToCluster[p] = nextNum;
+		}
+		std::vector<phmap::flat_hash_map<size_t, size_t>> outEdges;
+		outEdges.resize(anchorToCluster.size());
+		phmap::flat_hash_map<std::pair<size_t, bool>, phmap::flat_hash_set<size_t>> anchorsPerRead;
+		for (auto t : readToContigPathAnchors[i])
+		{
+			anchorsPerRead[std::make_pair(std::get<0>(t), std::get<1>(t))].insert(std::get<2>(t));
+		}
+		for (const auto& pair : anchorsPerRead)
+		{
+			std::vector<size_t> anchorsSorted { pair.second.begin(), pair.second.end() };
+			std::sort(anchorsSorted.begin(), anchorsSorted.end());
+			if (pair.first.second)
+			{
+				for (size_t i = 1; i < anchorsSorted.size(); i++)
+				{
+					auto prevKey = std::make_tuple(pair.first.first, anchorsSorted[i-1], pair.first.second);
+					auto thisKey = std::make_tuple(pair.first.first, anchorsSorted[i], pair.first.second);
+					outEdges[anchorToCluster.at(find(anchorParent, prevKey))][anchorToCluster.at(find(anchorParent, thisKey))] += 1;
+				}
+			}
+			else
+			{
+				for (size_t i = 1; i < anchorsSorted.size(); i++)
+				{
+					auto prevKey = std::make_tuple(pair.first.first, anchorsSorted[i], pair.first.second);
+					auto thisKey = std::make_tuple(pair.first.first, anchorsSorted[i-1], pair.first.second);
+					outEdges[anchorToCluster.at(find(anchorParent, prevKey))][anchorToCluster.at(find(anchorParent, thisKey))] += 1;
+				}
+			}
+		}
+		std::vector<phmap::flat_hash_map<size_t, size_t>> inEdges;
+		inEdges.resize(outEdges.size());
+		for (size_t from = 0; from < outEdges.size(); from++)
+		{
+			for (auto pair : outEdges[from])
+			{
+				inEdges[pair.first][from] = pair.second;
+			}
+		}
+		std::vector<size_t> anchorSequence;
+		size_t startPos = 0;
+		size_t iterations = 0;
+		while (inEdges[startPos].size() >= 1)
+		{
+			startPos = inEdges[startPos].begin()->first;
+			assert(iterations < anchorToCluster.size()*2+10); // loops!
+			iterations += 1;
+		}
+		anchorSequence.emplace_back(startPos);
+		while (outEdges[startPos].size() >= 1)
+		{
+			startPos = outEdges[startPos].begin()->first;
+			anchorSequence.emplace_back(startPos);
+			assert(iterations < anchorToCluster.size()*2+10); // loops!
+			iterations += 1;
+		}
+		phmap::flat_hash_map<size_t, size_t> nodePositionInAnchorSequence;
+		for (size_t j = 0; j < anchorSequence.size(); j++)
+		{
+			nodePositionInAnchorSequence[anchorSequence[j]] = j;
+		}
+		assert(anchorSequence.size() >= 2);
+		result.emplace_back();
+		result.back().resize(anchorSequence.size());
+		for (auto t : readToContigPathAnchors[i])
+		{
+			auto key = std::make_tuple(std::get<0>(t), std::get<2>(t), std::get<1>(t));
+			size_t cluster = anchorToCluster.at(find(anchorParent, key));
+			if (nodePositionInAnchorSequence.count(cluster) == 0) continue;
+			assert(nodePositionInAnchorSequence.at(cluster) < result.back().size());
+			result.back()[nodePositionInAnchorSequence[cluster]].emplace_back(std::get<0>(t), std::get<2>(t), std::get<1>(t));
+		}
+		for (size_t j = 0; j < result.back().size(); j++)
+		{
+			assert(result.back()[j].size() >= 1);
+		}
+	}
+	return result;
+}
+
+ConsensusString getAnchorPathConsensus(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, bool>>>& anchorPaths)
+{
+	assert(anchorPaths.size() >= 2);
+	ConsensusString result;
+	for (size_t i = 1; i < anchorPaths.size(); i++)
+	{
+		phmap::flat_hash_map<std::string, size_t> stringsHere;
+		size_t totalCount = 0;
+		for (auto t : anchorPaths[i-1])
+		{
+			for (auto t2 : anchorPaths[i])
+			{
+				if (std::get<0>(t) != std::get<0>(t2)) continue;
+				if (std::get<2>(t) != std::get<2>(t2)) continue;
+				if (std::get<2>(t))
+				{
+					if (std::get<1>(t) >= std::get<1>(t2)) continue;
+					std::string seq = sequenceIndex.getSubstring(std::get<0>(t), std::get<1>(t), std::get<1>(t2) - std::get<1>(t) + 1);
+					stringsHere[seq] += 1;
+					totalCount += 1;
+				}
+				else
+				{
+					if (std::get<1>(t) <= std::get<1>(t2)) continue;
+					std::string seq = sequenceIndex.getSubstring(std::get<0>(t), std::get<1>(t2), std::get<1>(t) - std::get<1>(t2) + 1);
+					seq = revCompRaw(seq);
+					stringsHere[seq] += 1;
+					totalCount += 1;
+				}
+			}
+		}
+		if (stringsHere.size() == 0)
+		{
+			result.Nchunks.emplace_back(result.bases.size(), result.bases.size()+2);
+			result.bases.emplace_back(0);
+			result.bases.emplace_back(0);
+			continue;
+		}
+		std::string consensusString;
+		assert(stringsHere.size() <= totalCount);
+		if (stringsHere.size() == 1 || totalCount == 2)
+		{
+			consensusString = stringsHere.begin()->first;
+		}
+		else
+		{
+			consensusString = getConsensus(stringsHere, totalCount);
+		}
+		size_t startPos = 0;
+		if (i >= 2 && (result.Nchunks.size() == 0 || result.Nchunks.back().second < result.bases.size()))
+		{
+			startPos = 1;
+		}
+		for (size_t j = startPos; j < consensusString.size(); j++)
+		{
+			switch(consensusString[j])
+			{
+			case 'A':
+				result.bases.emplace_back(0);
+				break;
+			case 'C':
+				result.bases.emplace_back(1);
+				break;
+			case 'G':
+				result.bases.emplace_back(2);
+				break;
+			case 'T':
+				result.bases.emplace_back(3);
+				break;
+			default:
+				assert(false);
+				break;
+			}
+		}
+	}
+	return result;
+}
+
+std::vector<ConsensusString> getAnchorPathConsensuses(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>>& anchorPaths)
+{
+	std::vector<ConsensusString> result;
+	for (size_t i = 0; i < anchorPaths.size(); i++)
+	{
+		result.emplace_back(getAnchorPathConsensus(sequenceIndex, anchorPaths[i]));
+	}
+	return result;
+}
+
+std::vector<ConsensusString> getPathSequences(const FastaCompressor::CompressedStringIndex& sequenceIndex, const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<uint64_t>>& paths)
+{
+	std::vector<std::vector<uint64_t>> contigPathChunks;
+	std::vector<std::vector<std::pair<size_t, size_t>>> approxChunkPositionInContigPath;
+	std::tie(contigPathChunks, approxChunkPositionInContigPath) = getPathChunkRepresentation(graph, paths, chunksPerRead);
+	std::vector<std::vector<std::tuple<size_t, bool, size_t, size_t>>> readToContigPathAnchors = getReadToContigPathAnchors(contigPathChunks, approxChunkPositionInContigPath, chunksPerRead);
+	std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> anchorPaths = getAnchorPaths(readToContigPathAnchors);
+	std::vector<ConsensusString> result = getAnchorPathConsensuses(sequenceIndex, anchorPaths);
+	return result;
+}
+
 void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage, const size_t kmerSize, const std::string& outPathsFile, const std::string& outContigsFasta)
 {
 	const size_t longUnitigThreshold = 100000;
@@ -840,4 +1251,33 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 		std::cerr << i << ",";
 	}
 	std::cerr << std::endl;
+	{
+		std::ofstream file { outPathsFile };
+		for (size_t i = 0; i < paths.size(); i++)
+		{
+			file << i << "\t";
+			for (auto node : paths[i])
+			{
+				file << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t);
+			}
+			file << std::endl;
+		}
+	}
+	std::vector<ConsensusString> contigSequences = getPathSequences(sequenceIndex, graph, readPaths, fixedChunksPerRead, paths);
+	{
+		std::ofstream file { outContigsFasta };
+		for (size_t i = 0; i < paths.size(); i++)
+		{
+			file << ">contig_" << i << "_length_" << contigSequences[i].bases.size() << std::endl;
+			std::string str = contigSequences[i].bases.toString();
+			for (auto pair : contigSequences[i].Nchunks)
+			{
+				for (size_t j = pair.first; j < pair.first+pair.second; j++)
+				{
+					str[j] = 'N';
+				}
+			}
+			file << str << std::endl;
+		}
+	}
 }

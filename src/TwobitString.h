@@ -19,6 +19,7 @@ public:
 	size_t size() const;
 	bool operator==(const TwobitString& other) const;
 	bool operator<(const TwobitString& other) const;
+	void pop_back();
 private:
 	size_t realSize;
 	std::vector<uint8_t> bits;

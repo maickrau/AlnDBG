@@ -117,3 +117,9 @@ bool TwobitString::operator<(const TwobitString& other) const
 	}
 	return false;
 }
+
+void TwobitString::pop_back()
+{
+	assert(realSize >= 1);
+	realSize -= 1;
+}
