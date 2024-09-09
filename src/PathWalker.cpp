@@ -28,6 +28,24 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<uint64_t, uint64_t>>> getNode
 	{
 		if (graph.edges.getEdges(std::make_pair(i, true)).size() < 2) continue;
 		if (graph.edges.getEdges(std::make_pair(i, false)).size() != graph.edges.getEdges(std::make_pair(i, true)).size()) continue;
+		bool valid = true;
+		for (auto edge : graph.edges.getEdges(std::make_pair(i, true)))
+		{
+			if (graph.edges.getEdges(reverse(edge)).size() != 1)
+			{
+				valid = false;
+				break;
+			}
+		}
+		for (auto edge : graph.edges.getEdges(std::make_pair(i, false)))
+		{
+			if (graph.edges.getEdges(reverse(edge)).size() != 1)
+			{
+				valid = false;
+				break;
+			}
+		}
+		if (!valid) continue;
 		canBeSpanned[i] = true;
 	}
 	std::vector<phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> spanningTripletCoverage;
