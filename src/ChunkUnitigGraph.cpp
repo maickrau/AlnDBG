@@ -615,8 +615,10 @@ std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitig
 		}
 		for (size_t i = 0; i < unitigGraph.chunksInUnitig.size(); i++)
 		{
+			assert(unitigGraph.unitigChunkBreakpointPositions[i].back().second == unitigGraph.unitigLengths[i]);
 			chunkEndToKmerIndex[i].emplace_back(unitigGraph.unitigChunkBreakpointPositions[i][0].second - kmerSize + 1);
-			size_t index = unitigGraph.unitigChunkBreakpointPositions[i][0].second;
+			assert(unitigGraph.unitigChunkBreakpointPositions[i][0].second <= unitigGraph.unitigLengths[i]);
+			size_t index = unitigGraph.unitigChunkBreakpointPositions[i][0].second - kmerSize + 1;
 			for (size_t j = 1; j < unitigGraph.chunksInUnitig[i].size(); j++)
 			{
 				if (unitigGraph.chunksInUnitig[i][j-1] & firstBitUint64_t)
@@ -637,9 +639,13 @@ std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitig
 				}
 				assert(unitigGraph.unitigChunkBreakpointPositions[i][j].second > kmerSize - 1);
 				assert(unitigGraph.unitigChunkBreakpointPositions[i][j].second - kmerSize + 1 > index);
+				assert(unitigGraph.unitigChunkBreakpointPositions[i][j].second <= unitigGraph.unitigLengths[i]);
 				index = unitigGraph.unitigChunkBreakpointPositions[i][j].second - kmerSize + 1;
 				chunkEndToKmerIndex[i].emplace_back(index);
 			}
+			assert(chunkEndToKmerIndex[i].size() >= 1);
+			assert(chunkEndToKmerIndex[i].back() <= unitigGraph.unitigLengths[i] - kmerSize + 1);
+			chunkEndToKmerIndex[i].back() = unitigGraph.unitigLengths[i] - kmerSize + 1;
 		}
 	}
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
