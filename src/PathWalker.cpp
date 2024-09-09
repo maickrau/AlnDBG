@@ -218,6 +218,23 @@ std::vector<uint64_t> followTripletPath(const ChunkUnitigGraph& graph, const uin
 	return result;
 }
 
+size_t getPathLength(const ChunkUnitigGraph& graph, const std::vector<uint64_t>& path)
+{
+	size_t pathLength = 0;
+	for (size_t i = 0; i < path.size(); i++)
+	{
+		pathLength += graph.unitigLengths[path[i] & maskUint64_t];
+		if (i > 0)
+		{
+			auto key = canonNodePair(path[i-1], path[i]);
+			size_t overlap = graph.edgeOverlaps.at(key);
+			assert(pathLength >= overlap);
+			pathLength -= overlap;
+		}
+	}
+	return pathLength;
+}
+
 std::vector<std::vector<uint64_t>> getTripletExtendedPaths(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const double estimatedSingleCopyCoverage)
 {
 	auto triplets = getNodeSpanningTriplets(graph, readPaths, estimatedSingleCopyCoverage);
@@ -249,18 +266,7 @@ std::vector<std::vector<uint64_t>> getTripletExtendedPaths(const ChunkUnitigGrap
 			{
 				alreadyInPath[node & maskUint64_t] = true;
 			}
-			size_t pathLength = 0;
-			for (size_t i = 0; i < bwPath.size(); i++)
-			{
-				pathLength += graph.unitigLengths[bwPath[i] & maskUint64_t];
-				if (i > 0)
-				{
-					auto key = canonNodePair(bwPath[i-1], bwPath[i]);
-					size_t overlap = graph.edgeOverlaps.at(key);
-					assert(pathLength >= overlap);
-					pathLength -= overlap;
-				}
-			}
+			size_t pathLength = getPathLength(graph, bwPath);
 			if (pathLength < 100000) continue;
 			result.emplace_back(bwPath);
 		}
@@ -671,7 +677,7 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 	std::cerr << "step 1 paths:" << std::endl;
 	for (size_t i = 0; i < paths.size(); i++)
 	{
-		std::cerr << "step 1 path " << i << ": ";
+		std::cerr << "step 1 path id " << i << " length " << getPathLength(graph, paths[i]) << ": ";
 		for (auto node : paths[i])
 		{
 			std::cerr << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t);
@@ -688,7 +694,7 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 	std::cerr << "step 2 paths:" << std::endl;
 	for (size_t i = 0; i < paths.size(); i++)
 	{
-		std::cerr << "step 2 path " << i << ": ";
+		std::cerr << "step 2 path id " << i << " length " << getPathLength(graph, paths[i]) << ": ";
 		for (auto node : paths[i])
 		{
 			std::cerr << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t);
@@ -706,7 +712,7 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 	std::cerr << "step 3 paths:" << std::endl;
 	for (size_t i = 0; i < paths.size(); i++)
 	{
-		std::cerr << "step 3 path " << i << ": ";
+		std::cerr << "step 3 path id " << i << " length " << getPathLength(graph, paths[i]) << ": ";
 		for (auto node : paths[i])
 		{
 			std::cerr << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t);
@@ -723,7 +729,7 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 	std::cerr << "step 4 paths:" << std::endl;
 	for (size_t i = 0; i < paths.size(); i++)
 	{
-		std::cerr << "step 4 path " << i << ": ";
+		std::cerr << "step 4 path id " << i << " length " << getPathLength(graph, paths[i]) << ": ";
 		for (auto node : paths[i])
 		{
 			std::cerr << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t);
