@@ -494,23 +494,25 @@ uint64_t getNextTripletCore(const ChunkUnitigGraph& graph, const phmap::flat_has
 	for (auto pair : triplets.at(startNode & maskUint64_t))
 	{
 		uint64_t resultHere;
+		std::pair<size_t, bool> check;
 		if (startNode & firstBitUint64_t)
 		{
-			std::pair<size_t, bool> check { pair.second & maskUint64_t, pair.second & firstBitUint64_t };
-			if (graph.edges.getEdges(check).size() != 1) return std::numeric_limits<uint64_t>::max();
-			if (triplets.count(graph.edges.getEdges(check)[0].first) == 0) return std::numeric_limits<uint64_t>::max();
-			resultHere = graph.edges.getEdges(check)[0].first + (graph.edges.getEdges(check)[0].second ? firstBitUint64_t : 0);
+			check = std::make_pair(pair.second & maskUint64_t, pair.second & firstBitUint64_t);
 		}
 		else
 		{
-			std::pair<size_t, bool> check { pair.first & maskUint64_t, (pair.first ^ firstBitUint64_t) & firstBitUint64_t };
-			if (graph.edges.getEdges(check).size() != 1) return std::numeric_limits<uint64_t>::max();
-			if (triplets.count(graph.edges.getEdges(check)[0].first) == 0) return std::numeric_limits<uint64_t>::max();
-			resultHere = graph.edges.getEdges(check)[0].first + (graph.edges.getEdges(check)[0].second ? firstBitUint64_t : 0);
+			check = std::make_pair(pair.first & maskUint64_t, (pair.first ^ firstBitUint64_t) & firstBitUint64_t);
 		}
+		assert(graph.edges.getEdges(reverse(check)).size() == 1);
+		if (graph.edges.getEdges(check).size() != 1) return std::numeric_limits<uint64_t>::max();
+		resultHere = graph.edges.getEdges(check)[0].first + (graph.edges.getEdges(check)[0].second ? firstBitUint64_t : 0);
+		if (triplets.count(resultHere & maskUint64_t) == 0) return std::numeric_limits<uint64_t>::max();
 		if (result == std::numeric_limits<uint64_t>::max()) result = resultHere;
 		if (resultHere != result) return std::numeric_limits<uint64_t>::max();
 	}
+	assert(result != std::numeric_limits<uint64_t>::max());
+	assert(triplets.count(result & maskUint64_t) == 1);
+	assert(triplets.at(result & maskUint64_t).size() == triplets.at(startNode & maskUint64_t).size());
 	return result;
 }
 
