@@ -343,6 +343,7 @@ std::vector<std::vector<uint64_t>> connectTripletPaths(const ChunkUnitigGraph& g
 	std::vector<std::vector<uint64_t>> result;
 	for (size_t i = 0; i < oldPaths.size(); i++)
 	{
+		if (pathUsed[i]) continue;
 		std::vector<uint64_t> bwPath;
 		std::vector<uint64_t> fwPath;
 		bwPath.emplace_back(i);
@@ -367,6 +368,7 @@ std::vector<std::vector<uint64_t>> connectTripletPaths(const ChunkUnitigGraph& g
 		{
 			bwPath[i] ^= firstBitUint64_t;
 		}
+		assert(bwPath.back() == fwPath[0]);
 		bwPath.insert(bwPath.end(), fwPath.begin()+1, fwPath.end());
 		assert(bwPath.size() >= 1);
 		for (size_t j = 0; j < bwPath.size(); j++)
