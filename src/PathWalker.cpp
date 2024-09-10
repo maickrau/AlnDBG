@@ -357,9 +357,11 @@ std::vector<std::vector<uint64_t>> connectTripletPaths(const ChunkUnitigGraph& g
 			fwPath.emplace_back(outEdges.at(fwPath.back()).second);
 			assert(fwPath.size() <= oldPaths.size());
 		}
+		assert(bwPath.size() >= 1);
+		assert(fwPath.size() >= 1);
 		assert(bwPath[0] == (fwPath[0] ^ firstBitUint64_t));
-		assert(bwPath.size() == 0 || (bwPath.back() & maskUint64_t) != (bwPath[0] & maskUint64_t));
-		assert(fwPath.size() == 0 || (fwPath.back() & maskUint64_t) != (fwPath[0] & maskUint64_t));
+		assert(bwPath.size() == 1 || (bwPath.back() & maskUint64_t) != (bwPath[0] & maskUint64_t));
+		assert(fwPath.size() == 1 || (fwPath.back() & maskUint64_t) != (fwPath[0] & maskUint64_t));
 		std::reverse(bwPath.begin(), bwPath.end());
 		for (size_t i = 0; i < bwPath.size(); i++)
 		{
