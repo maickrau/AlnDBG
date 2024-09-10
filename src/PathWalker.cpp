@@ -404,6 +404,13 @@ std::vector<bool> getTripletExtendedUniques(const ChunkUnitigGraph& graph, const
 	{
 		if (graph.coverages[pair.first] < ((double)estimatedSingleCopyCoverage - 0.5) * pair.second.size()) continue;
 		if (graph.coverages[pair.first] > ((double)estimatedSingleCopyCoverage + 0.5) * pair.second.size()) continue;
+		bool allGood = true;
+		for (const auto& pair2 : pair.second)
+		{
+			if (graph.coverages[pair2.first & maskUint64_t] > estimatedSingleCopyCoverage * 1.5) allGood = false;
+			if (graph.coverages[pair2.second & maskUint64_t] > estimatedSingleCopyCoverage * 1.5) allGood = false;
+		}
+		if (!allGood) continue;
 		for (const auto& pair2 : pair.second)
 		{
 			result[pair2.first & maskUint64_t] = true;
