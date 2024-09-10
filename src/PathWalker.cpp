@@ -297,6 +297,8 @@ std::vector<bool> getTripletExtendedUniques(const ChunkUnitigGraph& graph, const
 	std::vector<bool> result = oldUniques;
 	for (const auto& pair : triplets)
 	{
+		if (graph.coverages[pair.first] < ((double)estimatedSingleCopyCoverage - 0.5) * pair.second.size()) continue;
+		if (graph.coverages[pair.first] > ((double)estimatedSingleCopyCoverage + 0.5) * pair.second.size()) continue;
 		for (const auto& pair2 : pair.second)
 		{
 			result[pair2.first & maskUint64_t] = true;
