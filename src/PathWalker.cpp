@@ -313,7 +313,7 @@ std::vector<std::vector<uint64_t>> connectTripletPaths(const ChunkUnitigGraph& g
 				allGood = false;
 				break;
 			}
-			if (nodeIsPathTip.count(pair2.second ^ firstBitUint64_t))
+			if (nodeIsPathTip.count(pair2.second ^ firstBitUint64_t) == 0)
 			{
 				allGood = false;
 				break;
@@ -327,6 +327,8 @@ std::vector<std::vector<uint64_t>> connectTripletPaths(const ChunkUnitigGraph& g
 		if (!allGood) continue;
 		for (const auto& pair2 : pair.second)
 		{
+			assert(nodeIsPathTip.count(pair2.first) == 1);
+			assert(nodeIsPathTip.count(pair2.second ^ firstBitUint64_t) == 1);
 			uint64_t prevContig = nodeIsPathTip.at(pair2.first);
 			uint64_t nextContig = nodeIsPathTip.at(pair2.second ^ firstBitUint64_t) ^ firstBitUint64_t;
 			assert(outEdges.count(prevContig) == 0);
