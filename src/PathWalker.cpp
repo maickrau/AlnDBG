@@ -1061,14 +1061,24 @@ std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> getAncho
 		size_t iterations = 0;
 		while (inEdges[startPos].size() >= 1)
 		{
-			startPos = inEdges[startPos].begin()->first;
+			size_t bestEdge = inEdges[startPos].begin()->first;
+			for (auto pair : inEdges[startPos])
+			{
+				if (pair.second > inEdges[startPos].at(bestEdge)) bestEdge = pair.first;
+			}
+			startPos = bestEdge;
 			assert(iterations < anchorToCluster.size()*2+10); // loops!
 			iterations += 1;
 		}
 		anchorSequence.emplace_back(startPos);
 		while (outEdges[startPos].size() >= 1)
 		{
-			startPos = outEdges[startPos].begin()->first;
+			size_t bestEdge = outEdges[startPos].begin()->first;
+			for (auto pair : outEdges[startPos])
+			{
+				if (pair.second > outEdges[startPos].at(bestEdge)) bestEdge = pair.first;
+			}
+			startPos = bestEdge;
 			anchorSequence.emplace_back(startPos);
 			assert(iterations < anchorToCluster.size()*2+10); // loops!
 			iterations += 1;
