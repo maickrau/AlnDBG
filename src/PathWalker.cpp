@@ -770,8 +770,13 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<std::vector<std::pair<
 				uint64_t to = contigPathChunks[i][j];
 				auto key = canonNodePair(from, to);
 				assert(edgeOverlaps.count(key) == 1);
-				assert(endPos >= edgeOverlaps.at(key));
-				endPos -= edgeOverlaps.at(key);
+				size_t overlap = edgeOverlaps.at(key);
+				if (overlap > size) overlap = size;
+				size_t prevNode = contigPathChunks[i][j-1] & maskUint64_t;
+				size_t prevSize = lengths[prevNode][lengths[prevNode].size()/2];
+				if (overlap > prevSize) overlap = prevSize;
+				assert(endPos >= overlap);
+				endPos -= overlap;
 			}
 			assert(endPos >= size);
 			approxChunkPositionInContigPath[i].emplace_back(endPos-size, endPos);
@@ -933,6 +938,11 @@ std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> getAncho
 	std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> result;
 	for (size_t i = 0; i < readToContigPathAnchors.size(); i++)
 	{
+		if (readToContigPathAnchors[i].size() == 0)
+		{
+			result.emplace_back();
+			continue;
+		}
 		phmap::flat_hash_map<std::tuple<size_t, size_t, bool>, std::tuple<size_t, size_t, bool>> anchorParent;
 		phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, size_t, bool>>> anchorsPerPosition;
 		for (auto t : readToContigPathAnchors[i])
@@ -964,25 +974,76 @@ std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> getAncho
 		{
 			anchorsPerRead[std::make_pair(std::get<0>(t), std::get<1>(t))].insert(std::get<2>(t));
 		}
+		phmap::flat_hash_set<size_t> forbiddenClusters;
+		while (true)
+		{
+			bool removedAny = false;
+			for (const auto& pair : anchorsPerRead)
+			{
+				std::vector<size_t> anchorsSorted { pair.second.begin(), pair.second.end() };
+				for (size_t j = anchorsSorted.size()-1; j < anchorsSorted.size(); j--)
+				{
+					auto key = std::make_tuple(pair.first.first, anchorsSorted[j], pair.first.second);
+					if (forbiddenClusters.count(anchorToCluster.at(find(anchorParent, key))) == 0) continue;
+					std::swap(anchorsSorted[j], anchorsSorted.back());
+					anchorsSorted.pop_back();
+				}
+				std::sort(anchorsSorted.begin(), anchorsSorted.end());
+				if (pair.first.second)
+				{
+					for (size_t j = 1; j < anchorsSorted.size(); j++)
+					{
+						auto prevKey = std::make_tuple(pair.first.first, anchorsSorted[j-1], pair.first.second);
+						auto thisKey = std::make_tuple(pair.first.first, anchorsSorted[j], pair.first.second);
+						if (anchorToCluster.at(find(anchorParent, prevKey)) == anchorToCluster.at(find(anchorParent, thisKey)))
+						{
+							forbiddenClusters.insert(anchorToCluster.at(find(anchorParent, prevKey)));
+							removedAny = true;
+						}
+					}
+				}
+				else
+				{
+					for (size_t j = 1; j < anchorsSorted.size(); j++)
+					{
+						auto prevKey = std::make_tuple(pair.first.first, anchorsSorted[j], pair.first.second);
+						auto thisKey = std::make_tuple(pair.first.first, anchorsSorted[j-1], pair.first.second);
+						if (anchorToCluster.at(find(anchorParent, prevKey)) == anchorToCluster.at(find(anchorParent, thisKey)))
+						{
+							forbiddenClusters.insert(anchorToCluster.at(find(anchorParent, prevKey)));
+							removedAny = true;
+						}
+					}
+				}
+			}
+			if (!removedAny) break;
+		}
 		for (const auto& pair : anchorsPerRead)
 		{
 			std::vector<size_t> anchorsSorted { pair.second.begin(), pair.second.end() };
+			for (size_t j = anchorsSorted.size()-1; j < anchorsSorted.size(); j--)
+			{
+				auto key = std::make_tuple(pair.first.first, anchorsSorted[j], pair.first.second);
+				if (forbiddenClusters.count(anchorToCluster.at(find(anchorParent, key))) == 0) continue;
+				std::swap(anchorsSorted[j], anchorsSorted.back());
+				anchorsSorted.pop_back();
+			}
 			std::sort(anchorsSorted.begin(), anchorsSorted.end());
 			if (pair.first.second)
 			{
-				for (size_t i = 1; i < anchorsSorted.size(); i++)
+				for (size_t j = 1; j < anchorsSorted.size(); j++)
 				{
-					auto prevKey = std::make_tuple(pair.first.first, anchorsSorted[i-1], pair.first.second);
-					auto thisKey = std::make_tuple(pair.first.first, anchorsSorted[i], pair.first.second);
+					auto prevKey = std::make_tuple(pair.first.first, anchorsSorted[j-1], pair.first.second);
+					auto thisKey = std::make_tuple(pair.first.first, anchorsSorted[j], pair.first.second);
 					outEdges[anchorToCluster.at(find(anchorParent, prevKey))][anchorToCluster.at(find(anchorParent, thisKey))] += 1;
 				}
 			}
 			else
 			{
-				for (size_t i = 1; i < anchorsSorted.size(); i++)
+				for (size_t j = 1; j < anchorsSorted.size(); j++)
 				{
-					auto prevKey = std::make_tuple(pair.first.first, anchorsSorted[i], pair.first.second);
-					auto thisKey = std::make_tuple(pair.first.first, anchorsSorted[i-1], pair.first.second);
+					auto prevKey = std::make_tuple(pair.first.first, anchorsSorted[j], pair.first.second);
+					auto thisKey = std::make_tuple(pair.first.first, anchorsSorted[j-1], pair.first.second);
 					outEdges[anchorToCluster.at(find(anchorParent, prevKey))][anchorToCluster.at(find(anchorParent, thisKey))] += 1;
 				}
 			}
@@ -1120,6 +1181,7 @@ std::vector<ConsensusString> getAnchorPathConsensuses(const FastaCompressor::Com
 	std::vector<ConsensusString> result;
 	for (size_t i = 0; i < anchorPaths.size(); i++)
 	{
+		std::cerr << "get consensus of path " << i << std::endl;
 		result.emplace_back(getAnchorPathConsensus(sequenceIndex, anchorPaths[i]));
 	}
 	return result;
