@@ -1,3 +1,4 @@
+#include <mutex>
 #include <fstream>
 #include <map>
 #include <limits>
@@ -1185,29 +1186,44 @@ ConsensusString getAnchorPathConsensus(const FastaCompressor::CompressedStringIn
 	return result;
 }
 
-std::vector<ConsensusString> getAnchorPathConsensuses(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>>& anchorPaths)
+std::vector<ConsensusString> getAnchorPathConsensuses(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>>& anchorPaths, const size_t numThreads)
 {
 	std::vector<ConsensusString> result;
-	for (size_t i = 0; i < anchorPaths.size(); i++)
+	result.resize(anchorPaths.size());
+	std::mutex printMutex;
+	iterateMultithreaded(0, anchorPaths.size(), numThreads, [&sequenceIndex, &result, &anchorPaths, &printMutex](size_t i)
 	{
-		std::cerr << "get consensus of path " << i << std::endl;
-		result.emplace_back(getAnchorPathConsensus(sequenceIndex, anchorPaths[i]));
-	}
+		if (anchorPaths[i].size() == 0)
+		{
+			std::lock_guard<std::mutex> lock { printMutex };
+			std::cerr << "skip consensus of path " << i << " due to no anchors" << std::endl;
+			return;
+		}
+		{
+			std::lock_guard<std::mutex> lock { printMutex };
+			std::cerr << "start consensus of path " << i << std::endl;
+		}
+		result[i] = getAnchorPathConsensus(sequenceIndex, anchorPaths[i]);
+		{
+			std::lock_guard<std::mutex> lock { printMutex };
+			std::cerr << "did get consensus of path " << i << ", length " << result[i].bases.size() << " bp" << std::endl;
+		}
+	});
 	return result;
 }
 
-std::vector<ConsensusString> getPathSequences(const FastaCompressor::CompressedStringIndex& sequenceIndex, const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<uint64_t>>& paths)
+std::vector<ConsensusString> getPathSequences(const FastaCompressor::CompressedStringIndex& sequenceIndex, const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<uint64_t>>& paths, const size_t numThreads)
 {
 	std::vector<std::vector<uint64_t>> contigPathChunks;
 	std::vector<std::vector<std::pair<size_t, size_t>>> approxChunkPositionInContigPath;
 	std::tie(contigPathChunks, approxChunkPositionInContigPath) = getPathChunkRepresentation(graph, paths, chunksPerRead);
 	std::vector<std::vector<std::tuple<size_t, bool, size_t, size_t>>> readToContigPathAnchors = getReadToContigPathAnchors(contigPathChunks, approxChunkPositionInContigPath, chunksPerRead);
 	std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> anchorPaths = getAnchorPaths(readToContigPathAnchors);
-	std::vector<ConsensusString> result = getAnchorPathConsensuses(sequenceIndex, anchorPaths);
+	std::vector<ConsensusString> result = getAnchorPathConsensuses(sequenceIndex, anchorPaths, numThreads);
 	return result;
 }
 
-void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage, const size_t kmerSize, const std::string& outPathsFile, const std::string& outContigsFasta)
+void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage, const size_t kmerSize, const std::string& outPathsFile, const std::string& outContigsFasta, const size_t numThreads)
 {
 	const size_t longUnitigThreshold = 100000;
 	ChunkUnitigGraph graph;
@@ -1334,7 +1350,7 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 			file << std::endl;
 		}
 	}
-	std::vector<ConsensusString> contigSequences = getPathSequences(sequenceIndex, graph, readPaths, fixedChunksPerRead, paths);
+	std::vector<ConsensusString> contigSequences = getPathSequences(sequenceIndex, graph, readPaths, fixedChunksPerRead, paths, numThreads);
 	{
 		std::ofstream file { outContigsFasta };
 		for (size_t i = 0; i < paths.size(); i++)

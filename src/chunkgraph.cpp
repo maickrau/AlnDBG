@@ -1185,7 +1185,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 19:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			getContigPathsAndConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize, "paths-final.txt", "contigs-final.fa");
+			getContigPathsAndConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize, "paths-final.txt", "contigs-final.fa", numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 30000, 60000);
 //			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 30000, 60000);
