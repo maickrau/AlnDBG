@@ -605,7 +605,6 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<bool>> mergeContigPath
 	{
 		assert(pathOutEdge.count(pair.first.first) == 0);
 		assert(pathOutEdge.count(pair.first.second ^ firstBitUint64_t) == 0);
-		assert((pair.first.first & maskUint64_t) != (pair.first.second & maskUint64_t));
 		pathOutEdge[pair.first.first] = pair.first.second;
 		pathOutEdge[pair.first.second ^ firstBitUint64_t] = pair.first.first ^ firstBitUint64_t;
 	}
