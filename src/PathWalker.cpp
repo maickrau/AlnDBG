@@ -291,6 +291,111 @@ std::vector<bool> getTopologyExtendedUniques(const ChunkUnitigGraph& graph, cons
 	return result;
 }
 
+std::vector<std::vector<uint64_t>> connectTripletPaths(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const double estimatedSingleCopyCoverage, const std::vector<std::vector<uint64_t>>& oldPaths)
+{
+	phmap::flat_hash_map<uint64_t, uint64_t> nodeIsPathTip;
+	for (size_t i = 0; i < oldPaths.size(); i++)
+	{
+		assert(nodeIsPathTip.count(oldPaths[i].back()) == 0);
+		assert(nodeIsPathTip.count(oldPaths[i][0] ^ firstBitUint64_t) == 0);
+		nodeIsPathTip[oldPaths[i].back()] = i + firstBitUint64_t;
+		nodeIsPathTip[oldPaths[i][0] ^ firstBitUint64_t] = i;
+	}
+	auto triplets = getNodeSpanningTriplets(graph, readPaths, estimatedSingleCopyCoverage);
+	phmap::flat_hash_map<uint64_t, std::pair<uint64_t, uint64_t>> outEdges;
+	for (const auto& pair : triplets)
+	{
+		bool allGood = true;
+		for (const auto& pair2 : pair.second)
+		{
+			if (nodeIsPathTip.count(pair2.first) == 0)
+			{
+				allGood = false;
+				break;
+			}
+			if (nodeIsPathTip.count(pair2.second ^ firstBitUint64_t))
+			{
+				allGood = false;
+				break;
+			}
+			if ((nodeIsPathTip.at(pair2.first) & maskUint64_t) == (nodeIsPathTip.at(pair2.second ^ firstBitUint64_t) & maskUint64_t))
+			{
+				allGood = false;
+				break;
+			}
+		}
+		if (!allGood) continue;
+		for (const auto& pair2 : pair.second)
+		{
+			uint64_t prevContig = nodeIsPathTip.at(pair2.first);
+			uint64_t nextContig = nodeIsPathTip.at(pair2.second ^ firstBitUint64_t) ^ firstBitUint64_t;
+			assert(outEdges.count(prevContig) == 0);
+			assert(outEdges.count(nextContig ^ firstBitUint64_t) == 0);
+			outEdges[prevContig] = std::make_pair(pair.first + firstBitUint64_t, nextContig);
+			outEdges[nextContig ^ firstBitUint64_t] = std::make_pair(pair.first, prevContig ^ firstBitUint64_t);
+		}
+	}
+	if (outEdges.size() == 0) return oldPaths;
+	std::vector<bool> pathUsed;
+	pathUsed.resize(oldPaths.size(), false);
+	std::vector<std::vector<uint64_t>> result;
+	for (size_t i = 0; i < oldPaths.size(); i++)
+	{
+		std::vector<uint64_t> bwPath;
+		std::vector<uint64_t> fwPath;
+		bwPath.emplace_back(i);
+		while (outEdges.count(bwPath.back()) == 1)
+		{
+			bwPath.emplace_back(outEdges.at(bwPath.back()).second);
+			assert(bwPath.size() <= oldPaths.size());
+		}
+		fwPath.emplace_back(i + firstBitUint64_t);
+		while (outEdges.count(fwPath.back()) == 1)
+		{
+			fwPath.emplace_back(outEdges.at(fwPath.back()).second);
+			assert(fwPath.size() <= oldPaths.size());
+		}
+		assert(bwPath[0] == (fwPath[0] ^ firstBitUint64_t));
+		assert(bwPath.size() == 0 || (bwPath.back() & maskUint64_t) != (bwPath[0] & maskUint64_t));
+		assert(fwPath.size() == 0 || (fwPath.back() & maskUint64_t) != (fwPath[0] & maskUint64_t));
+		std::reverse(bwPath.begin(), bwPath.end());
+		for (size_t i = 0; i < bwPath.size(); i++)
+		{
+			bwPath[i] ^= firstBitUint64_t;
+		}
+		bwPath.insert(bwPath.end(), fwPath.begin()+1, fwPath.end());
+		assert(bwPath.size() >= 1);
+		for (size_t j = 0; j < bwPath.size(); j++)
+		{
+			assert(!pathUsed[bwPath[j] & maskUint64_t]);
+			pathUsed[bwPath[j] & maskUint64_t] = true;
+		}
+		result.emplace_back();
+		for (size_t j = 0; j < bwPath.size(); j++)
+		{
+			std::vector<uint64_t> addedHere = oldPaths[bwPath[j] & maskUint64_t];
+			if (bwPath[j] & firstBitUint64_t)
+			{
+			}
+			else
+			{
+				std::reverse(addedHere.begin(), addedHere.end());
+				for (size_t k = 0; k < addedHere.size(); k++)
+				{
+					addedHere[k] ^= firstBitUint64_t;
+				}
+			}
+			if (j > 0)
+			{
+				assert(outEdges.count(bwPath[j-1]) == 1);
+				result.back().emplace_back(outEdges.at(bwPath[j-1]).first);
+			}
+			result.back().insert(result.back().end(), addedHere.begin(), addedHere.end());
+		}
+	}
+	return result;
+}
+
 std::vector<bool> getTripletExtendedUniques(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const double estimatedSingleCopyCoverage, const std::vector<bool>& oldUniques)
 {
 	auto triplets = getNodeSpanningTriplets(graph, readPaths, estimatedSingleCopyCoverage);
@@ -1286,6 +1391,23 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 	for (size_t i = 0; i < paths.size(); i++)
 	{
 		std::cerr << "step 2 path id " << i << " length " << getPathLength(graph, paths[i]) << ": ";
+		for (auto node : paths[i])
+		{
+			std::cerr << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t);
+		}
+		std::cerr << std::endl;
+		for (auto node : paths[i])
+		{
+			std::cerr << (node & maskUint64_t) << ",";
+		}
+		std::cerr << std::endl;
+	}
+	std::cerr << std::endl;
+	paths = connectTripletPaths(graph, readPaths, estimatedSingleCopyCoverage, paths);
+	std::cerr << "step 2.5 paths:" << std::endl;
+	for (size_t i = 0; i < paths.size(); i++)
+	{
+		std::cerr << "step 2.5 path id " << i << " length " << getPathLength(graph, paths[i]) << ": ";
 		for (auto node : paths[i])
 		{
 			std::cerr << ((node & firstBitUint64_t) ? ">" : "<") << (node & maskUint64_t);
