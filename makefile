@@ -7,10 +7,10 @@ SRCDIR=src
 
 LIBS=`pkg-config --libs zlib`
 
-_DEPS = Common.h UnionFind.h TwobitString.h SparseEdgeContainer.h RankBitvector.h ChunkGraphWriter.h ChunkUnitigGraph.h EdlibWrapper.h ConsensusMaker.h KmerIterator.h GraphCleaner.h SequenceHelper.h ChunkExtractor.h SequenceIdentitySplitter.h ChunkPhasing.h ChunkResolution.h CanonHelper.h OverlapMatcher.h PathWalker.h TransitiveClosure.h ChunkHelper.h VectorWithDirection.h MostlySparse2DHashmap.h
+_DEPS = Common.h UnionFind.h TwobitString.h SparseEdgeContainer.h RankBitvector.h ChunkGraphWriter.h ChunkUnitigGraph.h EdlibWrapper.h ConsensusMaker.h KmerIterator.h GraphCleaner.h SequenceHelper.h ChunkExtractor.h SequenceIdentitySplitter.h ChunkPhasing.h ChunkResolution.h CanonHelper.h OverlapMatcher.h PathWalker.h TrioKmerCounter.h TransitiveClosure.h ChunkHelper.h VectorWithDirection.h MostlySparse2DHashmap.h
 DEPS = $(patsubst %, $(SRCDIR)/%, $(_DEPS))
 
-_OBJ = Common.o UnionFind.o TwobitString.o SparseEdgeContainer.o RankBitvector.o ChunkGraphWriter.o ChunkUnitigGraph.o EdlibWrapper.o ConsensusMaker.o KmerIterator.o GraphCleaner.o SequenceHelper.o ChunkExtractor.o SequenceIdentitySplitter.o ChunkPhasing.o ChunkResolution.o CanonHelper.o OverlapMatcher.o PathWalker.o
+_OBJ = Common.o UnionFind.o TwobitString.o SparseEdgeContainer.o RankBitvector.o ChunkGraphWriter.o ChunkUnitigGraph.o EdlibWrapper.o ConsensusMaker.o KmerIterator.o GraphCleaner.o SequenceHelper.o ChunkExtractor.o SequenceIdentitySplitter.o ChunkPhasing.o ChunkResolution.o CanonHelper.o OverlapMatcher.o PathWalker.o TrioKmerCounter.o
 OBJ = $(patsubst %, $(ODIR)/%, $(_OBJ))
 
 LINKFLAGS = $(CPPFLAGS) -Wl,-Bstatic $(LIBS) -Wl,-Bdynamic -Wl,--as-needed -lpthread -pthread -static-libstdc++
@@ -22,6 +22,9 @@ $(shell mkdir -p obj)
 
 $(BINDIR)/chunkgraph: $(OBJ) $(ODIR)/chunkgraph.o edlib/edlib/src/edlib.cpp fastacompressor/lib/fastacompress.a
 	$(GPP) -o $@ $^ $(LINKFLAGS)
+
+$(ODIR)/chunkgraph.o: $(SRCDIR)/chunkgraph.cpp $(DEPS)
+	$(GPP) -c -o $@ $< $(CPPFLAGS) -DVERSION="\"$(VERSION)\""
 
 $(ODIR)/%.o: $(SRCDIR)/%.cpp $(DEPS)
 	$(GPP) -c -o $@ $< $(CPPFLAGS)

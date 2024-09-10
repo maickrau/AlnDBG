@@ -97,6 +97,67 @@ void iterateGapEnclosingMinimizers(const std::string& str, const size_t kmerSize
 }
 
 template <typename CallbackF>
+void iterateSyncmers(const std::string& str, const size_t kmerSize, const size_t windowSize, CallbackF callback)
+{
+	assert(kmerSize * 2 <= sizeof(size_t) * 8);
+	assert(windowSize < kmerSize);
+	const size_t smerSize = kmerSize - windowSize;
+	if (str.size() < kmerSize) return;
+	const size_t smask = ~(0xFFFFFFFFFFFFFFFF << (smerSize * 2));
+	assert(smask == pow(4, smerSize)-1);
+	thread_local std::vector<std::tuple<size_t, size_t>> window;
+	window.clear();
+	size_t smer = 0;
+	for (size_t i = 0; i < smerSize; i++)
+	{
+		smer <<= 2;
+		smer |= charToInt(str[i]);
+	}
+	window.clear();
+	window.emplace_back(0, hashFwAndBw(smer, smerSize, true));
+	for (size_t i = smerSize; i < kmerSize; i++)
+	{
+		smer <<= 2;
+		smer &= smask;
+		smer |= charToInt(str[i]);
+		size_t hashHere = hashFwAndBw(smer, smerSize, true);
+		while (!window.empty() && std::get<1>(window.back()) > hashHere) window.pop_back();
+		window.emplace_back(i-smerSize+1, hashHere);
+	}
+	for (size_t i = 0; i < window.size(); i++)
+	{
+		if (std::get<1>(window[i]) > std::get<1>(window[0])) break;
+		if (std::get<0>(window[i]) == 0 || std::get<0>(window[i]) == kmerSize-smerSize)
+		{
+			callback(0);
+			break;
+		}
+	}
+	for (size_t i = kmerSize; i < str.size(); i++)
+	{
+		smer <<= 2;
+		smer &= smask;
+		smer |= charToInt(str[i]);
+		auto hashHere = hashFwAndBw(smer, smerSize, true);
+		assert(window.size() >= 1);
+		while (window.size() >= 1 && std::get<1>(window.back()) > hashHere) window.pop_back();
+		if (window.size() >= 1 && std::get<0>(window[0]) <= i - windowSize) window.erase(window.begin());
+		assert(window.size() == 0 || std::get<0>(window[0]) > i - kmerSize);
+		window.emplace_back(i-smerSize+1, hashHere);
+		assert(window.size() >= 1);
+		for (size_t j = 0; j < window.size(); j++)
+		{
+			if (std::get<1>(window[j]) > std::get<1>(window[0])) break;
+			if (std::get<0>(window[j]) == i-windowSize+1 || std::get<0>(window[j]) == i-smerSize+1)
+			{
+				callback(i-kmerSize+1);
+				break;
+			}
+		}
+	}
+}
+
+template <typename CallbackF>
 void iterateMinimizers(const std::string& str, const size_t kmerSize, const size_t windowSize, const std::vector<bool>& kmerIsGood, CallbackF callback)
 {
 	assert(kmerSize * 2 <= sizeof(size_t) * 8);
