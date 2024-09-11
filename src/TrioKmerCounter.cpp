@@ -9,7 +9,7 @@ public:
 	void addHap1Kmer(const uint64_t kmer)
 	{
 		hap1KmersNeedAdding.emplace_back(kmer);
-		if (hap1KmersNeedAdding.size() + hap2KmersNeedAdding.size() > 10000)
+		if (hap1KmersNeedAdding.size() + hap2KmersNeedAdding.size() > 100)
 		{
 			pack();
 		}
@@ -17,7 +17,7 @@ public:
 	void addHap2Kmer(const uint64_t kmer)
 	{
 		hap2KmersNeedAdding.emplace_back(kmer);
-		if (hap1KmersNeedAdding.size() + hap2KmersNeedAdding.size() > 10000)
+		if (hap1KmersNeedAdding.size() + hap2KmersNeedAdding.size() > 100)
 		{
 			pack();
 		}
@@ -75,6 +75,13 @@ private:
 			{
 				coverages[kmer] += 0x10;
 			}
+		}
+		existingKmers.clear();
+		existingCoverages.clear();
+		for (auto pair : coverages)
+		{
+			existingKmers.emplace_back(pair.first);
+			existingCoverages.emplace_back(pair.second);
 		}
 		hap1KmersNeedAdding.clear();
 		hap2KmersNeedAdding.clear();
