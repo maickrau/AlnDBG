@@ -3,21 +3,26 @@
 #include "fastqloader.h"
 #include "KmerIterator.h"
 
-class TemporaryKmerCounter
+class TemporaryKmerCounterGroup
 {
 public:
+	TemporaryKmerCounterGroup()
+	{
+		existingKmers.resize(pow(4, 11));
+		existingCoverages.resize(pow(4, 11));
+	}
 	void addHap1Kmer(const uint64_t kmer)
 	{
 		hap1KmersNeedAdding.emplace_back(kmer);
-		if (hap1KmersNeedAdding.size() + hap2KmersNeedAdding.size() > 100)
+		if (hap1KmersNeedAdding.size() + hap2KmersNeedAdding.size() > 1000000)
 		{
 			pack();
 		}
 	}
 	void addHap2Kmer(const uint64_t kmer)
 	{
-		hap2KmersNeedAdding.emplace_back(kmer);
-		if (hap1KmersNeedAdding.size() + hap2KmersNeedAdding.size() > 100)
+		hap1KmersNeedAdding.emplace_back(kmer);
+		if (hap1KmersNeedAdding.size() + hap2KmersNeedAdding.size() > 1000000)
 		{
 			pack();
 		}
@@ -28,16 +33,19 @@ public:
 		assert(hap1KmersNeedAdding.size() == 0);
 		assert(hap2KmersNeedAdding.size() == 0);
 		std::pair<phmap::flat_hash_set<uint64_t>, phmap::flat_hash_set<uint64_t>> result;
-		assert(existingKmers.size() == existingCoverages.size());
-		for (size_t i = 0; i < existingKmers.size(); i++)
+		for (size_t block = 0; block < existingCoverages.size(); block++)
 		{
-			if ((existingCoverages[i] & 0x0F) >= 4 && (existingCoverages[i] >> 4) == 0)
+			assert(existingKmers[block].size() == existingCoverages[block].size());
+			for (size_t i = 0; i < existingKmers[block].size(); i++)
 			{
-				result.first.insert(i);
-			}
-			if ((existingCoverages[i] & 0x0F) == 0 && (existingCoverages[i] >> 4) >= 4)
-			{
-				result.second.insert(i);
+				if ((existingCoverages[block][i] & 0x0F) >= 4 && (existingCoverages[block][i] >> 4) == 0)
+				{
+					result.first.insert((existingKmers[block][i] << 22) + block);
+				}
+				if ((existingCoverages[block][i] & 0x0F) == 0 && (existingCoverages[block][i] >> 4) >= 4)
+				{
+					result.second.insert((existingKmers[block][i] << 22) + block);
+				}
 			}
 		}
 		return result;
@@ -46,48 +54,61 @@ private:
 	void pack()
 	{
 		if (hap1KmersNeedAdding.size() == 0 && hap2KmersNeedAdding.size() == 0) return;
-		phmap::flat_hash_map<uint64_t, uint8_t> coverages;
-		assert(existingKmers.size() == existingCoverages.size());
-		for (size_t i = 0; i < existingKmers.size(); i++)
-		{
-			coverages[i] = existingCoverages[i];
-		}
+		phmap::flat_hash_map<size_t, phmap::flat_hash_map<uint64_t, uint8_t>> addCoverages;
 		for (uint64_t kmer : hap1KmersNeedAdding)
 		{
-			if (coverages.count(kmer) == 0)
+			uint64_t prefix = kmer & 0b00000000001111111111111111111111;
+			uint64_t suffix = kmer >> 22;
+			uint8_t& coverage = addCoverages[prefix][suffix];
+			if ((coverage & 0x0F) < 15)
 			{
-				coverages[kmer] = 0;
+				coverage += 1;
 			}
-			size_t oldCoverage = coverages.at(kmer) & 0x0F;
-			if (oldCoverage < 15)
-			{
-				coverages[kmer] += 1;
-			}
-		}
-		for (uint64_t kmer : hap2KmersNeedAdding)
-		{
-			if (coverages.count(kmer) == 0)
-			{
-				coverages[kmer] = 0;
-			}
-			size_t oldCoverage = coverages.at(kmer) >> 4;
-			if (oldCoverage < 15)
-			{
-				coverages[kmer] += 0x10;
-			}
-		}
-		existingKmers.clear();
-		existingCoverages.clear();
-		for (auto pair : coverages)
-		{
-			existingKmers.emplace_back(pair.first);
-			existingCoverages.emplace_back(pair.second);
 		}
 		hap1KmersNeedAdding.clear();
+		for (uint64_t kmer : hap2KmersNeedAdding)
+		{
+			uint64_t prefix = kmer & 0b00000000001111111111111111111111;
+			uint64_t suffix = kmer >> 22;
+			uint8_t& coverage = addCoverages[prefix][suffix];
+			if ((coverage >> 4) < 15)
+			{
+				coverage += 0x10;
+			}
+		}
 		hap2KmersNeedAdding.clear();
+		for (const auto& pair : addCoverages)
+		{
+			phmap::flat_hash_set<uint64_t> found;
+			for (size_t i = 0; i < existingKmers[pair.first].size(); i++)
+			{
+				if (pair.second.count(existingKmers[pair.first][i]) == 0) continue;
+				found.insert(existingKmers[pair.first][i]);
+				uint8_t oldCoverage = existingCoverages[pair.first][i];
+				uint8_t addCoverage = pair.second.at(existingKmers[pair.first][i]);
+				uint64_t hap1Coverage = (oldCoverage & 0x0F) + (addCoverage & 0x0F);
+				if (hap1Coverage > 15) hap1Coverage = 15;
+				uint64_t hap2Coverage = (oldCoverage >> 4) + (addCoverage >> 4);
+				if (hap2Coverage > 15) hap2Coverage = 15;
+				assert(hap1Coverage <= 15);
+				assert(hap2Coverage <= 15);
+				assert(hap1Coverage > 0 || hap2Coverage > 0);
+				existingKmers[pair.first][i] = (hap2Coverage << 4) + hap1Coverage;
+			}
+			assert(found.size() <= pair.second.size());
+			if (found.size() < pair.second.size())
+			{
+				for (auto pair2 : pair.second)
+				{
+					if (found.count(pair2.first) == 1) continue;
+					existingKmers[pair.first].emplace_back(pair2.first);
+					existingCoverages[pair.first].emplace_back(pair2.second);
+				}
+			}
+		}
 	}
-	std::vector<uint64_t> existingKmers;
-	std::vector<uint8_t> existingCoverages;
+	std::vector<std::vector<uint64_t>> existingKmers;
+	std::vector<std::vector<uint8_t>> existingCoverages;
 	std::vector<uint64_t> hap1KmersNeedAdding;
 	std::vector<uint64_t> hap2KmersNeedAdding;
 };
@@ -123,8 +144,7 @@ void TrioKmerCounter::initialize(const std::string& hap1File, const std::string&
 	this->w = w;
 	assert(hap1Kmers.size() == 0);
 	assert(hap2Kmers.size() == 0);
-	std::vector<TemporaryKmerCounter> temporaryCounters;
-	temporaryCounters.resize(pow(4, 11));
+	TemporaryKmerCounterGroup temporaryCounters;
 	std::cerr << "start reading file " << hap1File << std::endl;
 	FastQ::streamFastqFromFile(hap1File, false, [&temporaryCounters, k, w](const FastQ& read)
 	{
@@ -132,19 +152,13 @@ void TrioKmerCounter::initialize(const std::string& hap1File, const std::string&
 		{
 			iterateSyncmers(substring, k, w, [&substring, &temporaryCounters, k](const size_t pos)
 			{
-				uint64_t prefix = 0;
-				uint64_t suffix = 0;
-				for (size_t i = 0; i < 11; i++)
+				uint64_t kmer = 0;
+				for (size_t i = 0; i < k; i++)
 				{
-					prefix <<= 2;
-					prefix += charToInt(substring[pos + i]);
+					kmer <<= 2;
+					kmer += charToInt(substring[pos + i]);
 				}
-				for (size_t i = 11; i < k; i++)
-				{
-					suffix <<= 2;
-					suffix += charToInt(substring[pos + i]);
-				}
-				temporaryCounters[prefix].addHap1Kmer(suffix);
+				temporaryCounters.addHap1Kmer(kmer);
 			});
 		});
 	});
@@ -155,43 +169,18 @@ void TrioKmerCounter::initialize(const std::string& hap1File, const std::string&
 		{
 			iterateSyncmers(substring, k, w, [&substring, &temporaryCounters, k](const size_t pos)
 			{
-				uint64_t prefix = 0;
-				uint64_t suffix = 0;
-				for (size_t i = 0; i < 11; i++)
+				uint64_t kmer = 0;
+				for (size_t i = 0; i < k; i++)
 				{
-					prefix <<= 2;
-					prefix += charToInt(substring[pos + i]);
+					kmer <<= 2;
+					kmer += charToInt(substring[pos + i]);
 				}
-				for (size_t i = 11; i < k; i++)
-				{
-					suffix <<= 2;
-					suffix += charToInt(substring[pos + i]);
-				}
-				temporaryCounters[prefix].addHap2Kmer(suffix);
+				temporaryCounters.addHap2Kmer(kmer);
 			});
 		});
 	});
 	std::cerr << "merge buckets" << std::endl;
-	for (size_t i = 0; i < temporaryCounters.size(); i++)
-	{
-		std::cerr << "start bucket " << i << "/" << temporaryCounters.size() << std::endl;
-		size_t prefix = pow(4, 11);
-		auto partialResult = temporaryCounters[i].getHaplotypeSpecificKmers();
-		for (auto suffix : partialResult.first)
-		{
-			uint64_t kmer = (prefix << ((k-11ull)*2ull)) + suffix;
-			assert(hap1Kmers.count(kmer) == 0);
-			assert(hap2Kmers.count(kmer) == 0);
-			hap1Kmers.insert(kmer);
-		}
-		for (auto suffix : partialResult.second)
-		{
-			uint64_t kmer = (prefix << ((k-11ull)*2ull)) + suffix;
-			assert(hap1Kmers.count(kmer) == 0);
-			assert(hap2Kmers.count(kmer) == 0);
-			hap2Kmers.insert(kmer);
-		}
-	}
+	std::tie(hap1Kmers, hap2Kmers) = temporaryCounters.getHaplotypeSpecificKmers();
 }
 
 size_t TrioKmerCounter::hap1KmerCount() const
