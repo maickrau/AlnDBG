@@ -512,6 +512,7 @@ uint64_t getNextTripletCore(const ChunkUnitigGraph& graph, const phmap::flat_has
 	}
 	assert(result != std::numeric_limits<uint64_t>::max());
 	assert(triplets.count(result & maskUint64_t) == 1);
+	if (triplets.at(result & maskUint64_t).size() != triplets.at(startNode & maskUint64_t).size()) return std::numeric_limits<uint64_t>::max();
 	assert(triplets.at(result & maskUint64_t).size() == triplets.at(startNode & maskUint64_t).size());
 	return result;
 }
