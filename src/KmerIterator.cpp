@@ -70,13 +70,17 @@ size_t charToInt(const unsigned char c)
 {
 	switch(c)
 	{
+	case 'a':
 	case 'A':
 		return 0;
 	case 'C':
+	case 'c':
 		return 1;
 	case 'G':
+	case 'g':
 		return 2;
 	case 'T':
+	case 't':
 		return 3;
 	}
 	assert(false);

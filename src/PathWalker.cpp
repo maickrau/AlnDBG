@@ -9,6 +9,33 @@
 #include "phmap.h"
 #include "UnionFind.h"
 
+std::vector<uint64_t> mergeBwFwPaths(const std::vector<uint64_t>& bwPath, const std::vector<uint64_t>& fwPath)
+{
+	assert(bwPath.size() >= 1);
+	assert(fwPath.size() >= 1);
+	assert(fwPath[0] == (bwPath[0] ^ firstBitUint64_t));
+	if (bwPath.size() >= 2 && bwPath[0] == bwPath.back())
+	{
+		// circular path
+		assert(fwPath[0] == (bwPath[0] ^ firstBitUint64_t));
+		assert(fwPath[0] == fwPath.back());
+		std::vector<uint64_t> result;
+		result.insert(result.end(), fwPath.begin(), fwPath.end());
+		result.pop_back();
+		return result;
+	}
+	std::vector<uint64_t> result;
+	result.insert(result.end(), bwPath.begin(), bwPath.end());
+	std::reverse(result.begin(), result.end());
+	for (size_t i = 0; i < result.size(); i++)
+	{
+		result[i] ^= firstBitUint64_t;
+	}
+	assert(result.back() == fwPath[0]);
+	result.insert(result.end(), fwPath.begin()+1, fwPath.end());
+	return result;
+}
+
 double getAverageLongNodeCoverage(const ChunkUnitigGraph& graph, const size_t minLength)
 {
 	double totalLength = 0;
@@ -147,14 +174,16 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<uint64_t, uint64_t>>> getNode
 	return result;
 }
 
-std::vector<bool> estimateUniqueUnitigs(const ChunkUnitigGraph& graph, const size_t longUnitigThreshold, const double estimatedSingleCopyCoverage)
+std::vector<bool> estimateUniqueUnitigs(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>> readPaths, const size_t longUnitigThreshold, const double estimatedSingleCopyCoverage)
 {
+	auto triplets = getNodeSpanningTriplets(graph, readPaths, estimatedSingleCopyCoverage);
 	std::vector<bool> result;
 	result.resize(graph.unitigLengths.size(), false);
 	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
 	{
 		if (graph.unitigLengths[i] < longUnitigThreshold) continue;
 		if (graph.coverages[i] > 1.5 * estimatedSingleCopyCoverage) continue;
+		if (triplets.count(i) == 1) continue;
 		result[i] = true;
 	}
 	return result;
@@ -358,29 +387,18 @@ std::vector<std::vector<uint64_t>> connectTripletPaths(const ChunkUnitigGraph& g
 			fwPath.emplace_back(outEdges.at(fwPath.back()).second);
 			assert(fwPath.size() <= oldPaths.size());
 		}
-		assert(bwPath.size() >= 1);
-		assert(fwPath.size() >= 1);
-		assert(bwPath[0] == (fwPath[0] ^ firstBitUint64_t));
-		assert(bwPath.size() == 1 || (bwPath.back() & maskUint64_t) != (bwPath[0] & maskUint64_t));
-		assert(fwPath.size() == 1 || (fwPath.back() & maskUint64_t) != (fwPath[0] & maskUint64_t));
-		std::reverse(bwPath.begin(), bwPath.end());
-		for (size_t i = 0; i < bwPath.size(); i++)
+		auto path = mergeBwFwPaths(bwPath, fwPath);
+		assert(path.size() >= 1);
+		for (size_t j = 0; j < path.size(); j++)
 		{
-			bwPath[i] ^= firstBitUint64_t;
-		}
-		assert(bwPath.back() == fwPath[0]);
-		bwPath.insert(bwPath.end(), fwPath.begin()+1, fwPath.end());
-		assert(bwPath.size() >= 1);
-		for (size_t j = 0; j < bwPath.size(); j++)
-		{
-			assert(!pathUsed[bwPath[j] & maskUint64_t]);
-			pathUsed[bwPath[j] & maskUint64_t] = true;
+			assert(!pathUsed[path[j] & maskUint64_t]);
+			pathUsed[path[j] & maskUint64_t] = true;
 		}
 		result.emplace_back();
-		for (size_t j = 0; j < bwPath.size(); j++)
+		for (size_t j = 0; j < path.size(); j++)
 		{
-			std::vector<uint64_t> addedHere = oldPaths[bwPath[j] & maskUint64_t];
-			if (bwPath[j] & firstBitUint64_t)
+			std::vector<uint64_t> addedHere = oldPaths[path[j] & maskUint64_t];
+			if (path[j] & firstBitUint64_t)
 			{
 			}
 			else
@@ -393,8 +411,8 @@ std::vector<std::vector<uint64_t>> connectTripletPaths(const ChunkUnitigGraph& g
 			}
 			if (j > 0)
 			{
-				assert(outEdges.count(bwPath[j-1]) == 1);
-				result.back().emplace_back(outEdges.at(bwPath[j-1]).first);
+				assert(outEdges.count(path[j-1]) == 1);
+				result.back().emplace_back(outEdges.at(path[j-1]).first);
 			}
 			result.back().insert(result.back().end(), addedHere.begin(), addedHere.end());
 		}
@@ -417,10 +435,23 @@ std::vector<bool> getTripletExtendedUniques(const ChunkUnitigGraph& graph, const
 			if (graph.coverages[pair2.second & maskUint64_t] > estimatedSingleCopyCoverage * 1.5) allGood = false;
 		}
 		if (!allGood) continue;
+		double minFwCoverage = 10 * estimatedSingleCopyCoverage;
+		double maxFwCoverage = 0;
+		double minBwCoverage = 10 * estimatedSingleCopyCoverage;
+		double maxBwCoverage = 0;
 		for (const auto& pair2 : pair.second)
 		{
-			result[pair2.first & maskUint64_t] = true;
-			result[pair2.second & maskUint64_t] = true;
+			minBwCoverage = std::min(minBwCoverage, graph.coverages[pair2.first & maskUint64_t]);
+			maxBwCoverage = std::max(maxBwCoverage, graph.coverages[pair2.first & maskUint64_t]);
+			minFwCoverage = std::min(minFwCoverage, graph.coverages[pair2.second & maskUint64_t]);
+			maxFwCoverage = std::max(maxFwCoverage, graph.coverages[pair2.second & maskUint64_t]);
+		}
+		bool bwValid = (maxBwCoverage < minBwCoverage * 2);
+		bool fwValid = (maxFwCoverage < minFwCoverage * 2);
+		for (const auto& pair2 : pair.second)
+		{
+			if (bwValid) result[pair2.first & maskUint64_t] = true;
+			if (fwValid) result[pair2.second & maskUint64_t] = true;
 		}
 	}
 	return result;
@@ -444,27 +475,130 @@ std::vector<std::vector<uint64_t>> getTripletExtendedPaths(const ChunkUnitigGrap
 			assert(!alreadyInPath[pair2.second & maskUint64_t]);
 			auto bwPath = followTripletPath(graph, pair2.first ^ firstBitUint64_t, triplets);
 			auto fwPath = followTripletPath(graph, pair2.second, triplets);
-			assert(bwPath.size() >= 1);
-			assert(fwPath.size() >= 1);
-			std::reverse(bwPath.begin(), bwPath.end());
-			for (size_t i = 0; i < bwPath.size(); i++)
-			{
-				bwPath[i] ^= firstBitUint64_t;
-			}
-			bwPath.emplace_back(pair.first + firstBitUint64_t);
-			bwPath.insert(bwPath.end(), fwPath.begin(), fwPath.end());
-			for (auto node : bwPath)
+			auto path = mergeBwFwPaths(bwPath, fwPath);
+			for (auto node : path)
 			{
 				alreadyInPath[node & maskUint64_t] = true;
 			}
-			size_t pathLength = getPathLength(graph, bwPath);
+			size_t pathLength = getPathLength(graph, path);
 			if (pathLength < 100000) continue;
-			result.emplace_back(bwPath);
+			result.emplace_back(path);
 		}
 	}
 	return result;
 }
 
+uint64_t getNextTripletCore(const ChunkUnitigGraph& graph, const phmap::flat_hash_map<size_t, std::vector<std::pair<uint64_t, uint64_t>>>& triplets, const uint64_t startNode)
+{
+	uint64_t result = std::numeric_limits<uint64_t>::max();
+	for (auto pair : triplets.at(startNode & maskUint64_t))
+	{
+		uint64_t resultHere;
+		std::pair<size_t, bool> check;
+		if (startNode & firstBitUint64_t)
+		{
+			check = std::make_pair(pair.second & maskUint64_t, pair.second & firstBitUint64_t);
+		}
+		else
+		{
+			check = std::make_pair(pair.first & maskUint64_t, (pair.first ^ firstBitUint64_t) & firstBitUint64_t);
+		}
+		assert(graph.edges.getEdges(reverse(check)).size() == 1);
+		if (graph.edges.getEdges(check).size() != 1) return std::numeric_limits<uint64_t>::max();
+		resultHere = graph.edges.getEdges(check)[0].first + (graph.edges.getEdges(check)[0].second ? firstBitUint64_t : 0);
+		if (triplets.count(resultHere & maskUint64_t) == 0) return std::numeric_limits<uint64_t>::max();
+		if (result == std::numeric_limits<uint64_t>::max()) result = resultHere;
+		if (resultHere != result) return std::numeric_limits<uint64_t>::max();
+	}
+	assert(result != std::numeric_limits<uint64_t>::max());
+	assert(triplets.count(result & maskUint64_t) == 1);
+	if (triplets.at(result & maskUint64_t).size() != triplets.at(startNode & maskUint64_t).size()) return std::numeric_limits<uint64_t>::max();
+	assert(triplets.at(result & maskUint64_t).size() == triplets.at(startNode & maskUint64_t).size());
+	return result;
+}
+
+std::vector<uint64_t> followTripletCorePath(const ChunkUnitigGraph& graph, const phmap::flat_hash_map<size_t, std::vector<std::pair<uint64_t, uint64_t>>>& triplets, const uint64_t startNode)
+{
+	assert(triplets.count(startNode & maskUint64_t) == 1);
+	std::vector<uint64_t> result;
+	result.emplace_back(startNode);
+	while (true)
+	{
+		uint64_t next = getNextTripletCore(graph, triplets, result.back());
+		if (next == std::numeric_limits<uint64_t>::max()) break;
+		if (next == (result.back() ^ firstBitUint64_t)) break;
+		result.emplace_back(next);
+		if (next == startNode) break;
+	}
+	return result;
+}
+
+std::vector<bool> getTripletPathExtendedUniques(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const double estimatedSingleCopyCoverage, const std::vector<bool>& oldUniques)
+{
+	auto triplets = getNodeSpanningTriplets(graph, readPaths, estimatedSingleCopyCoverage);
+	std::vector<std::vector<uint64_t>> tripletChains;
+	phmap::flat_hash_set<size_t> includedNodes;
+	auto result = oldUniques;
+	for (const auto& pair : triplets)
+	{
+		if (includedNodes.count(pair.first) == 1) continue;
+		std::vector<uint64_t> fwCores = followTripletCorePath(graph, triplets, pair.first + firstBitUint64_t);
+		std::vector<uint64_t> bwCores = followTripletCorePath(graph, triplets, pair.first);
+		auto path = mergeBwFwPaths(bwCores, fwCores);
+		if (path.size() == 1) continue;
+		size_t length = 0;
+		size_t ploidy = pair.second.size();
+		bool hasUniqueCore = false;
+		double coverageSum = 0;
+		double coverageDivisor = 0;
+		for (uint64_t node : path)
+		{
+			length += graph.unitigLengths[node & maskUint64_t];
+			assert(triplets.count(node & maskUint64_t) == 1);
+			assert(triplets.at(node & maskUint64_t).size() == ploidy);
+			includedNodes.insert(node & maskUint64_t);
+			if (oldUniques[node & maskUint64_t]) hasUniqueCore = true;
+			coverageSum += graph.unitigLengths[node & maskUint64_t] * graph.coverages[node & maskUint64_t];
+			coverageDivisor += graph.unitigLengths[node & maskUint64_t];
+		}
+		if (coverageSum / coverageDivisor < estimatedSingleCopyCoverage * 1.5 && hasUniqueCore) continue;
+		bool alreadyHasUnique = false;
+		for (uint64_t node : path)
+		{
+			bool allUniqueBw = true;
+			bool allUniqueFw = true;
+			for (auto pair2 : triplets.at(node & maskUint64_t))
+			{
+				if (!oldUniques[pair2.first & maskUint64_t]) allUniqueBw = false;
+				if (!oldUniques[pair2.second & maskUint64_t]) allUniqueFw = false;
+			}
+			if (allUniqueBw || allUniqueFw) alreadyHasUnique = true;
+		}
+		if (length < 50000 && !alreadyHasUnique) continue;
+		for (uint64_t node : path)
+		{
+			double minBwCoverage = estimatedSingleCopyCoverage * 10;
+			double maxBwCoverage = 0;
+			double minFwCoverage = estimatedSingleCopyCoverage * 10;
+			double maxFwCoverage = 0;
+			for (auto pair2 : triplets.at(node & maskUint64_t))
+			{
+				minBwCoverage = std::min(minBwCoverage, graph.coverages[pair2.first & maskUint64_t]);
+				maxBwCoverage = std::max(maxBwCoverage, graph.coverages[pair2.first & maskUint64_t]);
+				minFwCoverage = std::min(minFwCoverage, graph.coverages[pair2.second & maskUint64_t]);
+				maxFwCoverage = std::max(maxFwCoverage, graph.coverages[pair2.second & maskUint64_t]);
+			}
+			bool bwValid = (maxBwCoverage < minBwCoverage * 2);
+			bool fwValid = (maxFwCoverage < minFwCoverage * 2);
+			for (auto pair2 : triplets.at(node & maskUint64_t))
+			{
+				if (bwValid) result[pair2.first & maskUint64_t] = true;
+				if (fwValid) result[pair2.second & maskUint64_t] = true;
+			}
+		}
+	}
+	return result;
+}
 std::vector<std::vector<uint64_t>> addUniqueNodePaths(const std::vector<std::vector<uint64_t>>& paths, const std::vector<bool>& isUniqueUnitig)
 {
 	std::vector<bool> alreadyInPath;
@@ -753,31 +887,14 @@ std::pair<std::vector<std::vector<uint64_t>>, std::vector<bool>> mergeContigPath
 			if (fwPath.back() == i + firstBitUint64_t) break;
 			assert(fwPath.size() <= contigPaths.size());
 		}
-		if (bwPath.size() >= 2 && bwPath.back() == bwPath[0])
+		auto path = mergeBwFwPaths(bwPath, fwPath);
+		for (size_t j = 0; j < path.size(); j++)
 		{
-			// circular path
-			assert(fwPath.size() >= 2);
-			assert(fwPath[0] == fwPath.back());
-			assert(fwPath[0] == (bwPath[0] ^ firstBitUint64_t));
-			fwPath.erase(fwPath.begin()+1, fwPath.end());
-			bwPath.pop_back();
+			assert(!contigPathInPath[path[j] & maskUint64_t]);
+			contigPathInPath[path[j] & maskUint64_t] = true;
 		}
-		std::reverse(bwPath.begin(), bwPath.end());
-		for (size_t j = 0; j < bwPath.size(); j++)
-		{
-			bwPath[j] ^= firstBitUint64_t;
-		}
-		assert(bwPath.size() >= 1);
-		assert(fwPath.size() >= 1);
-		assert(bwPath.back() == fwPath[0]);
-		bwPath.insert(bwPath.end(), fwPath.begin()+1, fwPath.end());
-		for (size_t j = 0; j < bwPath.size(); j++)
-		{
-			assert(!contigPathInPath[bwPath[j] & maskUint64_t]);
-			contigPathInPath[bwPath[j] & maskUint64_t] = true;
-		}
-		assert(bwPath.size() >= 1);
-		newContigPathPaths.emplace_back(bwPath);
+		assert(path.size() >= 1);
+		newContigPathPaths.emplace_back(path);
 		assert(newContigPathPaths.back().size() >= 1);
 		assert(contigPathInPath[i]);
 	}
@@ -1352,7 +1469,7 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 	std::tie(graph, readPaths) = getChunkUnitigGraph(fixedChunksPerRead, approxOneHapCoverage, kmerSize);
 	double estimatedSingleCopyCoverage = getAverageLongNodeCoverage(graph, longUnitigThreshold);
 	std::cerr << "estimated single copy coverage " << estimatedSingleCopyCoverage << std::endl;
-	std::vector<bool> isUniqueUnitig = estimateUniqueUnitigs(graph, longUnitigThreshold, estimatedSingleCopyCoverage);
+	std::vector<bool> isUniqueUnitig = estimateUniqueUnitigs(graph, readPaths, longUnitigThreshold, estimatedSingleCopyCoverage);
 	std::cerr << "step 1 unique unitigs: ";
 	for (size_t i = 0; i < isUniqueUnitig.size(); i++)
 	{
@@ -1361,6 +1478,14 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 	}
 	std::cerr << std::endl;
 	isUniqueUnitig = getTripletExtendedUniques(graph, readPaths, estimatedSingleCopyCoverage, isUniqueUnitig);
+	std::cerr << "step 1.5 unique unitigs: ";
+	for (size_t i = 0; i < isUniqueUnitig.size(); i++)
+	{
+		if (!isUniqueUnitig[i]) continue;
+		std::cerr << i << ",";
+	}
+	std::cerr << std::endl;
+	isUniqueUnitig = getTripletPathExtendedUniques(graph, readPaths, estimatedSingleCopyCoverage, isUniqueUnitig);
 	std::cerr << "step 2 unique unitigs: ";
 	for (size_t i = 0; i < isUniqueUnitig.size(); i++)
 	{
