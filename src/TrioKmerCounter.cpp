@@ -85,6 +85,31 @@ private:
 	std::vector<uint64_t> hap2KmersNeedAdding;
 };
 
+template <typename F>
+void iterateNSplittedStrings(const std::string& str, F callback)
+{
+	size_t lastValid = 0;
+	for (size_t i = 0; i < str.size(); i++)
+	{
+		if (str[i] == 'N')
+		{
+			if (i > lastValid)
+			{
+				callback(str.substr(lastValid, i-lastValid));
+			}
+			lastValid = i+1;
+		}
+	}
+	if (lastValid > 0 && lastValid < str.size())
+	{
+		callback(str.substr(lastValid));
+	}
+	else if (lastValid == 0)
+	{
+		callback(str);
+	}
+}
+
 void TrioKmerCounter::initialize(const std::string& hap1File, const std::string& hap2File, const size_t k, const size_t w)
 {
 	this->k = k;
@@ -95,40 +120,46 @@ void TrioKmerCounter::initialize(const std::string& hap1File, const std::string&
 	temporaryCounters.resize(pow(4, 11));
 	FastQ::streamFastqFromFile(hap1File, false, [&temporaryCounters, k, w](const FastQ& read)
 	{
-		iterateSyncmers(read.sequence, k, w, [&read, &temporaryCounters, k](const size_t pos)
+		iterateNSplittedStrings(read.sequence, [&temporaryCounters, k, w](const std::string& substring)
 		{
-			uint64_t prefix = 0;
-			uint64_t suffix = 0;
-			for (size_t i = 0; i < 11; i++)
+			iterateSyncmers(substring, k, w, [&substring, &temporaryCounters, k](const size_t pos)
 			{
-				prefix <<= 2;
-				prefix += charToInt(read.sequence[pos + i]);
-			}
-			for (size_t i = 11; i < k; i++)
-			{
-				suffix <<= 2;
-				suffix += charToInt(read.sequence[pos + i]);
-			}
-			temporaryCounters[prefix].addHap1Kmer(suffix);
+				uint64_t prefix = 0;
+				uint64_t suffix = 0;
+				for (size_t i = 0; i < 11; i++)
+				{
+					prefix <<= 2;
+					prefix += charToInt(substring[pos + i]);
+				}
+				for (size_t i = 11; i < k; i++)
+				{
+					suffix <<= 2;
+					suffix += charToInt(substring[pos + i]);
+				}
+				temporaryCounters[prefix].addHap1Kmer(suffix);
+			});
 		});
 	});
 	FastQ::streamFastqFromFile(hap2File, false, [&temporaryCounters, k, w](const FastQ& read)
 	{
-		iterateSyncmers(read.sequence, k, w, [&read, &temporaryCounters, k](const size_t pos)
+		iterateNSplittedStrings(read.sequence, [&temporaryCounters, k, w](const std::string& substring)
 		{
-			uint64_t prefix = 0;
-			uint64_t suffix = 0;
-			for (size_t i = 0; i < 11; i++)
+			iterateSyncmers(substring, k, w, [&substring, &temporaryCounters, k](const size_t pos)
 			{
-				prefix <<= 2;
-				prefix += charToInt(read.sequence[pos + i]);
-			}
-			for (size_t i = 11; i < k; i++)
-			{
-				suffix <<= 2;
-				suffix += charToInt(read.sequence[pos + i]);
-			}
-			temporaryCounters[prefix].addHap2Kmer(suffix);
+				uint64_t prefix = 0;
+				uint64_t suffix = 0;
+				for (size_t i = 0; i < 11; i++)
+				{
+					prefix <<= 2;
+					prefix += charToInt(substring[pos + i]);
+				}
+				for (size_t i = 11; i < k; i++)
+				{
+					suffix <<= 2;
+					suffix += charToInt(substring[pos + i]);
+				}
+				temporaryCounters[prefix].addHap2Kmer(suffix);
+			});
 		});
 	});
 	for (size_t i = 0; i < temporaryCounters.size(); i++)

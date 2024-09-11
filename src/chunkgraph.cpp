@@ -1304,7 +1304,9 @@ int main(int argc, char** argv)
 	{
 		assert(params.count("parent-2-reads") == 1);
 		std::cerr << "getting parent-specific kmers" << std::endl;
+		std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 		trioHapmers.initialize(params["parent-1-reads"].as<std::string>(), params["parent-2-reads"].as<std::string>(), 31, 20);
+		std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 		std::cerr << trioHapmers.hap1KmerCount() << " parent 1 specific kmers" << std::endl;
 		std::cerr << trioHapmers.hap1KmerCount() << " parent 2 specific kmers" << std::endl;
 	}
