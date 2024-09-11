@@ -1008,7 +1008,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeStage(3, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 3:
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
