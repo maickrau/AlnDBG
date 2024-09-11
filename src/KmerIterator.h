@@ -102,6 +102,7 @@ void iterateSyncmers(const std::string& str, const size_t kmerSize, const size_t
 	assert(kmerSize * 2 <= sizeof(size_t) * 8);
 	assert(windowSize < kmerSize);
 	const size_t smerSize = kmerSize - windowSize;
+	assert(smerSize < kmerSize);
 	if (str.size() < kmerSize) return;
 	const size_t smask = ~(0xFFFFFFFFFFFFFFFF << (smerSize * 2));
 	assert(smask == pow(4, smerSize)-1);

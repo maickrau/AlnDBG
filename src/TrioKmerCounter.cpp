@@ -125,6 +125,7 @@ void TrioKmerCounter::initialize(const std::string& hap1File, const std::string&
 	assert(hap2Kmers.size() == 0);
 	std::vector<TemporaryKmerCounter> temporaryCounters;
 	temporaryCounters.resize(pow(4, 11));
+	std::cerr << "start reading file " << hap1File << std::endl;
 	FastQ::streamFastqFromFile(hap1File, false, [&temporaryCounters, k, w](const FastQ& read)
 	{
 		iterateNSplittedStrings(read.sequence, [&temporaryCounters, k, w](const std::string& substring)
@@ -147,6 +148,7 @@ void TrioKmerCounter::initialize(const std::string& hap1File, const std::string&
 			});
 		});
 	});
+	std::cerr << "start reading file " << hap2File << std::endl;
 	FastQ::streamFastqFromFile(hap2File, false, [&temporaryCounters, k, w](const FastQ& read)
 	{
 		iterateNSplittedStrings(read.sequence, [&temporaryCounters, k, w](const std::string& substring)
@@ -169,8 +171,10 @@ void TrioKmerCounter::initialize(const std::string& hap1File, const std::string&
 			});
 		});
 	});
+	std::cerr << "merge buckets" << std::endl;
 	for (size_t i = 0; i < temporaryCounters.size(); i++)
 	{
+		std::cerr << "start bucket " << i << "/" << temporaryCounters.size() << std::endl;
 		size_t prefix = pow(4, 11);
 		auto partialResult = temporaryCounters[i].getHaplotypeSpecificKmers();
 		for (auto suffix : partialResult.first)
