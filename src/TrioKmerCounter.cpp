@@ -16,7 +16,7 @@ public:
 		}
 		size_t lowerBitCount = ceil(log2((double)maxValue / (double)sortedValues.size()));
 		if (lowerBitCount == log2(maxValue)) lowerBitCount -= 1;
-		size_t lowerBitsMask = (1ull << (lowerBitCount)) - 1;
+		size_t lowerBitsMask = (1ull << (lowerBitCount)) - 1ull;
 		assert(lowerBitCount < log2(maxValue));
 		upperBitCount = log2(maxValue) - lowerBitCount;
 		assert(upperBitCount >= 1);
@@ -154,6 +154,7 @@ private:
 			{
 				newKeysTmpArray.emplace_back(pair.first);
 			}
+			assert(newKeysTmpArray.size() == addCoverages.size());
 			std::sort(newKeysTmpArray.begin(), newKeysTmpArray.end());
 			existingKmers[bucketIndex].set(newKeysTmpArray, pow(4, (kmerSize-prefixLength)));
 			existingCoverages[bucketIndex].resize(newKeysTmpArray.size(), 0);
@@ -168,10 +169,10 @@ private:
 	void pack()
 	{
 		std::cerr << "pack" << std::endl;
-		const size_t prefixMask = ((1ull << (2ull*prefixLength)) - 1);
+		const size_t prefixMask = ((1ull << (2ull*prefixLength)) - 1ull);
 		if (hap1KmersNeedAdding.size() == 0 && hap2KmersNeedAdding.size() == 0) return;
-		std::sort(hap1KmersNeedAdding.begin(), hap1KmersNeedAdding.end(), [&prefixMask](const size_t left, const size_t right) { return (left & prefixMask) < (right & prefixMask); });
-		std::sort(hap2KmersNeedAdding.begin(), hap2KmersNeedAdding.end(), [&prefixMask](const size_t left, const size_t right) { return (left & prefixMask) < (right & prefixMask); });
+		std::sort(hap1KmersNeedAdding.begin(), hap1KmersNeedAdding.end(), [prefixMask](const size_t left, const size_t right) { return (left & prefixMask) < (right & prefixMask); });
+		std::sort(hap2KmersNeedAdding.begin(), hap2KmersNeedAdding.end(), [prefixMask](const size_t left, const size_t right) { return (left & prefixMask) < (right & prefixMask); });
 		size_t lastPrefix = 0;
 		size_t hap1Index = 0;
 		size_t hap2Index = 0;
@@ -200,7 +201,7 @@ private:
 			lastPrefix = prefixHere;
 			while (hap1Index < hap1KmersNeedAdding.size() && (hap1KmersNeedAdding[hap1Index] & prefixMask) == prefixHere)
 			{
-				uint64_t suffix = hap1KmersNeedAdding[hap1Index] >> (prefixLength*2);
+				uint64_t suffix = hap1KmersNeedAdding[hap1Index] >> (prefixLength*2ull);
 				uint8_t& coverage = addCoverages[suffix];
 				if ((coverage & 0x0F) < 15)
 				{
@@ -210,7 +211,7 @@ private:
 			}
 			while (hap2Index < hap2KmersNeedAdding.size() && (hap2KmersNeedAdding[hap2Index] & prefixMask) == prefixHere)
 			{
-				uint64_t suffix = hap2KmersNeedAdding[hap2Index] >> (prefixLength*2);
+				uint64_t suffix = hap2KmersNeedAdding[hap2Index] >> (prefixLength*2ull);
 				uint8_t& coverage = addCoverages[suffix];
 				if ((coverage >> 4) < 15)
 				{
