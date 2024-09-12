@@ -76,26 +76,29 @@ private:
 
 class TemporaryKmerCounterGroup
 {
+	const size_t prefixLength = 5;
 	const size_t maxKmersBeforePacking = 50000000;
 public:
 	TemporaryKmerCounterGroup(const size_t kmerSize) :
 		kmerSize(kmerSize)
 	{
-		existingKmers.resize(pow(4, 11));
-		existingCoverages.resize(pow(4, 11));
+		existingKmers.resize(pow(4, prefixLength));
+		existingCoverages.resize(pow(4, prefixLength));
+		hap1KmersNeedAdding.reserve(maxKmersBeforePacking);
+		hap2KmersNeedAdding.reserve(maxKmersBeforePacking);
 	}
 	void addHap1Kmer(const uint64_t kmer)
 	{
 		hap1KmersNeedAdding.emplace_back(kmer);
-		if (hap1KmersNeedAdding.size() + hap2KmersNeedAdding.size() > maxKmersBeforePacking)
+		if (hap1KmersNeedAdding.size() >= maxKmersBeforePacking)
 		{
 			pack();
 		}
 	}
 	void addHap2Kmer(const uint64_t kmer)
 	{
-		hap1KmersNeedAdding.emplace_back(kmer);
-		if (hap1KmersNeedAdding.size() + hap2KmersNeedAdding.size() > maxKmersBeforePacking)
+		hap2KmersNeedAdding.emplace_back(kmer);
+		if (hap2KmersNeedAdding.size() >= maxKmersBeforePacking)
 		{
 			pack();
 		}
@@ -113,81 +116,114 @@ public:
 			{
 				if ((existingCoverages[block][i] & 0x0F) >= 4 && (existingCoverages[block][i] >> 4) == 0)
 				{
-					result.first.insert((value << 22) + block);
+					result.first.insert((value << (prefixLength*2)) + block);
 				}
 				if ((existingCoverages[block][i] & 0x0F) == 0 && (existingCoverages[block][i] >> 4) >= 4)
 				{
-					result.second.insert((value << 22) + block);
+					result.second.insert((value << (prefixLength*2)) + block);
 				}
 			});
 		}
 		return result;
 	}
 private:
+	void mergeCoveragesToBucket(phmap::flat_hash_map<size_t, uint8_t>& addCoverages, const size_t bucketIndex, std::vector<uint64_t>& newKeysTmpArray)
+	{
+		existingKmers[bucketIndex].iterateIndicesInSortedOrder([this, &bucketIndex, &addCoverages](const size_t index, const size_t value)
+		{
+			if (addCoverages.count(value) == 0)
+			{
+				addCoverages[value] = existingCoverages[bucketIndex][index];
+			}
+			else
+			{
+				uint8_t& newCoverage = addCoverages[value];
+				uint8_t oldCoverage = existingCoverages[bucketIndex][index];
+				uint8_t hap1Coverage = (newCoverage & 0x0F) + (oldCoverage & 0x0F);
+				if (hap1Coverage > 15) hap1Coverage = 15;
+				uint8_t hap2Coverage = (newCoverage >> 4) + (oldCoverage >> 4);
+				if (hap2Coverage > 15) hap2Coverage = 15;
+				newCoverage = (hap2Coverage << 4) + hap1Coverage;
+			}
+		});
+		assert(addCoverages.size() >= existingKmers[bucketIndex].size());
+		if (addCoverages.size() > existingKmers[bucketIndex].size())
+		{
+			newKeysTmpArray.reserve(addCoverages.size());
+			for (auto pair : addCoverages)
+			{
+				newKeysTmpArray.emplace_back(pair.first);
+			}
+			std::sort(newKeysTmpArray.begin(), newKeysTmpArray.end());
+			existingKmers[bucketIndex].set(newKeysTmpArray, pow(4, (kmerSize-prefixLength)));
+			existingCoverages[bucketIndex].resize(newKeysTmpArray.size(), 0);
+			newKeysTmpArray.clear();
+		}
+		existingKmers[bucketIndex].iterateIndicesInSortedOrder([this, &bucketIndex, &addCoverages](const size_t index, const size_t value)
+		{
+			assert(addCoverages.count(value) == 1);
+			existingCoverages[bucketIndex][index] = addCoverages.at(value);
+		});
+	}
 	void pack()
 	{
 		std::cerr << "pack" << std::endl;
+		const size_t prefixMask = ((1ull << (2ull*prefixLength)) - 1);
 		if (hap1KmersNeedAdding.size() == 0 && hap2KmersNeedAdding.size() == 0) return;
-		phmap::flat_hash_map<size_t, phmap::flat_hash_map<uint64_t, uint8_t>> addCoverages;
-		for (uint64_t kmer : hap1KmersNeedAdding)
+		std::sort(hap1KmersNeedAdding.begin(), hap1KmersNeedAdding.end(), [&prefixMask](const size_t left, const size_t right) { return (left & prefixMask) < (right & prefixMask); });
+		std::sort(hap2KmersNeedAdding.begin(), hap2KmersNeedAdding.end(), [&prefixMask](const size_t left, const size_t right) { return (left & prefixMask) < (right & prefixMask); });
+		size_t lastPrefix = 0;
+		size_t hap1Index = 0;
+		size_t hap2Index = 0;
+		phmap::flat_hash_map<size_t, uint8_t> addCoverages; // keep these outside loop to reduce malloc/free, less memory fragmentation
+		std::vector<uint64_t> newKeysTmpArray; // keep these outside loop to reduce malloc/free, less memory fragmentation
+		while (hap1Index < hap1KmersNeedAdding.size() || hap2Index < hap2KmersNeedAdding.size())
 		{
-			uint64_t prefix = kmer & 0b00000000001111111111111111111111;
-			uint64_t suffix = kmer >> 22;
-			uint8_t& coverage = addCoverages[prefix][suffix];
-			if ((coverage & 0x0F) < 15)
+			size_t prefixHere;
+			if (hap2Index == hap2KmersNeedAdding.size())
 			{
-				coverage += 1;
+				assert(hap1Index < hap1KmersNeedAdding.size());
+				prefixHere = hap1KmersNeedAdding[hap1Index] & prefixMask;
 			}
+			else if (hap1Index == hap1KmersNeedAdding.size())
+			{
+				assert(hap2Index < hap2KmersNeedAdding.size());
+				prefixHere = hap2KmersNeedAdding[hap2Index] & prefixMask;
+			}
+			else
+			{
+				assert(hap1Index < hap1KmersNeedAdding.size());
+				assert(hap2Index < hap2KmersNeedAdding.size());
+				prefixHere = std::min(hap1KmersNeedAdding[hap1Index] & prefixMask, hap2KmersNeedAdding[hap2Index] & prefixMask);
+			}
+			assert(prefixHere > lastPrefix || lastPrefix == 0);
+			lastPrefix = prefixHere;
+			while (hap1Index < hap1KmersNeedAdding.size() && (hap1KmersNeedAdding[hap1Index] & prefixMask) == prefixHere)
+			{
+				uint64_t suffix = hap1KmersNeedAdding[hap1Index] >> (prefixLength*2);
+				uint8_t& coverage = addCoverages[suffix];
+				if ((coverage & 0x0F) < 15)
+				{
+					coverage += 1;
+				}
+				hap1Index += 1;
+			}
+			while (hap2Index < hap2KmersNeedAdding.size() && (hap2KmersNeedAdding[hap2Index] & prefixMask) == prefixHere)
+			{
+				uint64_t suffix = hap2KmersNeedAdding[hap2Index] >> (prefixLength*2);
+				uint8_t& coverage = addCoverages[suffix];
+				if ((coverage >> 4) < 15)
+				{
+					coverage += 0x10;
+				}
+				hap2Index += 1;
+			}
+			mergeCoveragesToBucket(addCoverages, prefixHere, newKeysTmpArray);
+			addCoverages.clear();
 		}
+		assert(addCoverages.size() == 0);
 		hap1KmersNeedAdding.clear();
-		for (uint64_t kmer : hap2KmersNeedAdding)
-		{
-			uint64_t prefix = kmer & 0b00000000001111111111111111111111;
-			uint64_t suffix = kmer >> 22;
-			uint8_t& coverage = addCoverages[prefix][suffix];
-			if ((coverage >> 4) < 15)
-			{
-				coverage += 0x10;
-			}
-		}
 		hap2KmersNeedAdding.clear();
-		size_t countAdded = 0;
-		for (auto& pair : addCoverages)
-		{
-			existingKmers[pair.first].iterateIndicesInSortedOrder([this, &pair](const size_t index, const size_t value)
-			{
-				if (pair.second.count(value) == 0)
-				{
-					pair.second[value] = existingCoverages[pair.first][index];
-				}
-				else
-				{
-					uint8_t& newCoverage = pair.second[value];
-					uint8_t oldCoverage = existingCoverages[pair.first][index];
-					uint8_t hap1Coverage = (newCoverage & 0x0F) + (oldCoverage & 0x0F);
-					if (hap1Coverage > 15) hap1Coverage = 15;
-					uint8_t hap2Coverage = (newCoverage >> 4) + (oldCoverage >> 4);
-					if (hap2Coverage > 15) hap2Coverage = 15;
-					newCoverage = (hap2Coverage << 4) + hap1Coverage;
-				}
-			});
-			std::vector<std::pair<uint64_t, uint8_t>> newValues;
-			newValues.insert(newValues.end(), pair.second.begin(), pair.second.end());
-			assert(newValues.size() >= existingKmers[pair.first].size());
-			countAdded += newValues.size() - existingKmers[pair.first].size();
-			std::sort(newValues.begin(), newValues.end());
-			std::vector<uint64_t> newKeys;
-			existingCoverages[pair.first].clear();
-			for (size_t i = 0; i < newValues.size(); i++)
-			{
-				newKeys.emplace_back(newValues[i].first);
-				existingCoverages[pair.first].emplace_back(newValues[i].second);
-			}
-			existingKmers[pair.first].set(newKeys, pow(4, (kmerSize-11)));
-			assert(existingCoverages[pair.first].size() == newValues.size());
-			assert(existingKmers[pair.first].size() == newValues.size());
-		}
-		std::cerr << "added " << countAdded << " new kmers" << std::endl;
 	}
 	size_t kmerSize;
 	std::vector<EliasFanoEncodedVector> existingKmers;
@@ -230,16 +266,17 @@ void TrioKmerCounter::initialize(const std::string& hap1File, const std::string&
 	TemporaryKmerCounterGroup temporaryCounters { k };
 	std::cerr << "start reading file " << hap1File << std::endl;
 	size_t countReads = 0;
-	FastQ::streamFastqFromFile(hap1File, false, [&temporaryCounters, k, w, &countReads](const FastQ& read)
+	size_t countSyncmers = 0;
+	FastQ::streamFastqFromFile(hap1File, false, [&temporaryCounters, k, w, &countReads, &countSyncmers](const FastQ& read)
 	{
-		iterateNSplittedStrings(read.sequence, [&temporaryCounters, k, w, &countReads](const std::string& substring)
+		iterateNSplittedStrings(read.sequence, [&temporaryCounters, k, w, &countReads, &countSyncmers](const std::string& substring)
 		{
 			countReads += 1;
 			if (countReads % 100000 == 0)
 			{
 				std::cerr << "count reads " << countReads << std::endl;
 			}
-			iterateSyncmers(substring, k, w, [&substring, &temporaryCounters, k](const size_t pos)
+			iterateSyncmers(substring, k, w, [&substring, &temporaryCounters, k, &countSyncmers](const size_t pos)
 			{
 				uint64_t kmer = 0;
 				for (size_t i = 0; i < k; i++)
@@ -253,16 +290,16 @@ void TrioKmerCounter::initialize(const std::string& hap1File, const std::string&
 	});
 	std::cerr << "start reading file " << hap2File << std::endl;
 	countReads = 0;
-	FastQ::streamFastqFromFile(hap2File, false, [&temporaryCounters, k, w, &countReads](const FastQ& read)
+	FastQ::streamFastqFromFile(hap2File, false, [&temporaryCounters, k, w, &countReads, &countSyncmers](const FastQ& read)
 	{
-		iterateNSplittedStrings(read.sequence, [&temporaryCounters, k, w, &countReads](const std::string& substring)
+		iterateNSplittedStrings(read.sequence, [&temporaryCounters, k, w, &countReads, &countSyncmers](const std::string& substring)
 		{
 			countReads += 1;
 			if (countReads % 100000 == 0)
 			{
 				std::cerr << "count reads " << countReads << std::endl;
 			}
-			iterateSyncmers(substring, k, w, [&substring, &temporaryCounters, k](const size_t pos)
+			iterateSyncmers(substring, k, w, [&substring, &temporaryCounters, k, &countSyncmers](const size_t pos)
 			{
 				uint64_t kmer = 0;
 				for (size_t i = 0; i < k; i++)
