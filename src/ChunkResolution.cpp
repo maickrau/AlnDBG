@@ -49,53 +49,33 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 	std::cerr << "splitting by length" << std::endl;
 	const double differenceFraction = 0.02;
 	const size_t differenceConstant = 50;
-	std::vector<std::vector<size_t>> lengthsPerChunk;
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
-	{
-		for (auto t : chunksPerRead[i])
-		{
-			if (NonexistantChunk(std::get<2>(t))) continue;
-			while ((std::get<2>(t) & maskUint64_t) >= lengthsPerChunk.size()) lengthsPerChunk.emplace_back();
-			lengthsPerChunk[std::get<2>(t) & maskUint64_t].emplace_back(std::get<1>(t) - std::get<0>(t));
-		}
-	}
-	std::vector<std::vector<size_t>> splitters;
-	splitters.resize(lengthsPerChunk.size());
-	iterateMultithreaded(0, lengthsPerChunk.size(), numThreads, [&lengthsPerChunk, &splitters, differenceFraction, differenceConstant](const size_t i)
-	{
-		std::sort(lengthsPerChunk[i].begin(), lengthsPerChunk[i].end());
-		splitters[i].emplace_back(0);
-		for (size_t j = 1; j < lengthsPerChunk[i].size(); j++)
-		{
-			size_t distance = lengthsPerChunk[i][j] - lengthsPerChunk[i][j-1];
-			if (distance < std::max((size_t)(lengthsPerChunk[i][j] * differenceFraction), (size_t)differenceConstant)) continue;
-			splitters[i].emplace_back((lengthsPerChunk[i][j] + lengthsPerChunk[i][j-1])/2);
-		}
-	});
-	std::vector<std::vector<size_t>> splitterToNode;
-	splitterToNode.resize(lengthsPerChunk.size());
 	size_t nextNum = 0;
-	for (size_t i = 0; i < splitters.size(); i++)
+	std::mutex resultMutex;
+	auto oldChunks = chunksPerRead;
+	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, differenceFraction, differenceConstant](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
-		for (size_t j = 0; j < splitters[i].size(); j++)
+		if (occurrencesPerChunk[i].size() == 0) return;
+		std::vector<std::pair<size_t, size_t>> lengthsAndIndicesHere;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
-			splitterToNode[i].emplace_back(nextNum);
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
+			lengthsAndIndicesHere.emplace_back(std::get<1>(t) - std::get<0>(t), j);
+		}
+		std::sort(lengthsAndIndicesHere.begin(), lengthsAndIndicesHere.end());
+		size_t clusterStart = 0;
+		for (size_t j = 1; j <= lengthsAndIndicesHere.size(); j++)
+		{
+			if (j < lengthsAndIndicesHere.size() && lengthsAndIndicesHere[j].first - lengthsAndIndicesHere[j-1].first < std::max((size_t)(lengthsAndIndicesHere[j].first * differenceFraction), (size_t)differenceConstant)) continue;
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t k = clusterStart; k < j; k++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][k].first][occurrencesPerChunk[i][k].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][k].first][occurrencesPerChunk[i][k].second]) & firstBitUint64_t) + nextNum;
+			}
 			nextNum += 1;
 		}
-	}
-	iterateMultithreaded(0, chunksPerRead.size(), numThreads, [&splitters, &splitterToNode, &chunksPerRead](const size_t i)
-	{
-		for (auto& t : chunksPerRead[i])
-		{
-			if (NonexistantChunk(std::get<2>(t))) continue;
-			assert(std::get<1>(t) > std::get<0>(t));
-			size_t distance = std::get<1>(t) - std::get<0>(t);
-			assert((std::get<2>(t) & maskUint64_t) < splitters.size());
-			size_t index = findBiggestSmallerIndex(splitters[std::get<2>(t) & maskUint64_t], distance);
-			assert(index < splitterToNode[std::get<2>(t) & maskUint64_t].size());
-			std::get<2>(t) = (std::get<2>(t) & firstBitUint64_t) + splitterToNode[std::get<2>(t) & maskUint64_t][index];
-		}
 	});
+	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
 std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, const size_t count)
@@ -167,15 +147,17 @@ std::vector<size_t> getMinHashes(const std::string& sequence, const size_t k, co
 	return result;
 }
 
-void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
+void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequenceIndex, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	assert(kmerSize <= 31);
 	size_t nextNum = 0;
 	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> endKmersToNumber;
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	std::mutex resultMutex;
+	iterateMultithreaded(0, chunksPerRead.size(), numThreads, [&sequenceIndex, &nextNum, &resultMutex, &endKmersToNumber, &chunksPerRead, kmerSize](const size_t i)
 	{
-		if (chunksPerRead[i].size() == 0) continue;
+		if (chunksPerRead[i].size() == 0) return;
 		std::string readseq = getReadSequence(sequenceIndex, i);
+		std::vector<std::pair<size_t, size_t>> keys;
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			assert(std::get<0>(chunksPerRead[i][j]) < std::get<1>(chunksPerRead[i][j]));
@@ -221,15 +203,22 @@ void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequen
 						assert(false);
 				}
 			}
-			auto key = std::make_pair(firstKmer, lastKmer);
-			if (endKmersToNumber.count(key) == 0)
-			{
-				endKmersToNumber[key] = nextNum;
-				nextNum += 1;
-			}
-			std::get<2>(chunksPerRead[i][j]) = endKmersToNumber.at(key) + firstBitUint64_t;
+			keys.emplace_back(firstKmer, lastKmer);
 		}
-	}
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				auto key = keys[j];
+				if (endKmersToNumber.count(key) == 0)
+				{
+					endKmersToNumber[key] = nextNum;
+					nextNum += 1;
+				}
+				std::get<2>(chunksPerRead[i][j]) = endKmersToNumber.at(key) + firstBitUint64_t;
+			}
+		}
+	});
 }
 
 void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
