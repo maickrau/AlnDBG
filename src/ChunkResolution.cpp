@@ -8,6 +8,7 @@
 #include "SequenceHelper.h"
 #include "KmerIterator.h"
 #include "CanonHelper.h"
+#include "TransitiveClosure.h"
 
 size_t findBiggestSmallerIndex(const std::vector<size_t>& nums, const size_t value)
 {
@@ -264,11 +265,13 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 		}
 		std::vector<std::vector<size_t>> countsPerOccurrence;
 		countsPerOccurrence.resize(occurrencesPerChunk[i].size());
+		size_t maxDistance = 0;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 			assert(!NonexistantChunk(std::get<2>(t)));
 			std::string chunkSequence = getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
+			maxDistance = std::max(maxDistance, chunkSequence.size());
 			assert(chunkSequence.size() == std::get<1>(t)-std::get<0>(t)+1);
 			countsPerOccurrence[j].resize(4);
 			for (size_t k = 0; k < chunkSequence.size(); k++)
@@ -292,33 +295,24 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 				}
 			}
 		}
-		std::vector<size_t> parent;
-		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		maxDistance *= mismatchFraction;
+		maxDistance = std::max(maxDistance, mismatchFloor);
+		std::vector<size_t> parent = getFastTransitiveClosure(countsPerOccurrence.size(), maxDistance, [&countsPerOccurrence](const size_t left, const size_t right, const size_t maxDist)
 		{
-			parent.emplace_back(j);
-		}
-		for (size_t j = 1; j < occurrencesPerChunk[i].size(); j++)
-		{
-			for (size_t k = 0; k < j; k++)
+			size_t result = 0;
+			for (size_t c = 0; c < 4; c++)
 			{
-				size_t maxEdits = std::min(std::get<1>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) - std::get<0>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]), std::get<1>(chunksPerRead[occurrencesPerChunk[i][k].first][occurrencesPerChunk[i][k].second]) - std::get<0>(chunksPerRead[occurrencesPerChunk[i][k].first][occurrencesPerChunk[i][k].second]));
-				maxEdits *= mismatchFraction;
-				maxEdits = std::max(maxEdits, mismatchFloor);
-				size_t edits = 0;
-				for (size_t c = 0; c < 4; c++)
+				if (countsPerOccurrence[left][c] > countsPerOccurrence[right][c])
 				{
-					if (countsPerOccurrence[j][c] > countsPerOccurrence[k][c])
-					{
-						edits += countsPerOccurrence[j][c] - countsPerOccurrence[k][c];
-					}
-					else
-					{
-						edits += countsPerOccurrence[k][c] - countsPerOccurrence[j][c];
-					}
+					result += countsPerOccurrence[left][c] - countsPerOccurrence[right][c];
 				}
-				if (edits < maxEdits) merge(parent, j, k);
+				else
+				{
+					result += countsPerOccurrence[right][c] - countsPerOccurrence[left][c];
+				}
 			}
-		}
+			return result;
+		});
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
 			phmap::flat_hash_map<size_t, size_t> keyToNode;
