@@ -19,8 +19,86 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 	size_t totalSplittedTo = 0;
 	std::mutex resultMutex;
 	auto oldChunks = chunksPerRead;
-	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &totalSplitted, &totalSplittedTo, mismatchFloor](const size_t i, std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	std::vector<bool> canonical = getCanonicalChunks(chunksPerRead);
+	std::vector<std::vector<std::pair<size_t, size_t>>> occurrencesPerChunk;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			auto t = chunksPerRead[i][j];
+			if (NonexistantChunk(std::get<2>(t))) continue;
+			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
+			if ((std::get<2>(t) & maskUint64_t) >= occurrencesPerChunk.size()) occurrencesPerChunk.resize((std::get<2>(t) & maskUint64_t)+1);
+			occurrencesPerChunk[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
+		}
+	}
+	std::vector<size_t> iterationOrder;
+	for (size_t i = 0; i < occurrencesPerChunk.size(); i++)
+	{
+		if (!canonical[i]) continue;
+		iterationOrder.emplace_back(i);
+	}
+	std::sort(iterationOrder.begin(), iterationOrder.end(), [&occurrencesPerChunk](size_t left, size_t right) { return occurrencesPerChunk[left].size() > occurrencesPerChunk[right].size(); });
+	size_t firstSmall = iterationOrder.size();
+	for (size_t i = 0; i < iterationOrder.size(); i++)
+	{
+		if (occurrencesPerChunk[iterationOrder[i]].size() > 10000) continue;
+		firstSmall = i;
+		break;
+	}
+	for (size_t iterationIndex = 0; iterationIndex < firstSmall; iterationIndex++)
+	{
+		const size_t i = iterationOrder[iterationIndex];
+		std::cerr << "begin big chunk with coverage " << occurrencesPerChunk[i].size() << std::endl;
+		auto startTime = getTime();
+		std::sort(occurrencesPerChunk[i].begin(), occurrencesPerChunk[i].end(), [&chunksPerRead](const auto left, const auto right)
+		{
+			auto tleft = chunksPerRead[left.first][left.second];
+			auto tright = chunksPerRead[right.first][right.second];
+			return (std::get<1>(tleft) - std::get<0>(tleft)) < (std::get<1>(tright) - std::get<0>(tright));
+		});
+		std::vector<std::string> sequences;
+		sequences.reserve(occurrencesPerChunk[i].size());
+		size_t longestLength = 0;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			assert(!NonexistantChunk(std::get<2>(t)));
+			sequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
+			longestLength = std::max(longestLength, sequences.back().size());
+		}
+		std::vector<size_t> parent = getFastTransitiveClosureMultithread(sequences.size(), std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), numThreads, [&sequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[i], sequences[j], maxDist); });
+		phmap::flat_hash_map<size_t, size_t> parentToCluster;
+		for (size_t j = 0; j < parent.size(); j++)
+		{
+			find(parent, j);
+		}
+		size_t nextCluster = 0;
+		for (size_t j = 0; j < parent.size(); j++)
+		{
+			if (parent[j] != j) continue;
+			parentToCluster[j] = nextCluster;
+			nextCluster += 1;
+		}
+		auto endTime = getTime();
+		assert(nextCluster >= 1);
+		{
+			if (nextCluster > 1)
+			{
+				totalSplitted += 1;
+				totalSplittedTo += nextCluster;
+			}
+			std::cerr << "split big chunk with coverage " << occurrencesPerChunk[i].size() << " into " << nextCluster << " chunks time " << formatTime(startTime, endTime) << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = nextNum + parentToCluster.at(parent[j]) + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
+			}
+			nextNum += nextCluster;
+		}
+	}
+	iterateMultithreaded(firstSmall, iterationOrder.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &totalSplitted, &totalSplittedTo, &iterationOrder, &occurrencesPerChunk, mismatchFloor](const size_t iterationIndex)
+	{
+		const size_t i = iterationOrder[iterationIndex];
 		if (occurrencesPerChunk[i].size() < 1000)
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
