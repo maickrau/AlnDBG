@@ -19,7 +19,7 @@ std::vector<size_t> getFastTransitiveClosure(const size_t itemCount, const size_
 	for (size_t i = 0; i < itemCount; i++)
 	{
 		bool found = false;
-		for (size_t j = 0; j < clusterExample.size(); j++)
+		for (size_t j = clusterExample.size()-1; j < clusterExample.size(); j--)
 		{
 			size_t distance = distanceFunction(i, clusterExample[j], maxDistance);
 			if (distance <= maxDistance)

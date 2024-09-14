@@ -19,7 +19,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 	size_t totalSplittedTo = 0;
 	std::mutex resultMutex;
 	auto oldChunks = chunksPerRead;
-	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &totalSplitted, &totalSplittedTo, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &totalSplitted, &totalSplittedTo, mismatchFloor](const size_t i, std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		if (occurrencesPerChunk[i].size() < 1000)
 		{
@@ -32,7 +32,17 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 			nextNum += 1;
 			return;
 		}
+		{
+			std::lock_guard<std::mutex> lock { resultMutex };
+			std::cerr << "begin chunk with coverage " << occurrencesPerChunk[i].size() << std::endl;
+		}
 		auto startTime = getTime();
+		std::sort(occurrencesPerChunk[i].begin(), occurrencesPerChunk[i].end(), [&chunksPerRead](const auto left, const auto right)
+		{
+			auto tleft = chunksPerRead[left.first][left.second];
+			auto tright = chunksPerRead[right.first][right.second];
+			return (std::get<1>(tleft) - std::get<0>(tleft)) < (std::get<1>(tright) - std::get<0>(tright));
+		});
 		std::vector<std::string> sequences;
 		sequences.reserve(occurrencesPerChunk[i].size());
 		size_t longestLength = 0;
@@ -43,7 +53,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 			sequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
 			longestLength = std::max(longestLength, sequences.back().size());
 		}
-		std::vector<size_t> parent = getFastTransitiveClosure(sequences.size(), std::max(longestLength * mismatchFraction, mismatchFraction), [&sequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[i], sequences[j], maxDist); });
+		std::vector<size_t> parent = getFastTransitiveClosure(sequences.size(), std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), [&sequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[i], sequences[j], maxDist); });
 		phmap::flat_hash_map<size_t, size_t> parentToCluster;
 		for (size_t j = 0; j < parent.size(); j++)
 		{
@@ -65,7 +75,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 				totalSplitted += 1;
 				totalSplittedTo += nextCluster;
 			}
-			// std::cerr << "split chunk with coverage " << occurrencesPerChunk[i].size() << " into " << nextCluster << " chunks time " << formatTime(startTime, endTime) << std::endl;
+			std::cerr << "split chunk with coverage " << occurrencesPerChunk[i].size() << " into " << nextCluster << " chunks time " << formatTime(startTime, endTime) << std::endl;
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
 			{
 				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = nextNum + parentToCluster.at(parent[j]) + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);

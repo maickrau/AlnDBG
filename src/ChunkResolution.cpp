@@ -66,13 +66,14 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 		size_t clusterStart = 0;
 		for (size_t j = 1; j <= lengthsAndIndicesHere.size(); j++)
 		{
-			if (j < lengthsAndIndicesHere.size() && lengthsAndIndicesHere[j].first - lengthsAndIndicesHere[j-1].first < std::max((size_t)(lengthsAndIndicesHere[j].first * differenceFraction), (size_t)differenceConstant)) continue;
+			if (j < lengthsAndIndicesHere.size() && lengthsAndIndicesHere[j].first - lengthsAndIndicesHere[j-1].first < std::max((size_t)(lengthsAndIndicesHere[j-1].first * differenceFraction), (size_t)differenceConstant)) continue;
 			std::lock_guard<std::mutex> lock { resultMutex };
 			for (size_t k = clusterStart; k < j; k++)
 			{
-				std::get<2>(chunksPerRead[occurrencesPerChunk[i][k].first][occurrencesPerChunk[i][k].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][k].first][occurrencesPerChunk[i][k].second]) & firstBitUint64_t) + nextNum;
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][lengthsAndIndicesHere[k].second].first][occurrencesPerChunk[i][lengthsAndIndicesHere[k].second].second]) = (std::get<2>(chunksPerRead[occurrencesPerChunk[i][lengthsAndIndicesHere[k].second].first][occurrencesPerChunk[i][lengthsAndIndicesHere[k].second].second]) & firstBitUint64_t) + nextNum;
 			}
 			nextNum += 1;
+			clusterStart = j;
 		}
 	});
 	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
