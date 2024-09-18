@@ -167,6 +167,10 @@ std::string getConsensusFromSolidKmers(const phmap::flat_hash_map<std::string, s
 		{
 			result += stringsWithMaxCount[0];
 		}
+		else if (maxCount == 1 && stringsWithMaxCount.size() >= 50)
+		{
+			result += stringsWithMaxCount[0];
+		}
 		else
 		{
 			result += pickMostCentralString(stringsWithMaxCount, pieceCounts[i]);
