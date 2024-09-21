@@ -164,13 +164,15 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 				size_t i, j;
 				{
 					std::lock_guard<std::mutex> lock { resultMutex };
-					if (chunki == clusterAdditionals.size()) break;
+					if (chunki+1 == clusterAdditionals.size()) break;
+					assert(chunkj < clusterAdditionals.size());
 					i = clusterOrder[chunki];
 					j = clusterOrder[chunkj];
 					chunkj += 1;
 					if (chunkj == clusterAdditionals.size())
 					{
 						chunki += 1;
+						if (chunki+1 == clusterAdditionals.size()) break;
 						chunkj = chunki+1;
 					}
 					if (find(parent, clusterExample[i]) == find(parent, clusterExample[j])) continue;
