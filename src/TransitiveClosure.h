@@ -145,61 +145,82 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 		}
 	});
 	assert(clusterExample.size() >= 1);
-	size_t maxPairs = (clusterExample.size()-1)*clusterExample.size()/2;
-	iterateMultithreaded(0, (maxPairs+chunkSize-1)/chunkSize, numThreads, [&resultMutex, &clusterExample, &clusterAdditionals, &clusterMaxDistance, &parent, distanceFunction, maxDistance, maxPairs](const size_t blockindex)
+	std::vector<size_t> clusterOrder;
+	for (size_t i = 0; i < clusterExample.size(); i++)
 	{
-		for (size_t index = blockindex * chunkSize; index < blockindex*chunkSize+chunkSize && index < maxPairs; index++)
+		clusterOrder.emplace_back(i);
+	}
+	std::sort(clusterOrder.begin(), clusterOrder.end(), [&clusterAdditionals](size_t left, size_t right) { return clusterAdditionals[left].size() > clusterAdditionals[right].size(); });
+	size_t maxPairs = (clusterExample.size()-1)*clusterExample.size()/2;
+	std::vector<std::thread> threads;
+	size_t chunki = 0;
+	size_t chunkj = 1;
+	for (size_t threadi = 0; threadi < numThreads; threadi++)
+	{
+		threads.emplace_back([&chunki, &chunkj, &resultMutex, &clusterExample, &clusterAdditionals, &clusterMaxDistance, &clusterOrder, &parent, distanceFunction, maxDistance, maxPairs]()
 		{
-			size_t i = ceil(sqrt(1 + 8 * (index+1))/2.0 + 0.5) - 1;
-			assert(index >= (i-1)*i/2);
-			size_t j = index - (i-1)*i/2;
-			assert(j < i);
+			while (true)
 			{
-				std::lock_guard<std::mutex> lock { resultMutex };
-				// std::cerr << "check i " << i << " j " << j << " / " << clusterExample.size() << std::endl;
-				if (find(parent, clusterExample[i]) == find(parent, clusterExample[j])) continue;
-			}
-			size_t distance = distanceFunction(clusterExample[i], clusterExample[j], maxDistance + clusterMaxDistance[i] + clusterMaxDistance[j]);
-			if (distance > maxDistance + clusterMaxDistance[i] + clusterMaxDistance[j]) continue;
-			if (distance <= maxDistance)
-			{
-				std::lock_guard<std::mutex> lock { resultMutex };
-				merge(parent, clusterExample[i], clusterExample[j]);
-				continue;
-			}
-			bool found = false;
-			for (size_t k : clusterAdditionals[i])
-			{
-				if (distanceFunction(k, clusterExample[j], maxDistance) > maxDistance) continue;
-				std::lock_guard<std::mutex> lock { resultMutex };
-				merge(parent, k, clusterExample[j]);
-				found = true;
-				break;
-			}
-			if (found) continue;
-			for (size_t l : clusterAdditionals[j])
-			{
-				if (distanceFunction(l, clusterExample[i], maxDistance) > maxDistance) continue;
-				std::lock_guard<std::mutex> lock { resultMutex };
-				merge(parent, l, clusterExample[i]);
-				found = true;
-				break;
-			}
-			if (found) continue;
-			for (size_t k : clusterAdditionals[i])
-			{
-				for (size_t l : clusterAdditionals[j])
+				size_t i, j;
 				{
-					if (distanceFunction(k, l, maxDistance) > maxDistance) continue;
 					std::lock_guard<std::mutex> lock { resultMutex };
-					merge(parent, k, l);
+					if (chunki == clusterAdditionals.size()) break;
+					i = clusterOrder[chunki];
+					j = clusterOrder[chunkj];
+					chunkj += 1;
+					if (chunkj == clusterAdditionals.size())
+					{
+						chunki += 1;
+						chunkj = chunki+1;
+					}
+					if (find(parent, clusterExample[i]) == find(parent, clusterExample[j])) continue;
+				}
+				size_t distance = distanceFunction(clusterExample[i], clusterExample[j], maxDistance + clusterMaxDistance[i] + clusterMaxDistance[j]);
+				if (distance > maxDistance + clusterMaxDistance[i] + clusterMaxDistance[j]) continue;
+				if (distance <= maxDistance)
+				{
+					std::lock_guard<std::mutex> lock { resultMutex };
+					merge(parent, clusterExample[i], clusterExample[j]);
+					continue;
+				}
+				bool found = false;
+				for (size_t k : clusterAdditionals[i])
+				{
+					if (distanceFunction(k, clusterExample[j], maxDistance) > maxDistance) continue;
+					std::lock_guard<std::mutex> lock { resultMutex };
+					merge(parent, k, clusterExample[j]);
 					found = true;
 					break;
 				}
-				if (found) break;
+				if (found) continue;
+				for (size_t l : clusterAdditionals[j])
+				{
+					if (distanceFunction(l, clusterExample[i], maxDistance) > maxDistance) continue;
+					std::lock_guard<std::mutex> lock { resultMutex };
+					merge(parent, l, clusterExample[i]);
+					found = true;
+					break;
+				}
+				if (found) continue;
+				for (size_t k : clusterAdditionals[i])
+				{
+					for (size_t l : clusterAdditionals[j])
+					{
+						if (distanceFunction(k, l, maxDistance) > maxDistance) continue;
+						std::lock_guard<std::mutex> lock { resultMutex };
+						merge(parent, k, l);
+						found = true;
+						break;
+					}
+					if (found) break;
+				}
 			}
-		}
-	});
+		});
+	}
+	for (size_t threadi = 0; threadi < numThreads; threadi++)
+	{
+		threads[threadi].join();
+	}
 	return parent;
 }
 
