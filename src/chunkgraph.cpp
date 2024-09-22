@@ -1023,8 +1023,8 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			// splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
+			// std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 1000, 3000, kmerSize);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			resolveTinyNodesRecklessly(chunksPerRead, numThreads, kmerSize);

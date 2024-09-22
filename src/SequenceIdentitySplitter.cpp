@@ -12,7 +12,7 @@
 
 void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
-	std::cerr << "splitting roughly by sequence identity" << std::endl;
+	std::cerr << "splitting by sequence identity" << std::endl;
 	const size_t mismatchFloor = 10;
 	size_t nextNum = 0;
 	size_t totalSplitted = 0;
@@ -42,7 +42,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 	size_t firstSmall = iterationOrder.size();
 	for (size_t i = 0; i < iterationOrder.size(); i++)
 	{
-		if (occurrencesPerChunk[iterationOrder[i]].size() > 10000) continue;
+		if (occurrencesPerChunk[iterationOrder[i]].size() > 1000) continue;
 		firstSmall = i;
 		break;
 	}
@@ -67,7 +67,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 			sequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
 			longestLength = std::max(longestLength, sequences.back().size());
 		}
-		std::vector<size_t> parent = getFastTransitiveClosureMultithread(sequences.size(), std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), numThreads, [&sequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[i], sequences[j], maxDist); });
+		std::vector<size_t> parent = getFastTransitiveClosureMultithread(sequences.size(), std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), numThreads, [&sequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[i], sequences[j], maxDist); }, [&sequences, mismatchFloor](const size_t i, const size_t j) { return std::max((size_t)(std::min(sequences[i].size(), sequences[j].size()) * mismatchFraction), mismatchFloor); });
 		phmap::flat_hash_map<size_t, size_t> parentToCluster;
 		for (size_t j = 0; j < parent.size(); j++)
 		{
@@ -99,7 +99,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 	iterateMultithreaded(firstSmall, iterationOrder.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &totalSplitted, &totalSplittedTo, &iterationOrder, &occurrencesPerChunk, mismatchFloor](const size_t iterationIndex)
 	{
 		const size_t i = iterationOrder[iterationIndex];
-		if (occurrencesPerChunk[i].size() < 1000)
+		if (occurrencesPerChunk[i].size() < 2)
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
 			// std::cerr << "skip chunk with coverage " << occurrencesPerChunk[i].size() << std::endl;
@@ -131,7 +131,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 			sequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
 			longestLength = std::max(longestLength, sequences.back().size());
 		}
-		std::vector<size_t> parent = getFastTransitiveClosure(sequences.size(), std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), [&sequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[i], sequences[j], maxDist); });
+		std::vector<size_t> parent = getFastTransitiveClosure(sequences.size(), std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), [&sequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[i], sequences[j], maxDist); }, [&sequences, mismatchFloor](const size_t i, const size_t j) { return std::max((size_t)(std::min(sequences[i].size(), sequences[j].size()) * mismatchFraction), mismatchFloor); });
 		phmap::flat_hash_map<size_t, size_t> parentToCluster;
 		for (size_t j = 0; j < parent.size(); j++)
 		{
@@ -161,7 +161,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 			nextNum += nextCluster;
 		}
 	});
-	std::cerr << "rough sequence identity splitting splitted " << totalSplitted << " chunks to " << totalSplittedTo << " chunks" << std::endl;
+	std::cerr << "rough identity splitting splitted " << totalSplitted << " chunks to " << totalSplittedTo << " chunks" << std::endl;
 	chunksPerRead = extrapolateCanonInformation(oldChunks, chunksPerRead);
 }
 
