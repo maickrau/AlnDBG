@@ -123,6 +123,7 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 					std::lock_guard<std::mutex> lock { resultMutex };
 					if (j == clusterExample.size()) break;
 					clusterCenterIndex = clusterExample[j];
+					if (clusterAdditionals[j].size() > 500) continue;
 				}
 				size_t distance = distanceFunction(i, clusterCenterIndex, maxDistance);
 				if (distance <= maxDistance)
