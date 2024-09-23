@@ -122,7 +122,7 @@ std::vector<size_t> getFastTransitiveClosure(const size_t itemCount, const size_
 template <typename F, typename F2>
 std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, const size_t maxDistance, const size_t numThreads, F distanceFunction, F2 allowedPairwiseDistanceFunction)
 {
-	const size_t chunkSize = 500;
+	const size_t chunkSize = 100;
 	std::vector<size_t> parent;
 	parent.resize(itemCount);
 	for (size_t i = 0; i < itemCount; i++)
