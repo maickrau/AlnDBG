@@ -232,7 +232,7 @@ void iterateMinimizers(const std::string& str, const size_t kmerSize, const size
 	assert(lastCallbackPos == std::get<0>(window[0]));
 	for (size_t j = 1; j < window.size(); j++)
 	{
-		if (std::get<1>(window[j]) == std::get<0>(window[j]))
+		if (std::get<1>(window[j]) == std::get<1>(window[0]))
 		{
 			assert(std::get<0>(window[j]) > lastCallbackPos);
 			callback(std::get<0>(window[j]));
