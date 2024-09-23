@@ -1320,7 +1320,10 @@ int main(int argc, char** argv)
 		std::cerr << "reading from file " << file << std::endl;
 		readFilesAndAddToSequenceIndex(file, sequenceIndex, readBasepairLengths, numThreads);
 	}
-	sequenceIndex.removeConstructionVariables();
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+	std::cerr << "postprocessing sequence index" << std::endl;
+	sequenceIndex.removeConstructionVariables(numThreads);
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	size_t lastReal = readBasepairLengths.size();
 	for (size_t i = 0; i < lastReal; i++)
 	{
