@@ -1353,6 +1353,35 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			chunksNeedProcessing[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
 		}
 	}
+	{
+		std::vector<bool> palindrome;
+		assert((chunksPerRead.size() % 2) == 0);
+		for (size_t i = 0; i < chunksPerRead.size()/2; i++)
+		{
+			size_t otheri = i + chunksPerRead.size()/2;
+			assert(chunksPerRead[i].size() == chunksPerRead[otheri].size());
+			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+			{
+				size_t otherj = chunksPerRead[otheri].size()-1-j;
+				assert(std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[otheri][otherj]) - std::get<0>(chunksPerRead[otheri][otherj]));
+				assert(NonexistantChunk(std::get<2>(chunksPerRead[i][j])) == NonexistantChunk(std::get<2>(chunksPerRead[otheri][otherj])));
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+				while ((std::get<2>(chunksPerRead[i][j]) & maskUint64_t) <= palindrome.size()) palindrome.push_back(false);
+				if (std::get<2>(chunksPerRead[i][j]) == std::get<2>(chunksPerRead[otheri][otherj]))
+				{
+					palindrome[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = true;
+				}
+			}
+		}
+		assert(palindrome.size() <= chunksNeedProcessing.size());
+		for (size_t i = palindrome.size()-1; i < palindrome.size(); i++)
+		{
+			if (!palindrome[i]) continue;
+			std::cerr << "skip palindromic chunk id " << i << " with coverage " << chunksNeedProcessing[i].size() << std::endl;
+			std::swap(chunksDoneProcessing.back(), chunksNeedProcessing[i]);
+			chunksNeedProcessing.pop_back();
+		}
+	}
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
 	auto oldChunks = chunksPerRead;

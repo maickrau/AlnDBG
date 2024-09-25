@@ -1066,19 +1066,19 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 6:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			splitPerPhasingKmersWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeStage(7, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeStage(7, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 7:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			splitPerNearestNeighborPhasing(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			splitPerPhasingKmersWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			resolveTinyNodesRecklessly(chunksPerRead, numThreads, kmerSize);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeStage(8, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeStage(8, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 8:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
