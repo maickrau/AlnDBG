@@ -1366,7 +1366,8 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				assert(std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[otheri][otherj]) - std::get<0>(chunksPerRead[otheri][otherj]));
 				assert(NonexistantChunk(std::get<2>(chunksPerRead[i][j])) == NonexistantChunk(std::get<2>(chunksPerRead[otheri][otherj])));
 				if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
-				while ((std::get<2>(chunksPerRead[i][j]) & maskUint64_t) <= palindrome.size()) palindrome.push_back(false);
+				if (!canonical[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
+				while ((std::get<2>(chunksPerRead[i][j]) & maskUint64_t) >= palindrome.size()) palindrome.push_back(false);
 				if (std::get<2>(chunksPerRead[i][j]) == std::get<2>(chunksPerRead[otheri][otherj]))
 				{
 					palindrome[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = true;
@@ -1374,12 +1375,31 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			}
 		}
 		assert(palindrome.size() <= chunksNeedProcessing.size());
-		for (size_t i = palindrome.size()-1; i < palindrome.size(); i++)
+		for (size_t i = palindrome.size()-1; i < palindrome.size(); i--)
 		{
 			if (!palindrome[i]) continue;
 			std::cerr << "skip palindromic chunk id " << i << " with coverage " << chunksNeedProcessing[i].size() << std::endl;
+			chunksDoneProcessing.emplace_back();
 			std::swap(chunksDoneProcessing.back(), chunksNeedProcessing[i]);
+			std::swap(chunksNeedProcessing[i], chunksNeedProcessing.back());
 			chunksNeedProcessing.pop_back();
+		}
+	}
+	for (size_t i = chunksNeedProcessing.size()-1; i < chunksNeedProcessing.size(); i--)
+	{
+		if (chunksNeedProcessing[i].size() == 0)
+		{
+			std::swap(chunksNeedProcessing[i], chunksNeedProcessing.back());
+			chunksNeedProcessing.pop_back();
+			continue;
+		}
+		if (chunksNeedProcessing[i].size() < 10 || chunksNeedProcessing[i].size() < 2*minSolidBaseCoverage)
+		{
+			chunksDoneProcessing.emplace_back();
+			std::swap(chunksDoneProcessing.back(), chunksNeedProcessing[i]);
+			std::swap(chunksNeedProcessing[i], chunksNeedProcessing.back());
+			chunksNeedProcessing.pop_back();
+			continue;
 		}
 	}
 	// biggest on top so starts processing first
