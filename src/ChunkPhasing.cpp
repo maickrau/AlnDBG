@@ -1331,6 +1331,65 @@ std::vector<std::vector<size_t>> tryPairPhasingGroupSplitting(const std::vector<
 	return result;
 }
 
+void checkAndFixPalindromicChunk(std::vector<std::vector<size_t>>& clusters, const std::vector<std::pair<size_t, size_t>>& chunkBeingDone, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	if (clusters.size() == 1) return;
+	phmap::flat_hash_map<size_t, size_t> clusterReverse;
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> chunkInCluster;
+	for (size_t i = 0; i < clusters.size(); i++)
+	{
+		for (size_t j : clusters[i])
+		{
+			assert(j < chunkBeingDone.size());
+			std::pair<size_t, size_t> chunk = chunkBeingDone[j];
+			chunkInCluster[chunk] = i;
+		}
+	}
+	bool chunksConsistent = true;
+	for (size_t i = 0; i < clusters.size(); i++)
+	{
+		for (size_t j : clusters[i])
+		{
+			assert(j < chunkBeingDone.size());
+			std::pair<size_t, size_t> chunk = chunkBeingDone[j];
+			std::pair<size_t, size_t> reverseChunk = chunk;
+			if (chunk.first >= chunksPerRead.size() / 2)
+			{
+				reverseChunk.first += chunksPerRead.size() / 2;
+			}
+			else
+			{
+				reverseChunk.first -= chunksPerRead.size() / 2;
+			}
+			reverseChunk.second = chunksPerRead[chunk.first].size()-1-chunk.second;
+			assert(chunkInCluster.count(reverseChunk) == 1);
+			if (clusterReverse.count(i) == 0)
+			{
+				clusterReverse[i] = chunkInCluster.at(reverseChunk);
+			}
+			else if (clusterReverse.at(i) != chunkInCluster.at(reverseChunk))
+			{
+				chunksConsistent = false;
+				break;
+			}
+		}
+		if (!chunksConsistent) break;
+	}
+	if (!chunksConsistent)
+	{
+		std::cerr << "clusters not palindrome-consistent\n";
+		for (size_t i = 1; i < clusters.size(); i++)
+		{
+			clusters[0].insert(clusters[0].end(), clusters[i].begin(), clusters[i].end());
+		}
+		clusters.resize(1);
+	}
+	else
+	{
+		std::cerr << "clusters are palindrome-consistent\n";
+	}
+}
+
 void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	const size_t minSolidBaseCoverage = 10;
@@ -1351,38 +1410,6 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			if (!canonical[std::get<2>(t) & maskUint64_t]) continue;
 			if ((std::get<2>(t) & maskUint64_t) >= chunksNeedProcessing.size()) chunksNeedProcessing.resize((std::get<2>(t) & maskUint64_t)+1);
 			chunksNeedProcessing[(std::get<2>(t) & maskUint64_t)].emplace_back(i, j);
-		}
-	}
-	{
-		std::vector<bool> palindrome;
-		assert((chunksPerRead.size() % 2) == 0);
-		for (size_t i = 0; i < chunksPerRead.size()/2; i++)
-		{
-			size_t otheri = i + chunksPerRead.size()/2;
-			assert(chunksPerRead[i].size() == chunksPerRead[otheri].size());
-			for (size_t j = 0; j < chunksPerRead[i].size(); j++)
-			{
-				size_t otherj = chunksPerRead[otheri].size()-1-j;
-				assert(std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[otheri][otherj]) - std::get<0>(chunksPerRead[otheri][otherj]));
-				assert(NonexistantChunk(std::get<2>(chunksPerRead[i][j])) == NonexistantChunk(std::get<2>(chunksPerRead[otheri][otherj])));
-				if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
-				if (!canonical[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
-				while ((std::get<2>(chunksPerRead[i][j]) & maskUint64_t) >= palindrome.size()) palindrome.push_back(false);
-				if (std::get<2>(chunksPerRead[i][j]) == std::get<2>(chunksPerRead[otheri][otherj]))
-				{
-					palindrome[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = true;
-				}
-			}
-		}
-		assert(palindrome.size() <= chunksNeedProcessing.size());
-		for (size_t i = palindrome.size()-1; i < palindrome.size(); i--)
-		{
-			if (!palindrome[i]) continue;
-			std::cerr << "skip palindromic chunk id " << i << " with coverage " << chunksNeedProcessing[i].size() << std::endl;
-			chunksDoneProcessing.emplace_back();
-			std::swap(chunksDoneProcessing.back(), chunksNeedProcessing[i]);
-			std::swap(chunksNeedProcessing[i], chunksNeedProcessing.back());
-			chunksNeedProcessing.pop_back();
 		}
 	}
 	for (size_t i = chunksNeedProcessing.size()-1; i < chunksNeedProcessing.size(); i--)
@@ -1457,6 +1484,26 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
+			bool chunkIsPalindrome = false;
+			{
+				phmap::flat_hash_set<std::pair<size_t, size_t>> extantChunks { chunkBeingDone.begin(), chunkBeingDone.end() };
+				for (auto pair : extantChunks)
+				{
+					if (pair.first >= chunksPerRead.size()/2) continue;
+					size_t otheri = pair.first + chunksPerRead.size()/2;
+					size_t otherj = chunksPerRead[pair.first].size()-1-pair.second;
+					if (extantChunks.count(std::make_pair(otheri, otherj)) == 1)
+					{
+						chunkIsPalindrome = true;
+						break;
+					}
+				}
+			}
+			if (chunkIsPalindrome)
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				std::cerr << "SNP transitive closure clustering chunk with coverage " << chunkBeingDone.size() << " is palindrome" << std::endl;
+			}
 			std::vector<std::vector<uint8_t>> unfilteredReadFakeMSABases;
 			size_t totalMismatches = 0;
 			size_t sequenceLengthSum = 0;
@@ -1481,35 +1528,42 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			double estimatedAverageErrorRate = (double)totalMismatches/(double)sequenceLengthSum; // not really error rate, actually error+divergence rate
 			assert(unfilteredReadFakeMSABases.size() == chunkBeingDone.size());
 			std::vector<std::vector<size_t>> clusters = trySNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+			if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 			assert(clusters.size() >= 1);
 			if (clusters.size() == 1)
 			{
 				clusters = tryOccurrenceLinkageSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 			}
 			if (clusters.size() == 1)
 			{
 				clusters = tryMultinomiallySignificantSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 			}
 			if (clusters.size() == 1)
 			{
 				clusters = tryPairPhasingGroupSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 			}
 			if (clusters.size() == 1)
 			{
 				clusters = tryTripletSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 			}
 			if (clusters.size() == 1 && chunkBeingDone.size() > 1000)
 			{
 				clusters = tryMultinomiallySignificantSNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 			}
 			if (clusters.size() == 1 && chunkBeingDone.size() > 1000)
 			{
 				clusters = trySNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 			}
 			auto endTime = getTime();
@@ -1526,12 +1580,71 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				}
 			}
 			assert(chunkResult.size() >= 1);
+			bool removedNoncanonicals = false;
+			if (chunkIsPalindrome)
+			{
+				std::vector<size_t> clusterReverse;
+				clusterReverse.resize(clusters.size(), std::numeric_limits<size_t>::max());
+				phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> chunkInCluster;
+				for (size_t cluster = 0; cluster < clusters.size(); cluster++)
+				{
+					for (size_t j : clusters[cluster])
+					{
+						std::pair<size_t, size_t> chunk = chunkBeingDone[j];
+						chunkInCluster[chunk] = cluster;
+					}
+				}
+				for (size_t cluster = 0; cluster < clusters.size(); cluster++)
+				{
+					for (size_t j : clusters[cluster])
+					{
+						std::pair<size_t, size_t> chunk = chunkBeingDone[j];
+						std::pair<size_t, size_t> reverseChunk = chunk;
+						if (chunk.first >= chunksPerRead.size()/2)
+						{
+							reverseChunk.first -= chunksPerRead.size()/2;
+						}
+						else
+						{
+							reverseChunk.first += chunksPerRead.size()/2;
+						}
+						reverseChunk.second = chunksPerRead[chunk.first].size()-1-chunk.second;
+						assert(chunkInCluster.count(reverseChunk) == 1);
+						assert(clusterReverse[cluster] == std::numeric_limits<size_t>::max() || clusterReverse[cluster] == chunkInCluster.at(reverseChunk));
+						clusterReverse[cluster] = chunkInCluster.at(reverseChunk);
+					}
+				}
+				std::vector<size_t> noncanonicalClusters;
+				for (size_t j = 0; j < clusters.size(); j++)
+				{
+					assert(clusterReverse[j] != std::numeric_limits<size_t>::max());
+					if (clusterReverse[j] > j) noncanonicalClusters.emplace_back(j);
+				}
+				if (noncanonicalClusters.size() >= 1)
+				{
+					for (size_t j = 1; j < noncanonicalClusters.size(); j++)
+					{
+						assert(noncanonicalClusters[j] < noncanonicalClusters[j-1]);
+					}
+					removedNoncanonicals = true;
+					std::lock_guard<std::mutex> lock { resultMutex };
+					std::cerr << "SNP transitive closure clustering discard noncanonical clusters from chunk with coverage " << chunkBeingDone.size() << ", count noncanonicals " << noncanonicalClusters.size() << std::endl;
+					for (size_t j : noncanonicalClusters)
+					{
+						chunksDoneProcessing.emplace_back();
+						std::swap(chunksDoneProcessing.back(), chunkResult[j]);
+						std::swap(chunkResult[j], chunkResult.back());
+						chunkResult.pop_back();
+					}
+				}
+				assert(chunkResult.size() >= 1);
+			}
 			std::sort(chunkResult.begin(), chunkResult.end(), [](const auto& left, const auto& right) { return left.size() > right.size(); });
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
 				if (chunkResult.size() >= 2) countSplitted += 1;
 				std::cerr << "SNP transitive closure clustering splitted chunk with coverage " << chunkBeingDone.size() << " to " << chunkResult.size() << " chunks, biggest chunk size: " << chunkResult[0].size() << ", sites: " << consensusLength << " estimated average error rate: " << estimatedAverageErrorRate << " time " << formatTime(startTime, endTime) << std::endl;
-				if (chunkResult.size() == 1)
+				if (chunkResult.size() == 1 && !removedNoncanonicals)
 				{
 					chunksDoneProcessing.emplace_back();
 					std::swap(chunksDoneProcessing.back(), chunkResult.back());
