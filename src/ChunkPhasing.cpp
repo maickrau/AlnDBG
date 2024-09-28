@@ -1355,11 +1355,11 @@ void checkAndFixPalindromicChunk(std::vector<std::vector<size_t>>& clusters, con
 			std::pair<size_t, size_t> reverseChunk = chunk;
 			if (chunk.first >= chunksPerRead.size() / 2)
 			{
-				reverseChunk.first += chunksPerRead.size() / 2;
+				reverseChunk.first -= chunksPerRead.size() / 2;
 			}
 			else
 			{
-				reverseChunk.first -= chunksPerRead.size() / 2;
+				reverseChunk.first += chunksPerRead.size() / 2;
 			}
 			reverseChunk.second = chunksPerRead[chunk.first].size()-1-chunk.second;
 			assert(chunkInCluster.count(reverseChunk) == 1);
