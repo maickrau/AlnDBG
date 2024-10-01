@@ -731,6 +731,49 @@ void checkPairPhasingGroupsDiscardSingletons(const std::vector<std::vector<uint8
 	}
 }
 
+void checkPairPhasingGroups(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const phmap::flat_hash_map<std::string, size_t>& blockSequenceCoverage, const size_t firstIndex, const size_t secondIndex, std::vector<std::vector<size_t>>& pairPhasingGroups, const size_t originalFirstIndx, const size_t originalSecondIndex)
+{
+	phmap::flat_hash_set<std::pair<uint8_t, uint8_t>> alleles;
+	for (const auto& pair : blockSequenceCoverage)
+	{
+		alleles.emplace(pair.first[firstIndex], pair.first[secondIndex]);
+	}
+	phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, std::pair<uint8_t, uint8_t>> parent;
+	for (auto pair : alleles)
+	{
+		parent[pair] = pair;
+	}
+	for (auto pair : alleles)
+	{
+		for (auto pair2 : alleles)
+		{
+			if (pair == pair2) continue;
+			if (pair.first != pair2.first && pair.second != pair2.second) continue;
+			merge(parent, pair, pair2);
+		}
+	}
+	phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, size_t> keyToNode;
+	size_t nextNum = 0;
+	for (auto pair : alleles)
+	{
+		if (keyToNode.count(find(parent, pair)) == 0)
+		{
+			keyToNode[find(parent, pair)] = nextNum;
+			nextNum += 1;
+		}
+	}
+	assert(nextNum >= 1);
+	if (nextNum < 2) return;
+	for (size_t i = 0; i < readFakeMSABases.size(); i++)
+	{
+		std::pair<uint8_t, uint8_t> key { readFakeMSABases[i][originalFirstIndx], readFakeMSABases[i][originalSecondIndex] };
+		assert(parent.count(key) == 1);
+		auto p = find(parent, key);
+		assert(keyToNode.count(p) == 1);
+		pairPhasingGroups[i].emplace_back(keyToNode.at(p));
+	}
+}
+
 void checkPairPhasingGroups(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const size_t firstIndex, const size_t secondIndex, std::vector<std::vector<size_t>>& pairPhasingGroups)
 {
 	phmap::flat_hash_set<std::pair<uint8_t, uint8_t>> alleles;
@@ -790,11 +833,47 @@ std::vector<std::vector<size_t>> getPairPhasingGroups(const std::vector<std::vec
 {
 	std::vector<std::vector<size_t>> result;
 	result.resize(readFakeMSABases.size());
-	for (size_t j = 0; j < readFakeMSABases[0].size(); j++)
+	for (size_t blockj = 0; blockj < (readFakeMSABases[0].size()+9)/10; blockj++)
 	{
-		for (size_t k = j+1; k < readFakeMSABases[0].size(); k++)
+		for (size_t blockk = blockj; blockk < (readFakeMSABases[0].size()+9)/10; blockk++)
 		{
-			checkPairPhasingGroups(readFakeMSABases, j, k, result);
+			phmap::flat_hash_map<std::string, size_t> blockSequenceCoverage;
+			for (size_t k = 0; k < readFakeMSABases.size(); k++)
+			{
+				std::string sequenceHere;
+				for (size_t l = 0; l < 10; l++)
+				{
+					if (blockj*10+l < readFakeMSABases[0].size())
+					{
+						sequenceHere += readFakeMSABases[k][blockj*10+l];
+					}
+					else
+					{
+						sequenceHere += 'N';
+					}
+				}
+				for (size_t l = 0; l < 10; l++)
+				{
+					if (blockk*10+l < readFakeMSABases[0].size())
+					{
+						sequenceHere += readFakeMSABases[k][blockk*10+l];
+					}
+					else
+					{
+						sequenceHere += 'N';
+					}
+				}
+				blockSequenceCoverage[sequenceHere] += 1;
+			}
+			for (size_t j = 0; j < 10; j++)
+			{
+				if (blockj*10 + j >= readFakeMSABases[0].size()) break;
+				for (size_t k = (blockj == blockk ? j+1 : 0); k < 10; k++)
+				{
+					if (blockk*10 + k >= readFakeMSABases[0].size()) break;
+					checkPairPhasingGroups(readFakeMSABases, blockSequenceCoverage, j, 10+k, result, blockj*10+j, blockk*10+k);
+				}
+			}
 		}
 	}
 	return result;
