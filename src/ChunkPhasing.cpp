@@ -754,6 +754,7 @@ void checkPairPhasingGroups(const std::vector<const std::vector<uint8_t>*>& read
 		}
 	}
 	phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, size_t> keyToNode;
+	phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, size_t> clusterCoverage;
 	size_t nextNum = 0;
 	for (auto pair : alleles)
 	{
@@ -762,6 +763,14 @@ void checkPairPhasingGroups(const std::vector<const std::vector<uint8_t>*>& read
 			keyToNode[find(parent, pair)] = nextNum;
 			nextNum += 1;
 		}
+	}
+	for (const auto& pair : blockSequenceCoverage)
+	{
+		clusterCoverage[find(parent, std::make_pair<uint8_t, uint8_t>(pair.first[firstIndex], pair.first[secondIndex]))] += pair.second;
+	}
+	for (auto pair : clusterCoverage)
+	{
+		if (pair.second < 3) return;
 	}
 	assert(nextNum >= 1);
 	if (nextNum < 2) return;
