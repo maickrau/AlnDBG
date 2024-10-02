@@ -718,7 +718,7 @@ std::vector<ConsensusString> getUnitigConsensuses(const ChunkUnitigGraph& unitig
 			}
 			assert(seq.size() >= kmerSize+1);
 			size_t startPos = 0;
-			if (i != 1)
+			if (i != 1 && (result[unitigi].Nchunks.size() == 0 || result[unitigi].Nchunks.back().first + result[unitigi].Nchunks.back().second + kmerSize < result[unitigi].bases.size()))
 			{
 				assert(result[unitigi].bases.size() >= kmerSize);
 				std::string previousEnd = result[unitigi].bases.substr(result[unitigi].bases.size()-kmerSize, kmerSize);
