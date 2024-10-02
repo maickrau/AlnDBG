@@ -1297,6 +1297,7 @@ std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> getAncho
 		std::vector<size_t> anchorSequence;
 		size_t startPos = 0;
 		size_t iterations = 0;
+		bool broke = false;
 		while (inEdges[startPos].size() >= 1)
 		{
 			size_t bestEdge = inEdges[startPos].begin()->first;
@@ -1305,8 +1306,20 @@ std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> getAncho
 				if (pair.second > inEdges[startPos].at(bestEdge)) bestEdge = pair.first;
 			}
 			startPos = bestEdge;
+			if (iterations >= anchorToCluster.size()*2+10)
+			{
+				// loop
+				broke = true;
+				break;
+			}
 			assert(iterations < anchorToCluster.size()*2+10); // loops!
 			iterations += 1;
+		}
+		if (broke)
+		{
+			std::cerr << "skipped path " << i << " consensus, loop" << std::endl;
+			result.emplace_back();
+			continue;
 		}
 		anchorSequence.emplace_back(startPos);
 		while (outEdges[startPos].size() >= 1)
@@ -1318,13 +1331,30 @@ std::vector<std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> getAncho
 			}
 			startPos = bestEdge;
 			anchorSequence.emplace_back(startPos);
+			if (iterations >= anchorToCluster.size()*2+10)
+			{
+				// loop
+				broke = true;
+				break;
+			}
 			assert(iterations < anchorToCluster.size()*2+10); // loops!
 			iterations += 1;
+		}
+		if (broke)
+		{
+			std::cerr << "skipped path " << i << " consensus, loop" << std::endl;
+			result.emplace_back();
+			continue;
 		}
 		phmap::flat_hash_map<size_t, size_t> nodePositionInAnchorSequence;
 		for (size_t j = 0; j < anchorSequence.size(); j++)
 		{
 			nodePositionInAnchorSequence[anchorSequence[j]] = j;
+		}
+		if (anchorSequence.size() < 2)
+		{
+			result.emplace_back();
+			continue;
 		}
 		assert(anchorSequence.size() >= 2);
 		result.emplace_back();
@@ -1353,6 +1383,7 @@ ConsensusString getAnchorPathConsensus(const FastaCompressor::CompressedStringIn
 	{
 		phmap::flat_hash_map<std::string, size_t> stringsHere;
 		size_t totalCount = 0;
+		size_t longest = 0;
 		for (auto t : anchorPaths[i-1])
 		{
 			for (auto t2 : anchorPaths[i])
@@ -1363,6 +1394,7 @@ ConsensusString getAnchorPathConsensus(const FastaCompressor::CompressedStringIn
 				{
 					if (std::get<1>(t) >= std::get<1>(t2)) continue;
 					std::string seq = sequenceIndex.getSubstring(std::get<0>(t), std::get<1>(t), std::get<1>(t2) - std::get<1>(t) + 1);
+					longest = std::max(longest, seq.size());
 					stringsHere[seq] += 1;
 					totalCount += 1;
 				}
@@ -1370,6 +1402,7 @@ ConsensusString getAnchorPathConsensus(const FastaCompressor::CompressedStringIn
 				{
 					if (std::get<1>(t) <= std::get<1>(t2)) continue;
 					std::string seq = sequenceIndex.getSubstring(std::get<0>(t), std::get<1>(t2), std::get<1>(t) - std::get<1>(t2) + 1);
+					longest = std::max(longest, seq.size());
 					seq = revCompRaw(seq);
 					stringsHere[seq] += 1;
 					totalCount += 1;
@@ -1385,7 +1418,7 @@ ConsensusString getAnchorPathConsensus(const FastaCompressor::CompressedStringIn
 		}
 		std::string consensusString;
 		assert(stringsHere.size() <= totalCount);
-		if (stringsHere.size() == 1 || totalCount == 2)
+		if (stringsHere.size() == 1 || totalCount == 2 || longest >= (size_t)std::numeric_limits<uint16_t>::max())
 		{
 			consensusString = stringsHere.begin()->first;
 		}
