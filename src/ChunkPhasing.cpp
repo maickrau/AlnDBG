@@ -13,6 +13,66 @@
 #include "edlib.h"
 #include "ConsensusMaker.h"
 
+class SNPAlignmentQueue
+{
+public:
+	struct Item
+	{
+	public:
+		Item() = default;
+		Item(const std::vector<std::string>* strings, std::string* consensus, size_t minIndex, size_t maxIndex, std::vector<std::vector<uint8_t>>* result, std::atomic<size_t>* totalMismatches, std::atomic<size_t>* totalSequenceLength, std::atomic<bool>* anyAlignmentError, std::atomic<size_t>* countRunning) :
+			strings(strings),
+			consensus(consensus),
+			minIndex(minIndex),
+			maxIndex(maxIndex),
+			result(result),
+			totalMismatches(totalMismatches),
+			totalSequenceLength(totalSequenceLength),
+			anyAlignmentError(anyAlignmentError),
+			countRunning(countRunning)
+		{
+		}
+		const std::vector<std::string>* strings;
+		std::string* consensus;
+		size_t minIndex;
+		size_t maxIndex;
+		std::vector<std::vector<uint8_t>>* result;
+		std::atomic<size_t>* totalMismatches;
+		std::atomic<size_t>* totalSequenceLength;
+		std::atomic<bool>* anyAlignmentError;
+		std::atomic<size_t>* countRunning;
+	};
+	void insertItems(const std::vector<std::string>* strings, std::string* consensus, size_t minIndex, size_t maxIndex, size_t splitCount, std::vector<std::vector<uint8_t>>* result, std::atomic<size_t>* totalMismatches, std::atomic<size_t>* totalSequenceLength, std::atomic<bool>* anyAlignmentError, std::atomic<size_t>* countRunning)
+	{
+		std::lock_guard<std::mutex> lock { mutex };
+		size_t lastEnd = minIndex;
+		for (size_t i = 0; i < splitCount; i++)
+		{
+			size_t nextIndex = (maxIndex-minIndex)*(i+1)/splitCount+minIndex;
+			assert(nextIndex > lastEnd);
+			assert(nextIndex <= maxIndex);
+			items.emplace_back(strings, consensus, lastEnd, nextIndex, result, totalMismatches, totalSequenceLength, anyAlignmentError, countRunning);
+			lastEnd = nextIndex;
+		}
+	}
+	bool popItem(Item* result)
+	{
+		std::lock_guard<std::mutex> lock { mutex };
+		if (items.size() == 0) return false;
+		std::swap(items.back(), *result);
+		items.pop_back();
+		(*result->countRunning) += 1;
+		return true;
+	}
+	size_t size() const
+	{
+		return items.size();
+	}
+private:
+	std::mutex mutex;
+	std::vector<Item> items;
+};
+
 size_t getHammingdistance(const std::vector<uint8_t>& left, const std::vector<uint8_t>& right, const size_t maxDistance)
 {
 	assert(left.size() == right.size());
@@ -1131,44 +1191,17 @@ std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector
 	return result;
 }
 
-std::tuple<std::vector<std::vector<uint8_t>>, size_t, size_t> getSNPMSA(const std::vector<std::string>& strings)
+void runAlignmentItem(SNPAlignmentQueue::Item& item)
 {
-	std::vector<std::vector<uint8_t>> readSNPMSA;
-	std::string consensusSeq;
-	{
-		phmap::flat_hash_map<std::string, size_t> sequenceCount;
-		for (size_t j = 0; j < strings.size(); j++)
-		{
-			sequenceCount[strings[j]] += 1;
-		}
-		if (sequenceCount.size() >= 2)
-		{
-			consensusSeq = getConsensus(sequenceCount, strings.size());
-		}
-		else
-		{
-			return std::make_tuple(readSNPMSA, 0, 0);
-		}
-	}
-	bool hasNonATCG = false;
-	for (size_t j = 0; j < consensusSeq.size(); j++)
-	{
-		if (consensusSeq[j] != 'A' && consensusSeq[j] != 'C' && consensusSeq[j] != 'T' && consensusSeq[j] != 'G')
-		{
-			hasNonATCG = true;
-			break;
-		}
-	}
-	if (hasNonATCG)
-	{
-		std::cerr << "ERROR SNP transitive closure clustering skipped chunk with coverage " << strings.size() << " NON-ATCG IN CONSENSUS: " << consensusSeq << std::endl;
-		return std::make_tuple(readSNPMSA, 0, 0);
-	}
-	readSNPMSA.resize(strings.size());
-	bool anyAlignmentError = false;
+	assert(item.consensus != nullptr);
+	assert(item.result != nullptr);
+	std::string& consensusSeq = *item.consensus;
+	std::vector<std::vector<uint8_t>>& readSNPMSA = *item.result;
+	const std::vector<std::string>& strings = *item.strings;
 	size_t totalMismatches = 0;
 	size_t sequenceLengthSum = 0;
-	for (size_t j = 0; j < strings.size(); j++)
+	bool anyAlignmentError = false;
+	for (size_t j = item.minIndex; j < item.maxIndex; j++)
 	{
 		sequenceLengthSum += strings[j].size();
 		EdlibAlignResult result = edlibAlign(strings[j].data(), strings[j].size(), consensusSeq.data(), consensusSeq.size(), edlibNewAlignConfig(std::max(consensusSeq.size(), strings[j].size()), EDLIB_MODE_NW, EDLIB_TASK_PATH, NULL, 0));
@@ -1224,12 +1257,101 @@ std::tuple<std::vector<std::vector<uint8_t>>, size_t, size_t> getSNPMSA(const st
 			assert(readSNPMSA[j][k] != 'N');
 		}
 	}
+	if (anyAlignmentError) (*item.anyAlignmentError) = true;
+	(*item.totalSequenceLength) += sequenceLengthSum;
+	(*item.totalMismatches) += totalMismatches;
+	assert((*item.countRunning) >= 1);
+	(*item.countRunning) -= 1;
+}
+
+std::tuple<std::vector<std::vector<uint8_t>>, size_t, size_t> getSNPMSA(const std::vector<std::string>& strings, std::vector<std::shared_ptr<SNPAlignmentQueue>>& alignmentQueues, std::mutex& alignmentQueuesMutex)
+{
+	const size_t bpsPerBlock = 2000000;
+	std::vector<std::vector<uint8_t>> readSNPMSA;
+	std::string consensusSeq;
+	{
+		phmap::flat_hash_map<std::string, size_t> sequenceCount;
+		for (size_t j = 0; j < strings.size(); j++)
+		{
+			sequenceCount[strings[j]] += 1;
+		}
+		if (sequenceCount.size() >= 2)
+		{
+			consensusSeq = getConsensus(sequenceCount, strings.size());
+		}
+		else
+		{
+			return std::make_tuple(readSNPMSA, 0, 0);
+		}
+	}
+	bool hasNonATCG = false;
+	for (size_t j = 0; j < consensusSeq.size(); j++)
+	{
+		if (consensusSeq[j] != 'A' && consensusSeq[j] != 'C' && consensusSeq[j] != 'T' && consensusSeq[j] != 'G')
+		{
+			hasNonATCG = true;
+			break;
+		}
+	}
+	if (hasNonATCG)
+	{
+		std::cerr << "ERROR SNP transitive closure clustering skipped chunk with coverage " << strings.size() << " NON-ATCG IN CONSENSUS: " << consensusSeq << std::endl;
+		return std::make_tuple(readSNPMSA, 0, 0);
+	}
+	readSNPMSA.resize(strings.size());
+	std::atomic<bool> anyAlignmentError = false;
+	std::atomic<size_t> totalMismatches = 0;
+	std::atomic<size_t> totalSequenceLength = 0;
+	std::atomic<size_t> countRunning = 0;
+	size_t totalBps = strings.size() * consensusSeq.size();
+	if (totalBps < bpsPerBlock*2)
+	{
+		SNPAlignmentQueue::Item item;
+		item.strings = &strings;
+		item.consensus = &consensusSeq;
+		item.minIndex = 0;
+		item.maxIndex = strings.size();
+		item.result = &readSNPMSA;
+		item.totalMismatches = &totalMismatches;
+		item.totalSequenceLength = &totalSequenceLength;
+		item.anyAlignmentError = &anyAlignmentError;
+		item.countRunning = &countRunning;
+		item.countRunning += 1;
+		runAlignmentItem(item);
+	}
+	else
+	{
+		std::shared_ptr<SNPAlignmentQueue> queue = std::make_shared<SNPAlignmentQueue>();
+		queue->insertItems(&strings, &consensusSeq, 0, strings.size(), totalBps/bpsPerBlock, &readSNPMSA, &totalMismatches, &totalSequenceLength, &anyAlignmentError, &countRunning);
+		{
+			std::lock_guard<std::mutex> lock { alignmentQueuesMutex };
+			alignmentQueues.emplace_back(queue);
+		}
+		while (true)
+		{
+			SNPAlignmentQueue::Item item;
+			bool got = queue->popItem(&item);
+			if (!got) break;
+			runAlignmentItem(item);
+		}
+		while (countRunning >= 1)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+	}
 	if (anyAlignmentError)
 	{
 		std::cerr << "ERROR SNP transitive closure clustering skipped chunk with coverage " << strings.size() << " EDLIB ERROR" << std::endl;
 		readSNPMSA.clear();
 	}
-	return std::make_tuple(std::move(readSNPMSA), totalMismatches, sequenceLengthSum);
+	return std::make_tuple(std::move(readSNPMSA), (size_t)totalMismatches, (size_t)totalSequenceLength);
+}
+
+std::tuple<std::vector<std::vector<uint8_t>>, size_t, size_t> getSNPMSA(const std::vector<std::string>& strings)
+{
+	std::vector<std::shared_ptr<SNPAlignmentQueue>> fakeQueue;
+	std::mutex fakeMutex;
+	return getSNPMSA(strings, fakeQueue, fakeMutex);
 }
 
 std::vector<std::vector<size_t>> getSNPTransitiveClosure(const std::vector<std::vector<uint8_t>>& readSNPMSA, const size_t edits)
@@ -1561,10 +1683,29 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 	// biggest on top so starts processing first
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
 	auto oldChunks = chunksPerRead;
-	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, minSolidBaseCoverage](size_t dummy)
+	std::vector<std::shared_ptr<SNPAlignmentQueue>> alignmentQueues;
+	std::mutex alignmentQueuesMutex;
+	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, &alignmentQueues, &alignmentQueuesMutex, minSolidBaseCoverage](size_t dummy)
 	{
 		while (true)
 		{
+			{
+				SNPAlignmentQueue::Item item;
+				bool got = false;
+				{
+					std::lock_guard<std::mutex> lock { alignmentQueuesMutex };
+					if (alignmentQueues.size() >= 1)
+					{
+						got = alignmentQueues.back()->popItem(&item);
+						if (alignmentQueues.back()->size() == 0) alignmentQueues.pop_back();
+					}
+				}
+				if (got)
+				{
+					runAlignmentItem(item);
+					continue;
+				}
+			}
 			std::vector<std::pair<size_t, size_t>> chunkBeingDone;
 			bool gotOne = false;
 			{
@@ -1642,7 +1783,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				{
 					strings.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, chunkBeingDone[j].first, chunkBeingDone[j].second));
 				}
-				std::tie(unfilteredReadFakeMSABases, totalMismatches, sequenceLengthSum) = getSNPMSA(strings);
+				std::tie(unfilteredReadFakeMSABases, totalMismatches, sequenceLengthSum) = getSNPMSA(strings, alignmentQueues, alignmentQueuesMutex);
 			}
 			if (unfilteredReadFakeMSABases.size() == 0)
 			{
