@@ -1195,6 +1195,7 @@ void runAlignmentItem(SNPAlignmentQueue::Item& item)
 {
 	assert(item.consensus != nullptr);
 	assert(item.result != nullptr);
+	assert(item.strings != nullptr);
 	std::string& consensusSeq = *item.consensus;
 	std::vector<std::vector<uint8_t>>& readSNPMSA = *item.result;
 	const std::vector<std::string>& strings = *item.strings;
@@ -1316,7 +1317,7 @@ std::tuple<std::vector<std::vector<uint8_t>>, size_t, size_t> getSNPMSA(const st
 		item.totalSequenceLength = &totalSequenceLength;
 		item.anyAlignmentError = &anyAlignmentError;
 		item.countRunning = &countRunning;
-		item.countRunning += 1;
+		(*item.countRunning) += 1;
 		runAlignmentItem(item);
 	}
 	else
@@ -1379,6 +1380,7 @@ std::vector<std::vector<uint8_t>> filterMSAByCoverage(const std::vector<std::vec
 {
 	const size_t minSolidBaseCoverage = 10;
 	std::vector<bool> coveredSite;
+	assert(unfilteredReadFakeMSABases.size() >= 1);
 	size_t consensusLength = unfilteredReadFakeMSABases[0].size();
 	coveredSite.resize(consensusLength, false);
 	size_t countCovered = 0;
