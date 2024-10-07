@@ -320,7 +320,7 @@ std::vector<bool> getTopologyExtendedUniques(const ChunkUnitigGraph& graph, cons
 	return result;
 }
 
-std::vector<std::vector<uint64_t>> connectTripletPaths(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const double estimatedSingleCopyCoverage, const std::vector<std::vector<uint64_t>>& oldPaths)
+std::vector<std::vector<uint64_t>> connectTripletPaths(const std::vector<bool>& isUniqueUnitig, const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const double estimatedSingleCopyCoverage, const std::vector<std::vector<uint64_t>>& oldPaths)
 {
 	phmap::flat_hash_map<uint64_t, uint64_t> nodeIsPathTip;
 	for (size_t i = 0; i < oldPaths.size(); i++)
@@ -334,6 +334,7 @@ std::vector<std::vector<uint64_t>> connectTripletPaths(const ChunkUnitigGraph& g
 	phmap::flat_hash_map<uint64_t, std::pair<uint64_t, uint64_t>> outEdges;
 	for (const auto& pair : triplets)
 	{
+		if (isUniqueUnitig[pair.first]) continue;
 		bool allGood = true;
 		for (const auto& pair2 : pair.second)
 		{
@@ -1574,7 +1575,7 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 		std::cerr << std::endl;
 	}
 	std::cerr << std::endl;
-	paths = connectTripletPaths(graph, readPaths, estimatedSingleCopyCoverage, paths);
+	paths = connectTripletPaths(isUniqueUnitig, graph, readPaths, estimatedSingleCopyCoverage, paths);
 	std::cerr << "step 2.5 paths:" << std::endl;
 	for (size_t i = 0; i < paths.size(); i++)
 	{
