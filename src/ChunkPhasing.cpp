@@ -1118,7 +1118,7 @@ std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector
 			for (size_t chunkk = 0; chunkk < (coveredIndices.size()+9)/10; chunkk++)
 			{
 				phmap::flat_hash_map<std::string, size_t> alleleCoverages;
-				for (auto pair : filteredCoverages)
+				for (const auto& pair : filteredCoverages)
 				{
 					std::string allele;
 					for (size_t i = 0; i < 10; i++)
