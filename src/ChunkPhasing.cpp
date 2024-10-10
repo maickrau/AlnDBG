@@ -1561,10 +1561,29 @@ std::vector<std::vector<size_t>> tryPairPhasingGroupSplitting(const std::vector<
 {
 	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
 	std::vector<std::vector<size_t>> pairPhasingGroups = getPairPhasingGroups(readFakeMSABases);
-	if (pairPhasingGroups[0].size() == 0 && unfilteredReadFakeMSABases.size() > 1000)
+	std::vector<size_t> parent = getFastTransitiveClosure(unfilteredReadFakeMSABases.size(), 0, [&pairPhasingGroups](const size_t i, const size_t j, const size_t maxEdits) { return (pairPhasingGroups[i] == pairPhasingGroups[j]) ? 0 : 1; });
+	size_t nextNum = 0;
+	phmap::flat_hash_map<size_t, size_t> keyToNode;
+	for (size_t j = 0; j < parent.size(); j++)
 	{
-		pairPhasingGroups = getPairPhasingGroupsDiscardSingletons(readFakeMSABases);
+		size_t key = find(parent, j);
+		if (keyToNode.count(key) == 1) continue;
+		keyToNode[key] = nextNum;
+		nextNum += 1;
 	}
+	std::vector<std::vector<size_t>> result;
+	result.resize(nextNum);
+	for (size_t j = 0; j < parent.size(); j++)
+	{
+		result[keyToNode.at(find(parent, j))].push_back(j);
+	}
+	return result;
+}
+
+std::vector<std::vector<size_t>> tryPairPhasingGroupSplittingDiscardSingletons(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
+{
+	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
+	std::vector<std::vector<size_t>> pairPhasingGroups = getPairPhasingGroupsDiscardSingletons(readFakeMSABases);
 	std::vector<size_t> parent = getFastTransitiveClosure(unfilteredReadFakeMSABases.size(), 0, [&pairPhasingGroups](const size_t i, const size_t j, const size_t maxEdits) { return (pairPhasingGroups[i] == pairPhasingGroups[j]) ? 0 : 1; });
 	size_t nextNum = 0;
 	phmap::flat_hash_map<size_t, size_t> keyToNode;
@@ -1804,18 +1823,6 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			assert(clusters.size() >= 1);
 			if (clusters.size() == 1)
 			{
-				clusters = tryOccurrenceLinkageSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
-				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
-				assert(clusters.size() >= 1);
-			}
-			if (clusters.size() == 1)
-			{
-				clusters = tryMultinomiallySignificantSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
-				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
-				assert(clusters.size() >= 1);
-			}
-			if (clusters.size() == 1)
-			{
 				clusters = tryPairPhasingGroupSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
@@ -1823,6 +1830,24 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			if (clusters.size() == 1)
 			{
 				clusters = tryTripletSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
+				assert(clusters.size() >= 1);
+			}
+			if (clusters.size() == 1 && chunkBeingDone.size() > 1000)
+			{
+				clusters = tryPairPhasingGroupSplittingDiscardSingletons(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
+				assert(clusters.size() >= 1);
+			}
+			if (clusters.size() == 1)
+			{
+				clusters = tryOccurrenceLinkageSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
+				assert(clusters.size() >= 1);
+			}
+			if (clusters.size() == 1)
+			{
+				clusters = tryMultinomiallySignificantSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 			}
