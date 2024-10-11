@@ -130,6 +130,7 @@ bool forkAllelesMatch(const std::vector<std::vector<size_t>>& left, const std::v
 phmap::flat_hash_set<uint64_t> getSolidForks(const std::vector<std::pair<uint64_t, std::vector<std::vector<size_t>>>>& forkReads, const size_t minCoverage)
 {
 	std::vector<size_t> checkableIndices;
+	std::vector<std::vector<size_t>> forksPerRead;
 	for (size_t i = 0; i < forkReads.size(); i++)
 	{
 		bool canCheckThis = true;
@@ -141,14 +142,41 @@ phmap::flat_hash_set<uint64_t> getSolidForks(const std::vector<std::pair<uint64_
 				break;
 			}
 		}
-		if (canCheckThis) checkableIndices.emplace_back(i);
+		if (canCheckThis)
+		{
+			for (size_t j = 0; j < forkReads[i].second.size(); j++)
+			{
+				for (size_t k : forkReads[i].second[j])
+				{
+					while (forksPerRead.size() <= k) forksPerRead.emplace_back();
+					forksPerRead[k].emplace_back(checkableIndices.size());
+				}
+			}
+			checkableIndices.emplace_back(i);
+		}
 	}
 	std::vector<bool> solid;
 	solid.resize(checkableIndices.size(), false);
 	for (size_t i = 0; i < checkableIndices.size(); i++)
 	{
-		for (size_t j = 0; j < i; j++)
+		phmap::flat_hash_set<size_t> possiblyMatchingForks;
 		{
+			phmap::flat_hash_set<size_t> readsHere;
+			for (size_t j = 0; j < forkReads[checkableIndices[i]].second.size(); j++)
+			{
+				for (auto k : forkReads[checkableIndices[i]].second[j])
+				{
+					readsHere.emplace(k);
+				}
+			}
+			for (auto k : readsHere)
+			{
+				possiblyMatchingForks.insert(forksPerRead[k].begin(), forksPerRead[k].end());
+			}
+		}
+		for (auto j : possiblyMatchingForks)
+		{
+			if (j >= i) continue;
 			if (solid[i] && solid[j]) continue;
 			if (forkReads[checkableIndices[i]].second.size() != forkReads[checkableIndices[j]].second.size()) continue;
 			if (!forkAllelesMatch(forkReads[checkableIndices[i]].second, forkReads[checkableIndices[j]].second, minCoverage)) continue;
