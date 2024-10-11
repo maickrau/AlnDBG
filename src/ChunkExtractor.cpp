@@ -162,7 +162,7 @@ void readFilesAndAddToSequenceIndex(const std::string& filename, FastaCompressor
 			}
 		});
 	}
-	FastQ::streamFastqFromFile(filename, false, [&sequenceStack, &stackMutex, &nextNum, &readBasepairLengths](FastQ& read)
+	FastQ::streamFastqFromFile(filename, false, [&sequenceStack, &stackMutex, &nextNum, &readBasepairLengths, numThreads](FastQ& read)
 	{
 		std::tuple<size_t, std::string*, std::string*> item;
 		readBasepairLengths.emplace_back(read.sequence.size());
@@ -176,7 +176,7 @@ void readFilesAndAddToSequenceIndex(const std::string& filename, FastaCompressor
 		{
 			{
 				std::lock_guard<std::mutex> lock { stackMutex };
-				if (sequenceStack.size() < 100)
+				if (sequenceStack.size() < 100+numThreads*10)
 				{
 					sequenceStack.emplace_back(item);
 					break;
