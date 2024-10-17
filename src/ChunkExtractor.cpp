@@ -59,10 +59,11 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getWeightedMinimi
 	return result;
 }
 
-std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getMinimizerBoundedChunksPerRead(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t k, const size_t windowSize)
+std::pair<std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>, std::vector<std::vector<size_t>>> getMinimizerBoundedChunksPerRead(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const size_t k, const size_t windowSize)
 {
-	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
-	result.resize(sequenceIndex.size()*2);
+	std::pair<std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>, std::vector<std::vector<size_t>>> result;
+	result.first.resize(sequenceIndex.size()*2);
+	result.second.resize(sequenceIndex.size()*2);
 	const size_t backwardOffset = sequenceIndex.size();
 	iterateMultithreaded(0, sequenceIndex.size(), numThreads, [&result, &sequenceIndex, backwardOffset, k, windowSize](const size_t readIndex)
 	{
@@ -73,17 +74,22 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getMinimizerBound
 			assert(minimizerPositions.size() == 0 || pos > minimizerPositions.back());
 			minimizerPositions.emplace_back(pos);
 		});
+		for (size_t i = 0; i < minimizerPositions.size(); i++)
+		{
+			result.second[readIndex].emplace_back(minimizerPositions[i]);
+			result.second[readIndex+backwardOffset].emplace_back(readSequence.size()-k-minimizerPositions[minimizerPositions.size()-1-i]);
+		}
 		for (size_t i = 1; i < minimizerPositions.size(); i++)
 		{
 			assert(minimizerPositions[i] > minimizerPositions[i-1]);
-			result[readIndex].emplace_back(minimizerPositions[i-1], minimizerPositions[i]+k-1, 0);
+			result.first[readIndex].emplace_back(minimizerPositions[i-1], minimizerPositions[i]+k-1, 0);
 		};
-		for (size_t i = 0; i < result[readIndex].size(); i++)
+		for (size_t i = 0; i < result.first[readIndex].size(); i++)
 		{
-			result[readIndex+backwardOffset].emplace_back(result[readIndex][result[readIndex].size()-1-i]);
-			std::swap(std::get<0>(result[readIndex+backwardOffset].back()), std::get<1>(result[readIndex+backwardOffset].back()));
-			std::get<0>(result[readIndex+backwardOffset].back()) = readSequence.size()-1-std::get<0>(result[readIndex+backwardOffset].back());
-			std::get<1>(result[readIndex+backwardOffset].back()) = readSequence.size()-1-std::get<1>(result[readIndex+backwardOffset].back());
+			result.first[readIndex+backwardOffset].emplace_back(result.first[readIndex][result.first[readIndex].size()-1-i]);
+			std::swap(std::get<0>(result.first[readIndex+backwardOffset].back()), std::get<1>(result.first[readIndex+backwardOffset].back()));
+			std::get<0>(result.first[readIndex+backwardOffset].back()) = readSequence.size()-1-std::get<0>(result.first[readIndex+backwardOffset].back());
+			std::get<1>(result.first[readIndex+backwardOffset].back()) = readSequence.size()-1-std::get<1>(result.first[readIndex+backwardOffset].back());
 		}
 	});
 	return result;

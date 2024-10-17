@@ -146,9 +146,192 @@ void writeUnitigPaths(const std::string& filename, const ChunkUnitigGraph& uniti
 				name = sequenceIndex.getName(i - sequenceIndex.size()) + "_bw";
 				length = rawReadLengths[i - sequenceIndex.size()];
 			}
-			file << name << "\t" << length << "\t" << readPaths[i][j].readPartInPathnode[0].first << "\t" << readPaths[i][j].readPartInPathnode.back().second << "\t+\t" << pathstr << "\t" << pathLength << "\t" << readPaths[i][j].pathLeftClip << "\t" << (pathLength - readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t" << (pathLength - readPaths[i][j].pathLeftClip- readPaths[i][j].pathRightClip) << "\t60" << std::endl;
+			file << name << "\t" << length << "\t" << readPaths[i][j].readPartInPathnode[0].first << "\t" << readPaths[i][j].readPartInPathnode.back().second << "\t+\t" << pathstr << "\t" << pathLength << "\t" << readPaths[i][j].pathLeftClipBases << "\t" << (pathLength - readPaths[i][j].pathRightClipBases) << "\t" << (pathLength - readPaths[i][j].pathLeftClipBases - readPaths[i][j].pathRightClipBases) << "\t" << (pathLength - readPaths[i][j].pathLeftClipBases - readPaths[i][j].pathRightClipBases) << "\t60" << std::endl;
 		}
 	}
+}
+
+void writeUnitigGraph(const std::string& graphFile, const ChunkUnitigGraph& graph, const std::vector<TwobitString>& unitigDBGSequences, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& fixedOverlaps)
+{
+	std::ofstream file { graphFile };
+	file << "H\tVN:Z:1" << std::endl;
+	assert(graph.unitigLengths.size() == unitigDBGSequences.size());
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		size_t length = unitigDBGSequences[i].size();
+		double coverage = graph.coverages[i];
+		file << "S\t" << i << "\t";
+		file << unitigDBGSequences[i].toString();
+		file << "\tll:i:" << coverage << "\tFC:i:" << length*coverage << std::endl;
+	}
+	for (size_t i = 0; i < graph.edges.size(); i++)
+	{
+		std::pair<size_t, bool> fw { i, true };
+		for (auto edge : graph.edges.getEdges(fw))
+		{
+			uint64_t from = i + firstBitUint64_t;
+			uint64_t to = (edge.first) + (edge.second ? firstBitUint64_t : 0);
+			auto key = canonNodePair(from, to);
+			assert(fixedOverlaps.count(key) == 1);
+			size_t overlapBases = fixedOverlaps.at(key);
+			assert(graph.edgeCoverages.count(key) == 1);
+			size_t coverage = graph.edgeCoverages.at(key);
+			file << "L\t" << i << "\t+\t" << edge.first << "\t" << (edge.second ? "+" : "-") << "\t" << overlapBases << "M\tec:i:" << coverage << std::endl;
+		}
+		std::pair<size_t, bool> bw { i, false };
+		for (auto edge : graph.edges.getEdges(bw))
+		{
+			uint64_t from = i;
+			uint64_t to = (edge.first) + (edge.second ? firstBitUint64_t : 0);
+			auto key = canonNodePair(from, to);
+			assert(fixedOverlaps.count(key) == 1);
+			size_t overlapBases = fixedOverlaps.at(key);
+			assert(graph.edgeCoverages.count(key) == 1);
+			size_t coverage = graph.edgeCoverages.at(key);
+			file << "L\t" << i << "\t-\t" << edge.first << "\t" << (edge.second ? "+" : "-") << "\t" << overlapBases << "M\tec:i:" << coverage << std::endl;
+		}
+	}
+}
+
+void writeUnitigPaths(const std::string& pathsFile, const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<TwobitString>& unitigDBGSequences, const std::vector<size_t>& rawReadLengths, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& fixedOverlaps)
+{
+	std::ofstream file { pathsFile };
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			std::string pathstr;
+			size_t pathLength = 0;
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				uint64_t node = readPaths[i][j].path[k];
+				pathstr += ((node & firstBitUint64_t) ? ">" : "<") + std::to_string(node & maskUint64_t);
+				pathLength += unitigDBGSequences[node & maskUint64_t].size();
+				if (k >= 1)
+				{
+					auto key = canonNodePair(readPaths[i][j].path[k-1], readPaths[i][j].path[k]);
+					assert(fixedOverlaps.count(key) == 1);
+					pathLength -= fixedOverlaps.at(key);
+				}
+			}
+			std::string name;
+			size_t length;
+			if (i < sequenceIndex.size())
+			{
+				name = sequenceIndex.getName(i);
+				length = rawReadLengths[i];
+			}
+			else
+			{
+				name = sequenceIndex.getName(i - sequenceIndex.size()) + "_bw";
+				length = rawReadLengths[i - sequenceIndex.size()];
+			}
+			size_t pathLeftClip = readPaths[i][j].pathLeftClipBases;
+			size_t pathRightClip = readPaths[i][j].pathRightClipBases;
+			file << name << "\t" << length << "\t" << readPaths[i][j].readPartInPathnode[0].first << "\t" << readPaths[i][j].readPartInPathnode.back().second << "\t+\t" << pathstr << "\t" << pathLength << "\t" << pathLeftClip << "\t" << (pathLength - pathRightClip) << "\t" << (pathLength - pathLeftClip - pathRightClip) << "\t" << (pathLength - pathLeftClip - pathRightClip) << "\t60" << std::endl;
+		}
+	}
+}
+
+void fixPathClips(std::vector<std::vector<UnitigPath>>& readPaths, const ChunkUnitigGraph& graph, const std::vector<TwobitString>& unitigDBGSequences, const std::vector<std::vector<std::pair<size_t, size_t>>>& chunkSequencePositionsWithinUnitigs)
+{
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			size_t chunkLeftClip = readPaths[i][j].pathLeftClipChunks;
+			size_t chunkRightClip = readPaths[i][j].pathRightClipChunks;
+			assert(chunkLeftClip < chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t].size());
+			assert(chunkRightClip < chunkSequencePositionsWithinUnitigs[readPaths[i][j].path.back() & maskUint64_t].size());
+			assert(readPaths[i][j].path.size() >= 2 || chunkLeftClip + chunkRightClip < chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t].size());
+			if (readPaths[i][j].path[0] & firstBitUint64_t)
+			{
+				readPaths[i][j].pathLeftClipBases = chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t][chunkLeftClip].first;
+			}
+			else
+			{
+				readPaths[i][j].pathLeftClipBases = unitigDBGSequences[readPaths[i][j].path[0] & maskUint64_t].size() - 1 - chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t][chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t].size()-1-chunkLeftClip].second;
+			}
+			if (readPaths[i][j].path.back() & firstBitUint64_t)
+			{
+				readPaths[i][j].pathRightClipBases = unitigDBGSequences[readPaths[i][j].path.back() & maskUint64_t].size() - 1 - chunkSequencePositionsWithinUnitigs[readPaths[i][j].path.back() & maskUint64_t][chunkSequencePositionsWithinUnitigs[readPaths[i][j].path.back() & maskUint64_t].size()-1-chunkRightClip].second;
+			}
+			else
+			{
+				readPaths[i][j].pathRightClipBases = chunkSequencePositionsWithinUnitigs[readPaths[i][j].path.back() & maskUint64_t][chunkRightClip].first;
+			}
+		}
+	}
+}
+
+void trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, const ChunkUnitigGraph& graph, std::vector<TwobitString>& unitigDBGSequences, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& fixedOverlaps)
+{
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			if (readPaths[i][j].pathLeftClipBases == 0)
+			{
+				if (graph.edges.getEdges(std::make_pair(readPaths[i][j].path[0] & maskUint64_t, (readPaths[i][j].path[0] ^ firstBitUint64_t) & firstBitUint64_t)).size() >= 1)
+				{
+					readPaths[i][j].readPartInPathnode[0].first += 1;
+				}
+			}
+			if (readPaths[i][j].pathRightClipBases == 0)
+			{
+				if (graph.edges.getEdges(std::make_pair(readPaths[i][j].path.back() & maskUint64_t, readPaths[i][j].path.back() & firstBitUint64_t)).size() >= 1)
+				{
+					readPaths[i][j].readPartInPathnode.back().second -= 1;
+				}
+			}
+		}
+	}
+	for (size_t i = 0; i < unitigDBGSequences.size(); i++)
+	{
+		size_t start = 0;
+		size_t size = unitigDBGSequences[i].size();
+		if (graph.edges.getEdges(std::make_pair(i, false)).size() >= 1)
+		{
+			start += 1;
+			size -= 1;
+		}
+		if (graph.edges.getEdges(std::make_pair(i, true)).size() >= 1)
+		{
+			size -= 1;
+		}
+		if (size < unitigDBGSequences[i].size()) unitigDBGSequences[i] = unitigDBGSequences[i].substr(start, size);
+	}
+	for (auto& pair : fixedOverlaps)
+	{
+		assert(pair.second >= 2);
+		if (graph.edges.getEdges(std::make_pair(pair.first.first & maskUint64_t, pair.first.first & firstBitUint64_t)).size() >= 1)
+		{
+			pair.second -= 1;
+		}
+		if (graph.edges.getEdges(std::make_pair(pair.first.second & maskUint64_t, (pair.first.second ^ firstBitUint64_t) & firstBitUint64_t)).size() >= 1)
+		{
+			pair.second -= 1;
+		}
+	}
+}
+
+void writeBidirectedUnitigGraphWithSequences(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& rawChunksPerRead, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t numThreads, const size_t kmerSize)
+{
+	std::cerr << "writing unitig graph with sequences " << graphFile << std::endl;
+	auto fixedChunksPerRead = getBidirectedChunks(rawChunksPerRead);
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(fixedChunksPerRead, approxOneHapCoverage, kmerSize);
+	std::vector<TwobitString> unitigDBGSequences;
+	std::vector<std::vector<std::pair<size_t, size_t>>> chunkSequencePositionsWithinUnitigs;
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> fixedOverlaps;
+	std::tie(unitigDBGSequences, chunkSequencePositionsWithinUnitigs, fixedOverlaps) = getUnitigDBGSequences(graph, kmerSize, fixedChunksPerRead, sequenceIndex, minimizerPositionsPerRead, numThreads);
+	fixPathClips(readPaths, graph, unitigDBGSequences, chunkSequencePositionsWithinUnitigs);
+	// ensure that edge overlap does not contain any unitigs
+	trimUnitigsByOneBasePair(readPaths, graph, unitigDBGSequences, fixedOverlaps);
+	writeUnitigGraph(graphFile, graph, unitigDBGSequences, fixedOverlaps);
+	std::cerr << "writing unitig paths " << pathsFile << std::endl;
+	writeUnitigPaths(pathsFile, graph, readPaths, sequenceIndex, unitigDBGSequences, rawReadLengths, fixedOverlaps);
 }
 
 void writeBidirectedUnitigGraph(const std::string& graphFile, const std::string& pathsFile, const std::string& unitigSequencesFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& rawChunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t numThreads, const size_t kmerSize)
@@ -347,10 +530,46 @@ void writeReadUnitigSequences(const std::string& filename, const std::vector<std
 				if (!fw) seq = revCompRaw(seq);
 				size_t unitigStart = 0;
 				size_t unitigEnd = graph.unitigLengths[unitig];
-				if (k == 0) unitigStart += readPaths[i][j].pathLeftClip;
-				if (k+1 == readPaths[i][j].path.size()) unitigEnd -= readPaths[i][j].pathRightClip;
+				if (k == 0) unitigStart += readPaths[i][j].pathLeftClipBases;
+				if (k+1 == readPaths[i][j].path.size()) unitigEnd -= readPaths[i][j].pathRightClipBases;
 				file << unitig << " " << unitigStart << " " << unitigEnd << " " << sequenceIndex.getName(i) << " " << readPaths[i][j].readPartInPathnode[k].first << " " << (readPaths[i][j].readPartInPathnode[k].second - readPaths[i][j].readPartInPathnode[k].first) << " " << seq << std::endl;
 			}
 		}
 	}
+}
+
+void writeMinimizers(const std::string& filename, std::vector<std::vector<size_t>>& minimizerPositionsPerRead)
+{
+	std::ofstream file { filename };
+	file << minimizerPositionsPerRead.size() << "\n";
+	for (size_t i = 0; i < minimizerPositionsPerRead.size(); i++)
+	{
+		file << minimizerPositionsPerRead[i].size();
+		for (size_t pos : minimizerPositionsPerRead[i])
+		{
+			file << " " << pos;
+		}
+		file << "\n";
+	}
+}
+
+std::vector<std::vector<size_t>> readMinimizersFromFile(const std::string& filename)
+{
+	std::ifstream file { filename };
+	size_t count = 0;
+	file >> count;
+	std::vector<std::vector<size_t>> result;
+	result.resize(count);
+	for (size_t i = 0; i < result.size(); i++)
+	{
+		assert(file.good());
+		file >> count;
+		result[i].resize(count);
+		for (size_t j = 0; j < result[i].size(); j++)
+		{
+			assert(file.good());
+			file >> result[i][j];
+		}
+	}
+	return result;
 }

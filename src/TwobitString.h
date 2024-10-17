@@ -10,8 +10,10 @@ class TwobitString
 public:
 	TwobitString();
 	TwobitString(const std::string&);
-	std::string toString() const; // output chars are ATCG
-	std::string substr(size_t start, size_t size) const; // output chars are ATCG
+	TwobitString& operator+=(const std::string& str);
+	std::string toString() const; // output chars are ACGT
+	std::string substr(size_t start, size_t size) const; // output chars are ACGT
+	std::string substr(size_t start) const; // output chars are ACGT
 	void resize(size_t size);
 	uint8_t get(size_t i) const; // output char is 0123
 	void set(size_t i, uint8_t v); // input char is 0123

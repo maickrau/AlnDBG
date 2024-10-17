@@ -85,6 +85,17 @@ size_t TwobitString::size() const
 	return realSize;
 }
 
+std::string TwobitString::substr(size_t start) const
+{
+	std::string result;
+	result.reserve(size() - start);
+	for (size_t i = start; i < size(); i++)
+	{
+		result.push_back("ACGT"[get(i)]);
+	}
+	return result;
+}
+
 std::string TwobitString::substr(size_t start, size_t size) const
 {
 	std::string result;
@@ -122,4 +133,33 @@ void TwobitString::pop_back()
 {
 	assert(realSize >= 1);
 	realSize -= 1;
+}
+
+TwobitString& TwobitString::operator+=(const std::string& str)
+{
+	for (size_t i = 0; i < str.size(); i++)
+	{
+		switch(str[i])
+		{
+		case 'a':
+		case 'A':
+			emplace_back(0);
+			break;
+		case 'c':
+		case 'C':
+			emplace_back(1);
+			break;
+		case 'g':
+		case 'G':
+			emplace_back(2);
+			break;
+		case 't':
+		case 'T':
+			emplace_back(3);
+			break;
+		default:
+			assert(false);
+		}
+	}
+	return *this;
 }

@@ -957,10 +957,13 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	std::cerr << "start at stage " << startStage << std::endl;
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead;
+	std::vector<std::vector<size_t>> minimizerPositionsPerRead;
 	if (startStage > 0)
 	{
 		chunksPerRead = readChunksFromFakePathsFile("fakepaths" + std::to_string(startStage) + ".txt");
+		minimizerPositionsPerRead = readMinimizersFromFile("fakepaths_minimizers.txt");
 		while (chunksPerRead.size() < sequenceIndex.size()*2) chunksPerRead.emplace_back();
+		assert(minimizerPositionsPerRead.size() == sequenceIndex.size()*2);
 		std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	}
 	switch(startStage)
@@ -968,7 +971,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		case 0:
 			std::cerr << "getting chunks from reads" << std::endl;
 			//chunksPerRead = getCorrectnessWeightedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize, middleSkip);
-			chunksPerRead = getMinimizerBoundedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize);
+			std::tie(chunksPerRead, minimizerPositionsPerRead) = getMinimizerBoundedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize);
 			for (size_t i = 0; i < chunksPerRead.size(); i++)
 			{
 				for (size_t j = 0; j < chunksPerRead[i].size(); j++)
@@ -988,14 +991,15 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			}
 			writeStage(1, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeMinimizers("fakepaths_minimizers.txt", minimizerPositionsPerRead);
 			[[fallthrough]];
 		case 1:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerLength(chunksPerRead, numThreads);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			mergeFakeBubbles(chunksPerRead, kmerSize);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			mergeFakeBubbles(chunksPerRead, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
@@ -1219,12 +1223,12 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeReadChunkSequences("sequences-chunk19.txt", rawReadLengths, chunksPerRead, sequenceIndex);
+//			writeReadChunkSequences("sequences-chunk19.txt", rawReadLengths, chunksPerRead, sequenceIndex);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeBidirectedUnitigGraphWithSequences("graph-dbg-final.gfa", "paths-dbg-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeBidirectedUnitigGraph("graph-dbg-final.gfa", "paths-dbg-final.gaf", "unitigs-dbg-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeReadUnitigSequences("sequences-dbg-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			writeReadUnitigSequences("sequences-dbg-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			[[fallthrough]];
 		case 19:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;

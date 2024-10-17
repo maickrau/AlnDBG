@@ -28,8 +28,10 @@ public:
 	std::vector<uint64_t> path;
 	std::vector<std::pair<size_t, size_t>> readPartInPathnode;
 	std::vector<std::pair<size_t, size_t>> chunksInPathnode;
-	size_t pathLeftClip;
-	size_t pathRightClip;
+	size_t pathLeftClipBases;
+	size_t pathRightClipBases;
+	size_t pathLeftClipChunks;
+	size_t pathRightClipChunks;
 };
 
 class ConsensusString
@@ -52,5 +54,6 @@ SparseEdgeContainer filterOutZEdges(const std::vector<std::vector<uint64_t>>& un
 std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphInner(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const bool alsoConsensuses, const double approxOneHapCoverage, const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t numThreads, const size_t kmerSize);
 std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphWithConsensuses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage, const size_t numThreads, const size_t kmerSize);
 std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUnitigGraph(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t kmerSize);
+std::tuple<std::vector<TwobitString>, std::vector<std::vector<std::pair<size_t, size_t>>>, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> getUnitigDBGSequences(const ChunkUnitigGraph& graph, const size_t kmerSize, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& fixedChunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const size_t numThreads);
 
 #endif
