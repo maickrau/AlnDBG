@@ -13,6 +13,104 @@
 #include "edlib.h"
 #include "ConsensusMaker.h"
 
+class TripletSplittingQueue
+{
+public:
+	TripletSplittingQueue() = default;
+	TripletSplittingQueue(const phmap::flat_hash_map<std::string, size_t>* filteredCoverages, const std::vector<size_t>* coveredIndices, const std::vector<std::vector<uint8_t>>* readFakeMSABases, std::vector<std::vector<uint8_t>>* result, std::vector<bool>* indexUsed, std::atomic<size_t>* countRunning) :
+		queueMutex(),
+		resultMutex(),
+		filteredCoverages(filteredCoverages),
+		coveredIndices(coveredIndices),
+		readFakeMSABases(readFakeMSABases),
+		result(result),
+		indexUsed(indexUsed),
+		countRunning(countRunning),
+		nextChunki(0),
+		nextChunkj(0),
+		nextChunkk(0),
+		maxChunkIndex((coveredIndices->size()+9)/10)
+	{
+	}
+	struct Item
+	{
+	public:
+		Item() :
+			filteredCoverages(nullptr),
+			coveredIndices(nullptr),
+			readFakeMSABases(nullptr),
+			result(nullptr),
+			indexUsed(nullptr),
+			countRunning(nullptr),
+			resultMutex(nullptr),
+			chunki(std::numeric_limits<size_t>::max()),
+			chunkj(std::numeric_limits<size_t>::max()),
+			chunkk(std::numeric_limits<size_t>::max())
+		{
+		}
+		const phmap::flat_hash_map<std::string, size_t>* filteredCoverages;
+		const std::vector<size_t>* coveredIndices;
+		const std::vector<std::vector<uint8_t>>* readFakeMSABases;
+		std::vector<std::vector<uint8_t>>* result;
+		std::vector<bool>* indexUsed;
+		std::atomic<size_t>* countRunning;
+		std::mutex* resultMutex;
+		size_t chunki;
+		size_t chunkj;
+		size_t chunkk;
+	};
+	bool empty() const
+	{
+		std::lock_guard<std::mutex> lock { queueMutex };
+		assert(nextChunki <= maxChunkIndex);
+		return nextChunki == maxChunkIndex;
+	}
+	bool popItem(Item* item)
+	{
+		std::lock_guard<std::mutex> lock { queueMutex };
+		if (nextChunki == maxChunkIndex) return false;
+		assert(nextChunki < maxChunkIndex);
+		assert(nextChunkj < maxChunkIndex);
+		assert(nextChunkk < maxChunkIndex);
+		item->resultMutex = &resultMutex;
+		item->filteredCoverages = filteredCoverages;
+		item->coveredIndices = coveredIndices;
+		item->readFakeMSABases = readFakeMSABases;
+		item->result = result;
+		item->indexUsed = indexUsed;
+		item->countRunning = countRunning;
+		item->chunki = nextChunki;
+		item->chunkj = nextChunkj;
+		item->chunkk = nextChunkk;
+		(*countRunning) += 1;
+		nextChunkk += 1;
+		if (nextChunkk == maxChunkIndex)
+		{
+			nextChunkj += 1;
+			if (nextChunkj == maxChunkIndex)
+			{
+				nextChunki += 1;
+				nextChunkj = nextChunki;
+			}
+			nextChunkk = nextChunkj;
+		}
+		return true;
+	}
+private:
+	mutable std::mutex queueMutex;
+	std::mutex resultMutex;
+	const phmap::flat_hash_map<std::string, size_t>* filteredCoverages;
+	const std::vector<size_t>* coveredIndices;
+	const std::vector<std::vector<uint8_t>>* readFakeMSABases;
+	std::vector<std::vector<uint8_t>>* result;
+	std::vector<bool>* indexUsed;
+	std::atomic<size_t>* countRunning;
+	size_t nextChunki;
+	size_t nextChunkj;
+	size_t nextChunkk;
+	size_t maxChunkIndex;
+};
+
 class SNPAlignmentQueue
 {
 public:
@@ -1073,8 +1171,115 @@ bool tripletsArePhasable(const phmap::flat_hash_map<std::string, size_t>& allele
 	return true;
 }
 
-std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const double estimatedAverageErrorRate)
+void runTripletItem(const TripletSplittingQueue::Item& item)
 {
+	assert(item.chunki != std::numeric_limits<size_t>::max());
+	assert(item.filteredCoverages != nullptr);
+	phmap::flat_hash_map<std::string, size_t> alleleCoverages;
+	for (const auto& pair : (*item.filteredCoverages))
+	{
+		std::string allele;
+		for (size_t i = 0; i < 10; i++)
+		{
+			if (item.chunki*10+i < item.coveredIndices->size())
+			{
+				allele.push_back(pair.first[item.chunki*10+i]);
+			}
+			else
+			{
+				allele.push_back('N');
+			}
+		}
+		for (size_t i = 0; i < 10; i++)
+		{
+			if (item.chunkj*10+i < item.coveredIndices->size())
+			{
+				allele.push_back(pair.first[item.chunkj*10+i]);
+			}
+			else
+			{
+				allele.push_back('N');
+			}
+		}
+		for (size_t i = 0; i < 10; i++)
+		{
+			if (item.chunkk*10+i < item.coveredIndices->size())
+			{
+				allele.push_back(pair.first[item.chunkk*10+i]);
+			}
+			else
+			{
+				allele.push_back('N');
+			}
+		}
+		alleleCoverages[allele] += pair.second;
+	}
+	assert(alleleCoverages.size() >= 2);
+	std::vector<bool> indexUsedHere;
+	indexUsedHere.resize(30, false);
+	{
+		std::lock_guard<std::mutex> lock { *item.resultMutex };
+		for (size_t i = 0; i < 10; i++)
+		{
+			if (item.chunki*10+i < item.coveredIndices->size()) indexUsedHere[i] = (*item.indexUsed)[item.chunki*10+i];
+			if (item.chunkj*10+i < item.coveredIndices->size()) indexUsedHere[10+i] = (*item.indexUsed)[item.chunkj*10+i];
+			if (item.chunkk*10+i < item.coveredIndices->size()) indexUsedHere[20+i] = (*item.indexUsed)[item.chunkk*10+i];
+		}
+	}
+	bool didSomething = false;
+	std::vector<std::vector<uint8_t>> resultHere;
+	for (size_t offi = 0; offi < 10; offi++)
+	{
+		size_t i = item.chunki*10+offi;
+		if (i >= item.coveredIndices->size()) break;
+		if (indexUsedHere[offi]) continue;
+		for (size_t offj = 0; offj < 10; offj++)
+		{
+			if (indexUsedHere[offi]) break;
+			size_t j = item.chunkj*10+offj;
+			if (j >= item.coveredIndices->size()) break;
+			if (indexUsedHere[10+offj]) continue;
+			if ((*item.coveredIndices)[i]+10 > (*item.coveredIndices)[j] && (*item.coveredIndices)[j]+10 > (*item.coveredIndices)[i]) continue;
+			for (size_t offk = 0; offk < 10; offk++)
+			{
+				if (indexUsedHere[offi]) break;
+				if (indexUsedHere[10+offj]) break;
+				size_t k = item.chunkk*10+offk;
+				if (k >= item.coveredIndices->size()) break;
+				if (indexUsedHere[20+offk]) continue;
+				if ((*item.coveredIndices)[i]+10 > (*item.coveredIndices)[k] && (*item.coveredIndices)[k]+10 > (*item.coveredIndices)[i]) continue;
+				if ((*item.coveredIndices)[k]+10 > (*item.coveredIndices)[j] && (*item.coveredIndices)[j]+10 > (*item.coveredIndices)[k]) continue;
+				if (!tripletsArePhasable(alleleCoverages, offi, 10+offj, 20+offk)) continue;
+				didSomething = true;
+				if (resultHere.size() == 0) resultHere.resize(item.readFakeMSABases->size());
+				insertTripletClusters(resultHere, *item.readFakeMSABases, (*item.coveredIndices)[i], (*item.coveredIndices)[j], (*item.coveredIndices)[k]);
+				indexUsedHere[offi] = true;
+				indexUsedHere[10+offj] = true;
+				indexUsedHere[20+offk] = true;
+			}
+		}
+	}
+	if (didSomething)
+	{
+		std::lock_guard<std::mutex> lock { *item.resultMutex };
+		for (size_t i = 0; i < 10; i++)
+		{
+			if (indexUsedHere[i]) (*item.indexUsed)[item.chunki*10+i] = true;
+			if (indexUsedHere[10+i]) (*item.indexUsed)[item.chunkj*10+i] = true;
+			if (indexUsedHere[20+i]) (*item.indexUsed)[item.chunkk*10+i] = true;
+		}
+		for (size_t i = 0; i < resultHere.size(); i++)
+		{
+			(*item.result)[i].insert((*item.result)[i].end(), resultHere[i].begin(), resultHere[i].end());
+		}
+	}
+	assert((*item.countRunning) >= 1);
+	(*item.countRunning) -= 1;
+}
+
+std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector<uint8_t>>& readFakeMSABases, const double estimatedAverageErrorRate, std::vector<std::shared_ptr<TripletSplittingQueue>>& tripletQueues, std::mutex& tripletQueuesMutex)
+{
+	const size_t maxItems = 1000000;
 	assert(readFakeMSABases.size() >= 1);
 	assert(readFakeMSABases[0].size() >= 1);
 	std::vector<size_t> coveredIndices;
@@ -1111,82 +1316,23 @@ std::vector<std::vector<uint8_t>> filterByTriplets(const std::vector<std::vector
 	}
 	std::vector<bool> indexUsed;
 	indexUsed.resize(coveredIndices.size(), false);
-	for (size_t chunki = 0; chunki < (coveredIndices.size()+9)/10; chunki++)
+	std::atomic<size_t> countRunning;
+	countRunning = 0;
+	size_t countItems = coveredIndices.size() * coveredIndices.size() * coveredIndices.size() * readFakeMSABases.size();
+	std::shared_ptr<TripletSplittingQueue> queue = std::make_shared<TripletSplittingQueue>(&filteredCoverages, &coveredIndices, &readFakeMSABases, &result, &indexUsed, &countRunning);
+	if (countItems > maxItems*2)
 	{
-		for (size_t chunkj = 0; chunkj < (coveredIndices.size()+9)/10; chunkj++)
-		{
-			for (size_t chunkk = 0; chunkk < (coveredIndices.size()+9)/10; chunkk++)
-			{
-				phmap::flat_hash_map<std::string, size_t> alleleCoverages;
-				for (const auto& pair : filteredCoverages)
-				{
-					std::string allele;
-					for (size_t i = 0; i < 10; i++)
-					{
-						if (chunki*10+i < coveredIndices.size())
-						{
-							allele.push_back(pair.first[chunki*10+i]);
-						}
-						else
-						{
-							allele.push_back('N');
-						}
-					}
-					for (size_t i = 0; i < 10; i++)
-					{
-						if (chunkj*10+i < coveredIndices.size())
-						{
-							allele.push_back(pair.first[chunkj*10+i]);
-						}
-						else
-						{
-							allele.push_back('N');
-						}
-					}
-					for (size_t i = 0; i < 10; i++)
-					{
-						if (chunkk*10+i < coveredIndices.size())
-						{
-							allele.push_back(pair.first[chunkk*10+i]);
-						}
-						else
-						{
-							allele.push_back('N');
-						}
-					}
-					alleleCoverages[allele] += pair.second;
-				}
-				for (size_t offi = 0; offi < 10; offi++)
-				{
-					size_t i = chunki*10+offi;
-					if (i >= indexUsed.size()) break;
-					if (indexUsed[i]) continue;
-					for (size_t offj = 0; offj < 10; offj++)
-					{
-						if (indexUsed[i]) break;
-						size_t j = chunkj*10+offj;
-						if (j >= indexUsed.size()) break;
-						if (indexUsed[j]) continue;
-						if (coveredIndices[i]+10 > coveredIndices[j] && coveredIndices[j]+10 > coveredIndices[i]) continue;
-						for (size_t offk = 0; offk < 10; offk++)
-						{
-							if (indexUsed[i]) break;
-							if (indexUsed[j]) break;
-							size_t k = chunkk*10+offk;
-							if (k >= indexUsed.size()) break;
-							if (indexUsed[k]) continue;
-							if (coveredIndices[i]+10 > coveredIndices[k] && coveredIndices[k]+10 > coveredIndices[i]) continue;
-							if (coveredIndices[k]+10 > coveredIndices[j] && coveredIndices[j]+10 > coveredIndices[k]) continue;
-							if (!tripletsArePhasable(alleleCoverages, offi, 10+offj, 20+offk)) continue;
-							insertTripletClusters(result, readFakeMSABases, coveredIndices[i], coveredIndices[j], coveredIndices[k]);
-							indexUsed[i] = true;
-							indexUsed[j] = true;
-							indexUsed[k] = true;
-						}
-					}
-				}
-			}
-		}
+		std::lock_guard<std::mutex> lock { tripletQueuesMutex };
+		tripletQueues.emplace_back(queue);
+	}
+	TripletSplittingQueue::Item item;
+	while (queue->popItem(&item))
+	{
+		runTripletItem(item);
+	}
+	while (countRunning >= 1)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
 	}
 	return result;
 }
@@ -1551,9 +1697,9 @@ std::vector<std::vector<size_t>> tryOccurrenceLinkageSNPSplitting(const std::vec
 	return getSNPTransitiveClosure(readFakeMSABases, maxEdits);
 }
 
-std::vector<std::vector<size_t>> tryTripletSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
+std::vector<std::vector<size_t>> tryTripletSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate, std::vector<std::shared_ptr<TripletSplittingQueue>>& tripletQueues, std::mutex& tripletQueuesMutex)
 {
-	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByTriplets(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
+	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByTriplets(unfilteredReadFakeMSABases, estimatedAverageErrorRate, tripletQueues, tripletQueuesMutex);
 	return getSNPTransitiveClosure(readFakeMSABases, 0);
 }
 
@@ -1705,8 +1851,10 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 	std::sort(chunksNeedProcessing.begin(), chunksNeedProcessing.end(), [](const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right) { return left.size() < right.size(); });
 	auto oldChunks = chunksPerRead;
 	std::vector<std::shared_ptr<SNPAlignmentQueue>> alignmentQueues;
+	std::vector<std::shared_ptr<TripletSplittingQueue>> tripletQueues;
 	std::mutex alignmentQueuesMutex;
-	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, &alignmentQueues, &alignmentQueuesMutex, minSolidBaseCoverage](size_t dummy)
+	std::mutex tripletQueuesMutex;
+	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, &alignmentQueues, &alignmentQueuesMutex, &tripletQueues, &tripletQueuesMutex, minSolidBaseCoverage](size_t dummy)
 	{
 		while (true)
 		{
@@ -1724,6 +1872,25 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				if (got)
 				{
 					runAlignmentItem(item);
+					continue;
+				}
+			}
+			{
+				TripletSplittingQueue::Item item;
+				assert(item.chunki == std::numeric_limits<size_t>::max());
+				bool got = false;
+				{
+					std::lock_guard<std::mutex> lock { tripletQueuesMutex };
+					if (tripletQueues.size() >= 1)
+					{
+						got = tripletQueues.back()->popItem(&item);
+						if (tripletQueues.back()->empty()) tripletQueues.pop_back();
+					}
+				}
+				if (got)
+				{
+					assert(item.chunki != std::numeric_limits<size_t>::max());
+					runTripletItem(item);
 					continue;
 				}
 			}
@@ -1829,7 +1996,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			}
 			if (clusters.size() == 1)
 			{
-				clusters = tryTripletSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				clusters = tryTripletSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate, tripletQueues, tripletQueuesMutex);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 			}
