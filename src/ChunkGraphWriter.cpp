@@ -264,12 +264,13 @@ void fixPathClips(std::vector<std::vector<UnitigPath>>& readPaths, const ChunkUn
 	}
 }
 
-void trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, const ChunkUnitigGraph& graph, std::vector<TwobitString>& unitigDBGSequences, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& fixedOverlaps)
+bool trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, const ChunkUnitigGraph& graph, std::vector<TwobitString>& unitigDBGSequences, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& fixedOverlaps)
 {
 	std::vector<bool> shouldTrimForward;
 	std::vector<bool> shouldTrimBackward;
 	shouldTrimForward.resize(graph.unitigLengths.size(), false);
 	shouldTrimBackward.resize(graph.unitigLengths.size(), false);
+	bool trimAnything = false;
 	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
 	{
 		for (auto edge : graph.edges.getEdges(std::make_pair(i, true)))
@@ -280,6 +281,7 @@ void trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, c
 			if (overlap == unitigDBGSequences[i].size() || overlap == unitigDBGSequences[edge.first].size())
 			{
 				shouldTrimForward[i] = true;
+				trimAnything = true;
 				break;
 			}
 		}
@@ -291,10 +293,12 @@ void trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, c
 			if (overlap == unitigDBGSequences[i].size() || overlap == unitigDBGSequences[edge.first].size())
 			{
 				shouldTrimBackward[i] = true;
+				trimAnything = true;
 				break;
 			}
 		}
 	}
+	if (!trimAnything) return false;
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
 		for (size_t j = 0; j < readPaths[i].size(); j++)
@@ -342,6 +346,7 @@ void trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, c
 			pair.second -= 1;
 		}
 	}
+	return true;
 }
 
 void writeBidirectedUnitigGraphWithSequences(const std::string& graphFile, const std::string& pathsFile, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& rawChunksPerRead, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t numThreads, const size_t kmerSize)
@@ -357,7 +362,11 @@ void writeBidirectedUnitigGraphWithSequences(const std::string& graphFile, const
 	std::tie(unitigDBGSequences, chunkSequencePositionsWithinUnitigs, fixedOverlaps) = getUnitigDBGSequences(graph, kmerSize, fixedChunksPerRead, sequenceIndex, minimizerPositionsPerRead, numThreads);
 	fixPathClips(readPaths, graph, unitigDBGSequences, chunkSequencePositionsWithinUnitigs);
 	// ensure that edge overlap does not contain any unitigs
-	trimUnitigsByOneBasePair(readPaths, graph, unitigDBGSequences, fixedOverlaps);
+	for (size_t i = 0; i+1 < kmerSize; i++)
+	{
+		bool trimmed = trimUnitigsByOneBasePair(readPaths, graph, unitigDBGSequences, fixedOverlaps);
+		if (!trimmed) break;
+	}
 	writeUnitigGraph(graphFile, graph, unitigDBGSequences, fixedOverlaps);
 	std::cerr << "writing unitig paths " << pathsFile << std::endl;
 	writeUnitigPaths(pathsFile, graph, readPaths, sequenceIndex, unitigDBGSequences, rawReadLengths, fixedOverlaps);
