@@ -266,20 +266,49 @@ void fixPathClips(std::vector<std::vector<UnitigPath>>& readPaths, const ChunkUn
 
 void trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, const ChunkUnitigGraph& graph, std::vector<TwobitString>& unitigDBGSequences, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& fixedOverlaps)
 {
+	std::vector<bool> shouldTrimForward;
+	std::vector<bool> shouldTrimBackward;
+	shouldTrimForward.resize(graph.unitigLengths.size(), false);
+	shouldTrimBackward.resize(graph.unitigLengths.size(), false);
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		for (auto edge : graph.edges.getEdges(std::make_pair(i, true)))
+		{
+			auto key = canonNodePair(i + firstBitUint64_t, edge.first + (edge.second ? firstBitUint64_t : 0));
+			assert(fixedOverlaps.count(key) == 1);
+			size_t overlap = fixedOverlaps.at(key);
+			if (overlap == unitigDBGSequences[i].size() || overlap == unitigDBGSequences[edge.first].size())
+			{
+				shouldTrimForward[i] = true;
+				break;
+			}
+		}
+		for (auto edge : graph.edges.getEdges(std::make_pair(i, false)))
+		{
+			auto key = canonNodePair(i, edge.first + (edge.second ? firstBitUint64_t : 0));
+			assert(fixedOverlaps.count(key) == 1);
+			size_t overlap = fixedOverlaps.at(key);
+			if (overlap == unitigDBGSequences[i].size() || overlap == unitigDBGSequences[edge.first].size())
+			{
+				shouldTrimBackward[i] = true;
+				break;
+			}
+		}
+	}
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
 		for (size_t j = 0; j < readPaths[i].size(); j++)
 		{
 			if (readPaths[i][j].pathLeftClipBases == 0)
 			{
-				if (graph.edges.getEdges(std::make_pair(readPaths[i][j].path[0] & maskUint64_t, (readPaths[i][j].path[0] ^ firstBitUint64_t) & firstBitUint64_t)).size() >= 1)
+				if (((readPaths[i][j].path[0] & firstBitUint64_t) && shouldTrimBackward[readPaths[i][j].path[0] & maskUint64_t]) || (((readPaths[i][j].path[0] ^ firstBitUint64_t) & firstBitUint64_t) && shouldTrimForward[readPaths[i][j].path[0] & maskUint64_t]))
 				{
 					readPaths[i][j].readPartInPathnode[0].first += 1;
 				}
 			}
 			if (readPaths[i][j].pathRightClipBases == 0)
 			{
-				if (graph.edges.getEdges(std::make_pair(readPaths[i][j].path.back() & maskUint64_t, readPaths[i][j].path.back() & firstBitUint64_t)).size() >= 1)
+				if (((readPaths[i][j].path.back() & firstBitUint64_t) && shouldTrimForward[readPaths[i][j].path.back() & maskUint64_t]) || (((readPaths[i][j].path.back() ^ firstBitUint64_t) & firstBitUint64_t) && shouldTrimBackward[readPaths[i][j].path.back() & maskUint64_t]))
 				{
 					readPaths[i][j].readPartInPathnode.back().second -= 1;
 				}
@@ -290,12 +319,12 @@ void trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, c
 	{
 		size_t start = 0;
 		size_t size = unitigDBGSequences[i].size();
-		if (graph.edges.getEdges(std::make_pair(i, false)).size() >= 1)
+		if (shouldTrimBackward[i])
 		{
 			start += 1;
 			size -= 1;
 		}
-		if (graph.edges.getEdges(std::make_pair(i, true)).size() >= 1)
+		if (shouldTrimForward[i])
 		{
 			size -= 1;
 		}
@@ -304,11 +333,11 @@ void trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, c
 	for (auto& pair : fixedOverlaps)
 	{
 		assert(pair.second >= 2);
-		if (graph.edges.getEdges(std::make_pair(pair.first.first & maskUint64_t, pair.first.first & firstBitUint64_t)).size() >= 1)
+		if (((pair.first.first & firstBitUint64_t) && shouldTrimForward[pair.first.first & maskUint64_t]) || (((pair.first.first ^ firstBitUint64_t) & firstBitUint64_t) && shouldTrimBackward[pair.first.first & maskUint64_t]))
 		{
 			pair.second -= 1;
 		}
-		if (graph.edges.getEdges(std::make_pair(pair.first.second & maskUint64_t, (pair.first.second ^ firstBitUint64_t) & firstBitUint64_t)).size() >= 1)
+		if (((pair.first.second & firstBitUint64_t) && shouldTrimBackward[pair.first.second & maskUint64_t]) || (((pair.first.second ^ firstBitUint64_t) & firstBitUint64_t) && shouldTrimForward[pair.first.second & maskUint64_t]))
 		{
 			pair.second -= 1;
 		}
