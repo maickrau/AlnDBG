@@ -1223,14 +1223,14 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			[[fallthrough]];
+		case 19:
 //			writeReadChunkSequences("sequences-chunk19.txt", rawReadLengths, chunksPerRead, sequenceIndex);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeBidirectedUnitigGraphWithSequences("graph-dbg-final.gfa", "paths-dbg-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			writeReadUnitigSequences("sequences-dbg-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			[[fallthrough]];
-		case 19:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			getContigPathsAndConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize, "paths-final.txt", "contigs-final.fa", numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
