@@ -1253,6 +1253,7 @@ phmap::flat_hash_map<std::pair<size_t, size_t>, std::vector<std::tuple<size_t, s
 	phmap::flat_hash_map<std::pair<size_t, size_t>, std::vector<std::tuple<size_t, size_t, size_t, bool>>> result;
 	for (size_t i = 0; i < smallchunksPerRead.size(); i++)
 	{
+		if (minimizerPositionsPerRead[i].size() < 2) continue;
 		assert(minimizerPositionsPerRead[i].size() == smallchunksPerRead[i].size()+1);
 		for (size_t j = 0; j < smallchunksPerRead[i].size(); j++)
 		{
