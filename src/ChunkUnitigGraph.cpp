@@ -1163,6 +1163,7 @@ std::pair<std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>>, 
 	}
 	for (size_t read = 0; read < fixedChunksPerRead.size(); read++)
 	{
+		if (minimizerPositionsPerRead[read].size() < 2) continue;
 		std::vector<std::pair<std::pair<size_t, size_t>, bool>> smallchunksHere;
 		smallchunksHere.resize(minimizerPositionsPerRead[read].size()-1, std::make_pair(std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()), true) );
 		for (size_t j = 0; j < fixedChunksPerRead[read].size(); j++)
@@ -1202,6 +1203,7 @@ std::pair<std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>>, 
 	smallchunksPerRead.resize(fixedChunksPerRead.size());
 	for (size_t read = 0; read < fixedChunksPerRead.size(); read++)
 	{
+		if (minimizerPositionsPerRead[read].size() < 2) continue;
 		smallchunksPerRead[read].resize(minimizerPositionsPerRead[read].size()-1, std::make_pair(std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()), true) );
 		for (size_t j = 0; j < fixedChunksPerRead[read].size(); j++)
 		{
