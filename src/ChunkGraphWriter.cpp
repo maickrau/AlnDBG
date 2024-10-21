@@ -278,7 +278,7 @@ bool trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, c
 			auto key = canonNodePair(i + firstBitUint64_t, edge.first + (edge.second ? firstBitUint64_t : 0));
 			assert(fixedOverlaps.count(key) == 1);
 			size_t overlap = fixedOverlaps.at(key);
-			if (overlap == unitigDBGSequences[i].size() || overlap == unitigDBGSequences[edge.first].size())
+			if (overlap == unitigDBGSequences[edge.first].size())
 			{
 				shouldTrimForward[i] = true;
 				trimAnything = true;
@@ -290,7 +290,7 @@ bool trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, c
 			auto key = canonNodePair(i, edge.first + (edge.second ? firstBitUint64_t : 0));
 			assert(fixedOverlaps.count(key) == 1);
 			size_t overlap = fixedOverlaps.at(key);
-			if (overlap == unitigDBGSequences[i].size() || overlap == unitigDBGSequences[edge.first].size())
+			if (overlap == unitigDBGSequences[edge.first].size())
 			{
 				shouldTrimBackward[i] = true;
 				trimAnything = true;
