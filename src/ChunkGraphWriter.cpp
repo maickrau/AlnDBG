@@ -250,11 +250,11 @@ void fixPathClips(std::vector<std::vector<UnitigPath>>& readPaths, const ChunkUn
 			}
 			else
 			{
-				readPaths[i][j].pathLeftClipBases = unitigDBGSequences[readPaths[i][j].path[0] & maskUint64_t].size() - 1 - chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t][chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t].size()-1-chunkLeftClip].second;
+				readPaths[i][j].pathLeftClipBases = unitigDBGSequences[readPaths[i][j].path[0] & maskUint64_t].size() - chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t][chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t].size()-1-chunkLeftClip].second;
 			}
 			if (readPaths[i][j].path.back() & firstBitUint64_t)
 			{
-				readPaths[i][j].pathRightClipBases = unitigDBGSequences[readPaths[i][j].path.back() & maskUint64_t].size() - 1 - chunkSequencePositionsWithinUnitigs[readPaths[i][j].path.back() & maskUint64_t][chunkSequencePositionsWithinUnitigs[readPaths[i][j].path.back() & maskUint64_t].size()-1-chunkRightClip].second;
+				readPaths[i][j].pathRightClipBases = unitigDBGSequences[readPaths[i][j].path.back() & maskUint64_t].size() - chunkSequencePositionsWithinUnitigs[readPaths[i][j].path.back() & maskUint64_t][chunkSequencePositionsWithinUnitigs[readPaths[i][j].path.back() & maskUint64_t].size()-1-chunkRightClip].second;
 			}
 			else
 			{
