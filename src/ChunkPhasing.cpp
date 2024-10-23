@@ -2018,13 +2018,13 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 			}
-			if (clusters.size() == 1 && chunkBeingDone.size() > 1000)
+			if (clusters.size() == 1 && chunkBeingDone.size() > 1000 && estimatedAverageErrorRate < mismatchFraction)
 			{
 				clusters = tryMultinomiallySignificantSNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 			}
-			if (clusters.size() == 1 && chunkBeingDone.size() > 1000)
+			if (clusters.size() == 1 && chunkBeingDone.size() > 1000 && estimatedAverageErrorRate < mismatchFraction)
 			{
 				clusters = trySNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
