@@ -303,18 +303,26 @@ bool trimUnitigsByOneBasePair(std::vector<std::vector<UnitigPath>>& readPaths, c
 	{
 		for (size_t j = 0; j < readPaths[i].size(); j++)
 		{
-			if (readPaths[i][j].pathLeftClipBases == 0)
+			if (((readPaths[i][j].path[0] & firstBitUint64_t) && shouldTrimBackward[readPaths[i][j].path[0] & maskUint64_t]) || (((readPaths[i][j].path[0] ^ firstBitUint64_t) & firstBitUint64_t) && shouldTrimForward[readPaths[i][j].path[0] & maskUint64_t]))
 			{
-				if (((readPaths[i][j].path[0] & firstBitUint64_t) && shouldTrimBackward[readPaths[i][j].path[0] & maskUint64_t]) || (((readPaths[i][j].path[0] ^ firstBitUint64_t) & firstBitUint64_t) && shouldTrimForward[readPaths[i][j].path[0] & maskUint64_t]))
+				if (readPaths[i][j].pathLeftClipBases == 0)
 				{
 					readPaths[i][j].readPartInPathnode[0].first += 1;
 				}
+				else
+				{
+					readPaths[i][j].pathLeftClipBases -= 1;
+				}
 			}
-			if (readPaths[i][j].pathRightClipBases == 0)
+			if (((readPaths[i][j].path.back() & firstBitUint64_t) && shouldTrimForward[readPaths[i][j].path.back() & maskUint64_t]) || (((readPaths[i][j].path.back() ^ firstBitUint64_t) & firstBitUint64_t) && shouldTrimBackward[readPaths[i][j].path.back() & maskUint64_t]))
 			{
-				if (((readPaths[i][j].path.back() & firstBitUint64_t) && shouldTrimForward[readPaths[i][j].path.back() & maskUint64_t]) || (((readPaths[i][j].path.back() ^ firstBitUint64_t) & firstBitUint64_t) && shouldTrimBackward[readPaths[i][j].path.back() & maskUint64_t]))
+				if (readPaths[i][j].pathRightClipBases == 0)
 				{
 					readPaths[i][j].readPartInPathnode.back().second -= 1;
+				}
+				else
+				{
+					readPaths[i][j].pathRightClipBases -= 1;
 				}
 			}
 		}
