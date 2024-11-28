@@ -479,81 +479,126 @@ void contextResolve(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 			chunkLengths[i] = rawChunkLengths[i][rawChunkLengths[i].size()/2];
 		}
 	}
-	std::vector<std::map<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>, size_t>> contextToNewChunk;
-	contextToNewChunk.resize(chunkLengths.size());
+	std::map<std::vector<uint64_t>, size_t> chunkmerToNewChunk;
+	std::vector<std::vector<std::pair<size_t, size_t>>> chunkParent;
+	std::vector<std::vector<std::pair<size_t, size_t>>> newChunkParent;
+	chunkParent.resize(chunksPerRead.size());
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		chunkParent[i].resize(chunksPerRead[i].size());
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			chunkParent[i][j] = std::make_pair(i, j);
+		}
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		std::vector<std::pair<size_t, size_t>> newChunkmerRanges;
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) newChunkmerRanges.emplace_back(j, j);
+		}
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t end = j;
+			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
+			while (end < chunksPerRead[i].size() && length < expandedSize)
+			{
+				if (end+1 == chunksPerRead[i].size()) break;
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][end+1]))) break;
+				end += 1;
+				length += chunkLengths[std::get<2>(chunksPerRead[i][end]) & maskUint64_t];
+				length -= kmerSize;
+			}
+			if (length < expandedSize) continue;
+			if (end == chunksPerRead[i].size()) continue;
+			newChunkmerRanges.emplace_back(j, end);
+		}
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t start = j;
+			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
+			while (start > 0 && length < expandedSize)
+			{
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][start-1]))) break;
+				start -= 1;
+				length += chunkLengths[std::get<2>(chunksPerRead[i][start]) & maskUint64_t];
+				length -= kmerSize;
+			}
+			if (length < expandedSize) continue;
+			newChunkmerRanges.emplace_back(start, j);
+		}
+		if (newChunkmerRanges.size() == 0)
+		{
+			chunksPerRead[i].clear();
+			continue;
+		}
+		newChunkmerRanges = getUniqueRanges(newChunkmerRanges);
+		assert(newChunkmerRanges.size() >= 1);
+		for (size_t j = 1; j < newChunkmerRanges.size(); j++)
+		{
+			assert(newChunkmerRanges[j].first >= newChunkmerRanges[j-1].first);
+			assert(newChunkmerRanges[j].second >= newChunkmerRanges[j-1].second);
+		}
+		std::vector<std::tuple<size_t, size_t, uint64_t>> newChunks;
+		for (size_t j = 0; j < newChunkmerRanges.size(); j++)
+		{
+			size_t newchunk = std::numeric_limits<size_t>::max();
+			std::vector<uint64_t> chunkmer;
+			bool valid = true;
+			for (size_t k = newChunkmerRanges[j].first; k <= newChunkmerRanges[j].second; k++)
+			{
+				chunkmer.emplace_back(std::get<2>(chunksPerRead[i][k]));
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][k]))) valid = false;
+			}
+			if (valid)
+			{
+				if (chunkmerToNewChunk.count(chunkmer) == 1)
+				{
+					size_t newChunkIndex = chunkmerToNewChunk.at(chunkmer);
+					newchunk = newChunkIndex;
+					for (size_t k = 0; k < chunkmer.size(); k++)
+					{
+						merge(chunkParent, std::make_pair(i, newChunkmerRanges[j].first+k), newChunkParent[newchunk][k]);
+					}
+				}
+				else
+				{
+					newchunk = chunkmerToNewChunk.size();
+					chunkmerToNewChunk[chunkmer] = newchunk;
+					newChunkParent.emplace_back();
+					for (size_t k = 0; k < chunkmer.size(); k++)
+					{
+						newChunkParent.back().emplace_back(i, newChunkmerRanges[j].first+k);
+					}
+				}
+			}
+			else
+			{
+				newchunk = std::numeric_limits<size_t>::max();
+			}
+		}
+	}
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> newChunkClusterToIndex;
 	size_t nextNum = 0;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
-			{
-				continue;
-			}
-			std::pair<std::vector<uint64_t>, std::vector<uint64_t>> context;
-			bool valid = true;
-			std::tie(context, valid) = getChunkContext(chunksPerRead[i], chunkLengths, j, expandedSize);
-			if (!valid) continue;
-			assert(std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t);
-			if (contextToNewChunk[std::get<2>(chunksPerRead[i][j]) & maskUint64_t].count(context) == 0)
-			{
-				contextToNewChunk[std::get<2>(chunksPerRead[i][j]) & maskUint64_t][context] = nextNum;
-				nextNum += 1;
-			}
+			if (chunkParent[i][j].first != i || chunkParent[i][j].second != j) continue;
+			newChunkClusterToIndex[chunkParent[i][j]] = nextNum;
+			nextNum += 1;
 		}
-	}
-	phmap::flat_hash_map<uint64_t, size_t> unresolvedChunkMapping;
-	for (size_t i = 0; i < contextToNewChunk.size(); i++)
-	{
-		if (contextToNewChunk[i].size() != 0) continue;
-		unresolvedChunkMapping[i] = nextNum;
-		nextNum += 1;
 	}
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
-		std::vector<std::tuple<size_t, size_t, uint64_t>> newChunksHere;
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
-			{
-				newChunksHere.emplace_back(std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j]), std::numeric_limits<size_t>::max());
-				continue;
-			}
-			if (unresolvedChunkMapping.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 1)
-			{
-				newChunksHere.emplace_back(std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j]), unresolvedChunkMapping.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) + firstBitUint64_t);
-				continue;
-			}
-			std::pair<std::vector<uint64_t>, std::vector<uint64_t>> context;
-			bool valid = true;
-			std::tie(context, valid) = getChunkContext(chunksPerRead[i], chunkLengths, j, expandedSize);
-			if (valid)
-			{
-				assert(contextToNewChunk.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t).count(context) == 1);
-				newChunksHere.emplace_back(std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j]), contextToNewChunk.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t).at(context) + firstBitUint64_t);
-			}
-			else
-			{
-				size_t uniqueMatchingContext = std::numeric_limits<size_t>::max();
-				for (auto pair : contextToNewChunk.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t))
-				{
-					if (contextMatches(context, pair.first))
-					{
-						if (uniqueMatchingContext == std::numeric_limits<size_t>::max())
-						{
-							uniqueMatchingContext = pair.second;
-						}
-						else
-						{
-							uniqueMatchingContext = std::numeric_limits<size_t>::max();
-							break;
-						}
-					}
-				}
-				newChunksHere.emplace_back(std::get<0>(chunksPerRead[i][j]), std::get<1>(chunksPerRead[i][j]), uniqueMatchingContext | firstBitUint64_t);
-			}
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			std::get<2>(chunksPerRead[i][j]) = newChunkClusterToIndex.at(find(chunkParent, chunkParent[i][j])) + firstBitUint64_t;
 		}
-		std::swap(chunksPerRead[i], newChunksHere);
 	}
 }
 
@@ -1108,9 +1153,14 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 				splitPerTrioPhasing(sequenceIndex, rawReadLengths, chunksPerRead, trioHapmers, numThreads);
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+				writeStage(84, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			}
+			[[fallthrough]];
+		case 84:
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			contextResolve(chunksPerRead, kmerSize, 10000);
+			writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 9:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
