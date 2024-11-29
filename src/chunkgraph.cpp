@@ -99,7 +99,7 @@ std::vector<std::pair<size_t, size_t>> getUniqueRanges(std::vector<std::pair<siz
 	return raw;
 }
 
-void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t expandedSize)
+void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t kmerSize, const size_t expandedSize)
 {
 	std::vector<size_t> chunkLengths;
 	{
@@ -123,23 +123,74 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 			chunkLengths[i] = rawChunkLengths[i][rawChunkLengths[i].size()/2];
 		}
 	}
+	std::vector<bool> keepChunkAsIs;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			while (keepChunkAsIs.size() <= chunk) keepChunkAsIs.emplace_back(false);
+		}
+	}
+	{
+		ChunkUnitigGraph graph;
+		std::vector<std::vector<UnitigPath>> readPaths;
+		std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+		for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+		{
+			size_t firstWithinSolidInterior = std::numeric_limits<size_t>::max();
+			size_t lastWithinSolidInterior = std::numeric_limits<size_t>::max();
+			size_t lengthSum = 0;
+			for (size_t j = 0; j < graph.chunksInUnitig[i].size(); j++)
+			{
+				if (lengthSum > expandedSize)
+				{
+					firstWithinSolidInterior = j;
+					break;
+				}
+				lengthSum += chunkLengths[graph.chunksInUnitig[i][j] & maskUint64_t];
+				if (j != 0) lengthSum -= kmerSize;
+			}
+			lengthSum = 0;
+			for (size_t j = graph.chunksInUnitig[i].size()-1; j < graph.chunksInUnitig[i].size(); j--)
+			{
+				if (lengthSum > expandedSize)
+				{
+					lastWithinSolidInterior = j;
+					break;
+				}
+				lengthSum += chunkLengths[graph.chunksInUnitig[i][j] & maskUint64_t];
+				if (j != graph.chunksInUnitig[i].size()-1) lengthSum -= kmerSize;
+			}
+			if (firstWithinSolidInterior != std::numeric_limits<size_t>::max() && lastWithinSolidInterior != std::numeric_limits<size_t>::max() && lastWithinSolidInterior >= firstWithinSolidInterior)
+			{
+				for (size_t j = firstWithinSolidInterior; j <= lastWithinSolidInterior; j++)
+				{
+					assert((graph.chunksInUnitig[i][j] & maskUint64_t) < keepChunkAsIs.size());
+					assert(!keepChunkAsIs[graph.chunksInUnitig[i][j] & maskUint64_t]);
+					keepChunkAsIs[graph.chunksInUnitig[i][j] & maskUint64_t] = true;
+				}
+			}
+		}
+	}
 	std::map<std::vector<uint64_t>, size_t> chunkmerToNewChunk;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		std::vector<std::pair<size_t, size_t>> newChunkmerRanges;
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) newChunkmerRanges.emplace_back(j, j);
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) newChunkmerRanges.emplace_back(j, j);
 		}
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			size_t end = j;
 			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
 			while (end < chunksPerRead[i].size() && length < expandedSize)
 			{
 				if (end+1 == chunksPerRead[i].size()) break;
-				if (NonexistantChunk(std::get<2>(chunksPerRead[i][end+1]))) break;
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][end+1])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][end+1]) & maskUint64_t]) break;
 				end += 1;
 				length += chunkLengths[std::get<2>(chunksPerRead[i][end]) & maskUint64_t];
 				length -= kmerSize;
@@ -150,12 +201,12 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 		}
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			size_t start = j;
 			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
 			while (start > 0 && length < expandedSize)
 			{
-				if (NonexistantChunk(std::get<2>(chunksPerRead[i][start-1]))) break;
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][start-1])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][start-1]) & maskUint64_t]) break;
 				start -= 1;
 				length += chunkLengths[std::get<2>(chunksPerRead[i][start]) & maskUint64_t];
 				length -= kmerSize;
@@ -215,6 +266,7 @@ void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t
 	assert(rawReadLengths.size() == chunksPerRead.size());
 	std::vector<bool> canMergeRight;
 	std::vector<bool> canMergeLeft;
+	std::vector<bool> canMergeAtAll;
 	std::vector<size_t> uniqueRight;
 	std::vector<size_t> uniqueLeft;
 	std::vector<size_t> complementChunk;
@@ -265,6 +317,7 @@ void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t
 		assert(complementChunk[i] == std::numeric_limits<size_t>::max() || complementChunk[complementChunk[i]] == i);
 	}
 	canMergeRight.resize(canMergeLeft.size(), true);
+	canMergeAtAll.resize(canMergeLeft.size(), true);
 	uniqueRight.resize(canMergeLeft.size(), std::numeric_limits<size_t>::max());
 	uniqueLeft.resize(canMergeLeft.size(), std::numeric_limits<size_t>::max());
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -279,6 +332,14 @@ void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t
 		{
 			assert(std::get<2>(chunksPerRead[i].back()) & firstBitUint64_t);
 			canMergeRight[std::get<2>(chunksPerRead[i].back()) & maskUint64_t] = false;
+		}
+		for (size_t j = 1; j+1 < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (std::get<1>(chunksPerRead[i][j-1]) < std::get<0>(chunksPerRead[i][j+1]) + kmerSize)
+			{
+				canMergeAtAll[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
+			}
 		}
 		for (size_t j = 1; j < chunksPerRead[i].size(); j++)
 		{
@@ -348,14 +409,14 @@ void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t
 				newChunksHere.emplace_back(chunksPerRead[i][j]);
 				continue;
 			}
-			if (canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
+			if (canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] && canMergeAtAll[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
 			{
 				assert(j >= 1);
 				assert(std::get<0>(chunksPerRead[i][j-1]) < std::get<0>(chunksPerRead[i][j]));
 				assert(std::get<1>(chunksPerRead[i][j-1]) == std::get<1>(chunksPerRead[i][j]));
 				continue;
 			}
-			if (canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
+			if (canMergeRight[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] && canMergeAtAll[std::get<2>(chunksPerRead[i][j]) & maskUint64_t])
 			{
 				assert(j+1 < chunksPerRead[i].size());
 				assert(std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j+1]));
@@ -453,6 +514,39 @@ bool contextMatches(const std::pair<std::vector<uint64_t>, std::vector<uint64_t>
 		if (subcontext.second[i] != supercontext.second[i]) return false;
 	}
 	return true;
+}
+
+void compact(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	std::vector<bool> used;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			while (used.size() <= chunk) used.emplace_back(false);
+			used[chunk] = true;
+		}
+	}
+	std::vector<size_t> newIndex;
+	newIndex.resize(used.size(), 0);
+	size_t next = 0;
+	for (size_t i = 0; i < used.size(); i++)
+	{
+		if (!used[i]) continue;
+		newIndex[i] = next;
+		next += 1;
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			std::get<2>(chunksPerRead[i][j]) = newIndex[chunk] + (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t);
+		}
+	}
 }
 
 void contextResolve(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t expandedSize)
@@ -1160,12 +1254,19 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		case 84:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			contextResolve(chunksPerRead, kmerSize, 10000);
+			writeStage(85, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			[[fallthrough]];
+		case 85:
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, 2, kmerSize);
+			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, approxOneHapCoverage*0.25, kmerSize);
+			compact(chunksPerRead);
 			writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 9:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			contextResolve(chunksPerRead, kmerSize, 2000);
-			expandChunks(chunksPerRead, kmerSize, 10000);
+			expandChunks(chunksPerRead, approxOneHapCoverage, kmerSize, 10000);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(90, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
