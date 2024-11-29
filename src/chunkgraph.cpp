@@ -141,40 +141,7 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 		{
 			for (size_t j = 0; j < graph.chunksInUnitig[i].size(); j++)
 			{
-				keepChunkAsIs[graph.chunksInUnitig[i][j] & maskUint64_t] = false;
-			}
-			size_t firstWithinSolidInterior = std::numeric_limits<size_t>::max();
-			size_t lastWithinSolidInterior = std::numeric_limits<size_t>::max();
-			size_t lengthSum = 0;
-			for (size_t j = 0; j < graph.chunksInUnitig[i].size(); j++)
-			{
-				if (lengthSum > expandedSize)
-				{
-					firstWithinSolidInterior = j;
-					break;
-				}
-				lengthSum += chunkLengths[graph.chunksInUnitig[i][j] & maskUint64_t];
-				if (j != 0) lengthSum -= kmerSize;
-			}
-			lengthSum = 0;
-			for (size_t j = graph.chunksInUnitig[i].size()-1; j < graph.chunksInUnitig[i].size(); j--)
-			{
-				if (lengthSum > expandedSize)
-				{
-					lastWithinSolidInterior = j;
-					break;
-				}
-				lengthSum += chunkLengths[graph.chunksInUnitig[i][j] & maskUint64_t];
-				if (j != graph.chunksInUnitig[i].size()-1) lengthSum -= kmerSize;
-			}
-			if (firstWithinSolidInterior != std::numeric_limits<size_t>::max() && lastWithinSolidInterior != std::numeric_limits<size_t>::max() && lastWithinSolidInterior >= firstWithinSolidInterior)
-			{
-				for (size_t j = firstWithinSolidInterior; j <= lastWithinSolidInterior; j++)
-				{
-					assert((graph.chunksInUnitig[i][j] & maskUint64_t) < keepChunkAsIs.size());
-					assert(!keepChunkAsIs[graph.chunksInUnitig[i][j] & maskUint64_t]);
-					keepChunkAsIs[graph.chunksInUnitig[i][j] & maskUint64_t] = true;
-				}
+				keepChunkAsIs[graph.chunksInUnitig[i][j] & maskUint64_t] = (graph.unitigLengths[i] > expandedSize);
 			}
 		}
 	}
@@ -191,15 +158,27 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			size_t end = j;
 			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
+			bool endsInAnchor = false;
 			while (end < chunksPerRead[i].size() && length < expandedSize)
 			{
 				if (end+1 == chunksPerRead[i].size()) break;
-				if (NonexistantChunk(std::get<2>(chunksPerRead[i][end+1])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][end+1]) & maskUint64_t]) break;
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][end+1])))
+				{
+					end += 1;
+					endsInAnchor = true;
+					break;
+				}
+				if (keepChunkAsIs[std::get<2>(chunksPerRead[i][end+1]) & maskUint64_t])
+				{
+					end += 1;
+					endsInAnchor = true;
+					break;
+				}
 				end += 1;
 				length += chunkLengths[std::get<2>(chunksPerRead[i][end]) & maskUint64_t];
 				length -= kmerSize;
 			}
-			if (length < expandedSize) continue;
+			if (length < expandedSize && !endsInAnchor) continue;
 			if (end == chunksPerRead[i].size()) continue;
 			newChunkmerRanges.emplace_back(j, end);
 		}
@@ -208,14 +187,26 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			size_t start = j;
 			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
+			bool endsInAnchor = false;
 			while (start > 0 && length < expandedSize)
 			{
-				if (NonexistantChunk(std::get<2>(chunksPerRead[i][start-1])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][start-1]) & maskUint64_t]) break;
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][start-1])))
+				{
+					start -= 1;
+					endsInAnchor = true;
+					break;
+				}
+				if (keepChunkAsIs[std::get<2>(chunksPerRead[i][start-1]) & maskUint64_t])
+				{
+					start -= 1;
+					endsInAnchor = true;
+					break;
+				}
 				start -= 1;
 				length += chunkLengths[std::get<2>(chunksPerRead[i][start]) & maskUint64_t];
 				length -= kmerSize;
 			}
-			if (length < expandedSize) continue;
+			if (length < expandedSize && !endsInAnchor) continue;
 			newChunkmerRanges.emplace_back(start, j);
 		}
 		if (newChunkmerRanges.size() == 0)
