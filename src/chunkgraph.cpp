@@ -130,7 +130,7 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 		{
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
-			while (keepChunkAsIs.size() <= chunk) keepChunkAsIs.emplace_back(true);
+			while (keepChunkAsIs.size() <= chunk) keepChunkAsIs.emplace_back(false);
 		}
 	}
 	{
@@ -139,10 +139,6 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 		std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
 		for (size_t i = 0; i < graph.unitigLengths.size(); i++)
 		{
-			for (size_t j = 0; j < graph.chunksInUnitig[i].size(); j++)
-			{
-				keepChunkAsIs[graph.chunksInUnitig[i][j] & maskUint64_t] = false;
-			}
 			size_t firstWithinSolidInterior = std::numeric_limits<size_t>::max();
 			size_t lastWithinSolidInterior = std::numeric_limits<size_t>::max();
 			size_t lengthSum = 0;
