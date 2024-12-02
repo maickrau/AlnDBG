@@ -997,6 +997,112 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> getCorrectnessWei
 	return result;
 }
 
+void fragmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const size_t kmerSize)
+{
+	std::vector<std::vector<std::pair<size_t, size_t>>> parent;
+	std::vector<std::vector<std::pair<size_t, size_t>>> chunkParent;
+	parent.resize(chunksPerRead.size());
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		if (minimizerPositionsPerRead[i].size() < 2)
+		{
+			assert(chunksPerRead[i].size() == 0);
+			continue;
+		}
+		parent[i].resize(minimizerPositionsPerRead[i].size()-1);
+		for (size_t j = 0; j < minimizerPositionsPerRead[i].size()-1; j++)
+		{
+			parent[i][j] = std::make_pair(i, j);
+		}
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			while (chunkParent.size() <= chunk) chunkParent.emplace_back();
+			if (chunkParent[chunk].size() == 0)
+			{
+				size_t firstMinimizer = std::numeric_limits<size_t>::max();
+				size_t lastMinimizer = std::numeric_limits<size_t>::max();
+				for (size_t k = 0; k < minimizerPositionsPerRead[i].size(); k++)
+				{
+					if (minimizerPositionsPerRead[i][k] == std::get<0>(chunksPerRead[i][j]))
+					{
+						firstMinimizer = k;
+					}
+					if (minimizerPositionsPerRead[i][k] + kmerSize - 1 == std::get<1>(chunksPerRead[i][j]))
+					{
+						lastMinimizer = k;
+					}
+				}
+				assert(firstMinimizer != std::numeric_limits<size_t>::max());
+				assert(lastMinimizer != std::numeric_limits<size_t>::max());
+				assert(lastMinimizer > firstMinimizer);
+				for (size_t k = firstMinimizer; k < lastMinimizer; k++)
+				{
+					chunkParent[chunk].emplace_back(std::make_pair(i, k));
+				}
+			}
+		}
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			assert(chunkParent.size() > chunk);
+			assert(chunkParent[chunk].size() >= 1);
+			size_t firstMinimizer = std::numeric_limits<size_t>::max();
+			size_t lastMinimizer = std::numeric_limits<size_t>::max();
+			for (size_t k = 0; k < minimizerPositionsPerRead[i].size(); k++)
+			{
+				if (minimizerPositionsPerRead[i][k] == std::get<0>(chunksPerRead[i][j]))
+				{
+					firstMinimizer = k;
+				}
+				if (minimizerPositionsPerRead[i][k] + kmerSize - 1 == std::get<1>(chunksPerRead[i][j]))
+				{
+					lastMinimizer = k;
+				}
+			}
+			assert(firstMinimizer != std::numeric_limits<size_t>::max());
+			assert(lastMinimizer != std::numeric_limits<size_t>::max());
+			assert(lastMinimizer > firstMinimizer);
+			assert(lastMinimizer - firstMinimizer == chunkParent[chunk].size());
+			for (size_t k = firstMinimizer; k < lastMinimizer; k++)
+			{
+				merge(parent, std::make_pair(i, k), chunkParent[chunk][k-firstMinimizer]);
+			}
+		}
+	}
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> newChunks;
+	size_t nextNum = 0;
+	for (size_t i = 0; i < parent.size(); i++)
+	{
+		for (size_t j = 0; j < parent[i].size(); j++)
+		{
+			if (parent[i][j].first != i || parent[i][j].second != j) continue;
+			newChunks[std::make_pair(i, j)] = nextNum;
+			nextNum += 1;
+		}
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		if (parent[i].size() == 0)
+		{
+			assert(chunksPerRead[i].size() == 0);
+			assert(minimizerPositionsPerRead[i].size() < 2);
+			continue;
+		}
+		assert(parent[i].size()+1 == minimizerPositionsPerRead[i].size());
+		chunksPerRead[i].clear();
+		for (size_t j = 0; j < parent[i].size(); j++)
+		{
+			chunksPerRead[i].emplace_back(minimizerPositionsPerRead[i][j], minimizerPositionsPerRead[i][j+1] + kmerSize - 1, newChunks.at(find(parent, std::make_pair(i, j))) + firstBitUint64_t);
+		}
+	}
+}
+
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const TrioKmerCounter& trioHapmers, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t startStage)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
@@ -1272,18 +1378,26 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			countReadRepetitiveUnitigs(chunksPerRead, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeBidirectedUnitigGraphWithSequences("graph-dbg-final.gfa", "paths-dbg-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			[[fallthrough]];
 		case 19:
 //			writeReadChunkSequences("sequences-chunk19.txt", rawReadLengths, chunksPerRead, sequenceIndex);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeBidirectedUnitigGraphWithSequences("graph-dbg-final.gfa", "paths-dbg-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			fragmentChunks(chunksPerRead, minimizerPositionsPerRead, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			contextResolve(chunksPerRead, kmerSize, 10000);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeBidirectedUnitigGraphWithSequences("graph-fragmented-final.gfa", "paths-fragmented-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			writeReadUnitigSequences("sequences-dbg-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			getContigPathsAndConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize, "paths-final.txt", "contigs-final.fa", numThreads);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			getContigPathsAndConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize, "paths-final.txt", "contigs-final.fa", numThreads);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 30000, 60000);
 //			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 30000, 60000);
 //			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 50000, 100000);
