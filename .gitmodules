@@ -4,15 +4,15 @@
 [submodule "parallel-hashmap"]
 	path = parallel-hashmap
 	url = https://github.com/greg7mdp/parallel-hashmap.git
-[submodule "MBG"]
-	path = MBG
-	url = https://github.com/maickrau/MBG.git
 [submodule "concurrentqueue"]
 	path = concurrentqueue
 	url = https://github.com/cameron314/concurrentqueue.git
 [submodule "cxxopts"]
 	path = cxxopts
 	url = https://github.com/jarro2783/cxxopts.git
-[submodule "hifioverlapper"]
-	path = hifioverlapper
-	url = https://github.com/maickrau/hifioverlapper.git
+[submodule "edlib"]
+	path = edlib
+	url = https://github.com/Martinsos/edlib.git
+[submodule "fastacompressor"]
+	path = fastacompressor
+	url = https://github.com/maickrau/fastacompressor.git

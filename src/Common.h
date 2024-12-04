@@ -5,22 +5,22 @@
 #include <cstdint>
 #include <vector>
 #include <thread>
-#include "MBGCommon.h"
-#include "SparseEdgeContainer.h"
 #include "MostlySparse2DHashmap.h"
+#include "SparseEdgeContainer.h"
 
 const uint64_t firstBitUint64_t = 1ull << 63ull;
 const uint64_t maskUint64_t = firstBitUint64_t-1;
 
-inline auto reverse(auto x) -> decltype(MBG::reverse(x))
-{
-	return MBG::reverse(x);
-}
-
-inline auto canon(auto x, auto y) -> decltype(MBG::canon(x, y))
-{
-	return MBG::canon(x, y);
-}
+size_t popcount(uint64_t x);
+std::pair<size_t, bool> reverse(std::pair<size_t, bool> pos);
+std::pair<std::pair<size_t, bool>, std::pair<size_t, bool>> canon(std::pair<size_t, bool> from, std::pair<size_t, bool> to);
+std::pair<uint64_t, uint64_t> canonNodePair(const uint64_t from, const uint64_t to);
+std::string revCompRaw(const std::string& raw);
+bool NonexistantChunk(const uint64_t chunk);
+std::chrono::time_point<std::chrono::steady_clock> getTime();
+std::string formatTime(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end);
+extern std::chrono::time_point<std::chrono::steady_clock> programStartTime;
+extern double mismatchFraction; // global variables best variables
 
 class ReadPathBundle
 {
@@ -39,6 +39,7 @@ public:
 };
 
 SparseEdgeContainer getActiveEdges(const MostlySparse2DHashmap<uint8_t, size_t>& edges, const size_t numNodes);
+size_t intersectSize(const std::vector<std::pair<size_t, size_t>>& left, const std::vector<std::pair<size_t, size_t>>& right);
 size_t intersectSize(const std::vector<size_t>& left, const std::vector<size_t>& right);
 
 template <typename F>

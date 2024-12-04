@@ -1,5 +1,5 @@
 GPP=$(CXX)
-CPPFLAGS=-Wall -Wextra -std=c++17 -O3 -g -Izstr/src -Iparallel-hashmap/parallel_hashmap/ -Icxxopts/include -Wno-unused-parameter `pkg-config --cflags zlib` -IMBG/src -Iconcurrentqueue -Ihifioverlapper/src
+CPPFLAGS=-Wall -Wextra -std=c++17 -O3 -g -Izstr/src -Iedlib/edlib/include -Iparallel-hashmap/parallel_hashmap/ -Icxxopts/include -Wno-unused-parameter `pkg-config --cflags zlib` -Iconcurrentqueue -Ifastacompressor/src
 
 ODIR=obj
 BINDIR=bin
@@ -7,10 +7,10 @@ SRCDIR=src
 
 LIBS=`pkg-config --libs zlib`
 
-_DEPS = KmerGraph.h KmerMatcher.h MatchGroup.h UnitigGraph.h GraphCleaner.h AlnHaploFilter.h GraphPhaser.h Common.h GraphResolver.h AnchorFinder.h UnionFind.h ChunkmerFilter.h MultiplexResolverCaller.h
+_DEPS = Common.h UnionFind.h TwobitString.h SparseEdgeContainer.h RankBitvector.h ChunkGraphWriter.h ChunkUnitigGraph.h EdlibWrapper.h ConsensusMaker.h KmerIterator.h GraphCleaner.h SequenceHelper.h ChunkExtractor.h SequenceIdentitySplitter.h ChunkPhasing.h ChunkResolution.h CanonHelper.h OverlapMatcher.h PathWalker.h TrioKmerCounter.h TransitiveClosure.h ChunkHelper.h VectorWithDirection.h MostlySparse2DHashmap.h
 DEPS = $(patsubst %, $(SRCDIR)/%, $(_DEPS))
 
-_OBJ = KmerGraph.o KmerMatcher.o UnitigGraph.o GraphCleaner.o AlnHaploFilter.o GraphPhaser.o Common.o GraphResolver.o AnchorFinder.o UnionFind.o ChunkmerFilter.o MultiplexResolverCaller.o
+_OBJ = Common.o UnionFind.o TwobitString.o SparseEdgeContainer.o RankBitvector.o ChunkGraphWriter.o ChunkUnitigGraph.o EdlibWrapper.o ConsensusMaker.o KmerIterator.o GraphCleaner.o SequenceHelper.o ChunkExtractor.o SequenceIdentitySplitter.o ChunkPhasing.o ChunkResolution.o CanonHelper.o OverlapMatcher.o PathWalker.o TrioKmerCounter.o
 OBJ = $(patsubst %, $(ODIR)/%, $(_OBJ))
 
 LINKFLAGS = $(CPPFLAGS) -Wl,-Bstatic $(LIBS) -Wl,-Bdynamic -Wl,--as-needed -lpthread -pthread -static-libstdc++
@@ -20,25 +20,21 @@ VERSION := Branch $(shell git rev-parse --abbrev-ref HEAD) commit $(shell git re
 $(shell mkdir -p bin)
 $(shell mkdir -p obj)
 
-$(BINDIR)/AlnDBG: $(OBJ) $(ODIR)/main.o hifioverlapper/lib/hifioverlapper.a MBG/lib/mbg.a
+$(BINDIR)/chunkgraph: $(OBJ) $(ODIR)/chunkgraph.o edlib/edlib/src/edlib.cpp fastacompressor/lib/fastacompress.a
 	$(GPP) -o $@ $^ $(LINKFLAGS)
 
-$(BINDIR)/alncorrect: $(OBJ) $(ODIR)/alncorrect.o hifioverlapper/lib/hifioverlapper.a MBG/lib/mbg.a
-	$(GPP) -o $@ $^ $(LINKFLAGS)
+$(ODIR)/chunkgraph.o: $(SRCDIR)/chunkgraph.cpp $(DEPS)
+	$(GPP) -c -o $@ $< $(CPPFLAGS) -DVERSION="\"$(VERSION)\""
 
 $(ODIR)/%.o: $(SRCDIR)/%.cpp $(DEPS)
 	$(GPP) -c -o $@ $< $(CPPFLAGS)
 
-MBG/lib/mbg.a:
-	$(MAKE) -C MBG lib
+fastacompressor/lib/fastacompress.a:
+	$(MAKE) -C fastacompressor lib
 
-hifioverlapper/lib/hifioverlapper.a:
-	$(MAKE) -C hifioverlapper lib
-
-all: $(BINDIR)/AlnDBG $(BINDIR)/alncorrect
+all: $(BINDIR)/chunkgraph
 
 clean:
 	rm -f $(ODIR)/*
 	rm -f $(BINDIR)/*
-	$(MAKE) -C MBG clean
-	$(MAKE) -C hifioverlapper clean
+	$(MAKE) -C fastacompressor clean
