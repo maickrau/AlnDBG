@@ -1523,12 +1523,12 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(18, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 18:
-			resolveTinyNodesRecklessly(chunksPerRead, numThreads, kmerSize);
+//			resolveTinyNodesRecklessly(chunksPerRead, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			countReadRepetitiveUnitigs(chunksPerRead, approxOneHapCoverage, kmerSize);
+//			countReadRepetitiveUnitigs(chunksPerRead, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			writeBidirectedUnitigGraphWithSequences("graph-dbg-final.gfa", "paths-dbg-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
+//			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+//			writeBidirectedUnitigGraphWithSequences("graph-dbg-final.gfa", "paths-dbg-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			[[fallthrough]];
 		case 19:
