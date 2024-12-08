@@ -44,7 +44,7 @@ size_t findBiggestSmallerIndex(const std::vector<size_t>& nums, const size_t val
 	return low-1;
 }
 
-void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by length" << std::endl;
 	const double differenceFraction = 0.02;
@@ -52,7 +52,7 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 	size_t nextNum = 0;
 	std::mutex resultMutex;
 	auto oldChunks = chunksPerRead;
-	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, differenceFraction, differenceConstant](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, differenceFraction, differenceConstant, kmerSize](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		if (occurrencesPerChunk[i].size() == 0) return;
 		std::vector<std::pair<size_t, size_t>> lengthsAndIndicesHere;
@@ -66,7 +66,20 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 		size_t clusterStart = 0;
 		for (size_t j = 1; j <= lengthsAndIndicesHere.size(); j++)
 		{
-			if (j < lengthsAndIndicesHere.size() && lengthsAndIndicesHere[j].first - lengthsAndIndicesHere[j-1].first < std::max((size_t)(lengthsAndIndicesHere[j-1].first * differenceFraction), (size_t)differenceConstant)) continue;
+			if (j < lengthsAndIndicesHere.size())
+			{
+				if (lengthsAndIndicesHere[j].first - lengthsAndIndicesHere[j-1].first < std::max((size_t)(lengthsAndIndicesHere[j-1].first * differenceFraction), (size_t)differenceConstant))
+				{
+					if (lengthsAndIndicesHere[j-1].first > 2*kmerSize)
+					{
+						continue;
+					}
+					else if (lengthsAndIndicesHere[j].first > lengthsAndIndicesHere[j-1].first+1)
+					{
+						continue;
+					}
+				}
+			}
 			std::lock_guard<std::mutex> lock { resultMutex };
 			for (size_t k = clusterStart; k < j; k++)
 			{

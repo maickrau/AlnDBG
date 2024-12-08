@@ -937,7 +937,7 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerFirstLastKmers(sequenceIndex, chunks, kmerSize, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	splitPerLength(chunks, numThreads);
+	splitPerLength(chunks, kmerSize, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerBaseCounts(sequenceIndex, rawReadLengths, chunks, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -1298,7 +1298,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerLength(chunksPerRead, numThreads);
+			splitPerLength(chunksPerRead, kmerSize, numThreads);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			mergeFakeBubbles(chunksPerRead, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -1528,7 +1528,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 //			countReadRepetitiveUnitigs(chunksPerRead, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-//			writeBidirectedUnitigGraphWithSequences("graph-dbg-final.gfa", "paths-dbg-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
+			writeBidirectedUnitigGraphWithSequences("graph-dbg-final.gfa", "paths-dbg-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			[[fallthrough]];
 		case 19:
