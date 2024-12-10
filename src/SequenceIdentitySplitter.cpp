@@ -10,7 +10,7 @@
 #include "TransitiveClosure.h"
 #include "CanonHelper.h"
 
-void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by sequence identity" << std::endl;
 	const size_t mismatchFloor = 10;
@@ -51,6 +51,25 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 		const size_t i = iterationOrder[iterationIndex];
 		std::cerr << "begin big chunk with coverage " << occurrencesPerChunk[i].size() << std::endl;
 		auto startTime = getTime();
+		bool allSmall = true;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			auto chunk = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
+			if (std::get<1>(chunk) - std::get<0>(chunk) < 2*kmerSize) continue;
+			allSmall = false;
+			break;
+		}
+		if (allSmall)
+		{
+			auto endTime = getTime();
+			std::cerr << "skip short big chunk with coverage " << occurrencesPerChunk[i].size() << " time " << formatTime(startTime, endTime) << std::endl;
+			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+			{
+				std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) = nextNum + (std::get<2>(chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second]) & firstBitUint64_t);
+			}
+			nextNum += 1;
+			continue;
+		}
 		std::sort(occurrencesPerChunk[i].begin(), occurrencesPerChunk[i].end(), [&chunksPerRead](const auto left, const auto right)
 		{
 			auto tleft = chunksPerRead[left.first][left.second];

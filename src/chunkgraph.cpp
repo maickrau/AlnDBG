@@ -1461,7 +1461,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 4:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
+			splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunksPerRead, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			// splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			// std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
