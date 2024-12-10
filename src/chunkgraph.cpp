@@ -939,7 +939,7 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerLength(chunks, kmerSize, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	splitPerBaseCounts(sequenceIndex, rawReadLengths, chunks, numThreads);
+	splitPerBaseCounts(sequenceIndex, rawReadLengths, chunks, kmerSize, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //	splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunks, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -1253,6 +1253,141 @@ void fragmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 	}
 }
 
+void resplitFalselyMergedChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& oldChunks)
+{
+	phmap::flat_hash_map<size_t, size_t> oneMatch;
+	phmap::flat_hash_map<size_t, phmap::flat_hash_set<size_t>> extraMatches;
+	assert(chunksPerRead.size() == oldChunks.size());
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		size_t newIndex = 0;
+		size_t oldIndex = 0;
+		while (newIndex < chunksPerRead[i].size() && oldIndex < oldChunks[i].size())
+		{
+			if (std::get<0>(chunksPerRead[i][newIndex]) < std::get<0>(oldChunks[i][oldIndex]))
+			{
+				newIndex += 1;
+				continue;
+			}
+			if (std::get<0>(chunksPerRead[i][newIndex]) > std::get<0>(oldChunks[i][oldIndex]))
+			{
+				oldIndex += 1;
+				continue;
+			}
+			assert(std::get<0>(chunksPerRead[i][newIndex]) == std::get<0>(oldChunks[i][oldIndex]));
+			if (std::get<1>(chunksPerRead[i][newIndex]) < std::get<1>(oldChunks[i][oldIndex]))
+			{
+				newIndex += 1;
+				continue;
+			}
+			if (std::get<1>(chunksPerRead[i][newIndex]) > std::get<1>(oldChunks[i][oldIndex]))
+			{
+				oldIndex += 1;
+				continue;
+			}
+			assert(std::get<1>(chunksPerRead[i][newIndex]) == std::get<1>(oldChunks[i][oldIndex]));
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][newIndex])))
+			{
+				newIndex += 1;
+				continue;
+			}
+			if (NonexistantChunk(std::get<2>(oldChunks[i][oldIndex])))
+			{
+				oldIndex += 1;
+				continue;
+			}
+			size_t newChunk = std::get<2>(chunksPerRead[i][newIndex]) & maskUint64_t;
+			size_t oldChunk = std::get<2>(oldChunks[i][oldIndex]) & maskUint64_t;
+			newIndex += 1;
+			oldIndex += 1;
+			if (oneMatch.count(newChunk) == 0)
+			{
+				oneMatch[newChunk] = oldChunk;
+				continue;
+			}
+			if (oneMatch.at(newChunk) == oldChunk)
+			{
+				continue;
+			}
+			extraMatches[newChunk].insert(oldChunk);
+		}
+	}
+	std::cerr << "re-split " << extraMatches.size() << " chunks" << std::endl;
+	if (extraMatches.size() == 0) return;
+	size_t nextNum = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			nextNum = std::max(nextNum, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+		}
+	}
+	nextNum += 1;
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> remapping;
+	for (const auto& pair : extraMatches)
+	{
+		assert(oneMatch.count(pair.first) == 1);
+		std::cerr << "re-split chunk " << pair.first << " to " << (pair.second.size()+1) << " chunks" << std::endl;
+		for (size_t old : pair.second)
+		{
+			remapping[std::make_pair(pair.first, old)] = nextNum;
+			nextNum += 1;
+		}
+		remapping[std::make_pair(pair.first, oneMatch.at(pair.first))] = nextNum;
+		nextNum += 1;
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		size_t newIndex = 0;
+		size_t oldIndex = 0;
+		while (newIndex < chunksPerRead[i].size() && oldIndex < oldChunks[i].size())
+		{
+			if (std::get<0>(chunksPerRead[i][newIndex]) < std::get<0>(oldChunks[i][oldIndex]))
+			{
+				newIndex += 1;
+				continue;
+			}
+			if (std::get<0>(chunksPerRead[i][newIndex]) > std::get<0>(oldChunks[i][oldIndex]))
+			{
+				oldIndex += 1;
+				continue;
+			}
+			assert(std::get<0>(chunksPerRead[i][newIndex]) == std::get<0>(oldChunks[i][oldIndex]));
+			if (std::get<1>(chunksPerRead[i][newIndex]) < std::get<1>(oldChunks[i][oldIndex]))
+			{
+				newIndex += 1;
+				continue;
+			}
+			if (std::get<1>(chunksPerRead[i][newIndex]) > std::get<1>(oldChunks[i][oldIndex]))
+			{
+				oldIndex += 1;
+				continue;
+			}
+			assert(std::get<1>(chunksPerRead[i][newIndex]) == std::get<1>(oldChunks[i][oldIndex]));
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][newIndex])))
+			{
+				newIndex += 1;
+				continue;
+			}
+			if (NonexistantChunk(std::get<2>(oldChunks[i][oldIndex])))
+			{
+				oldIndex += 1;
+				continue;
+			}
+			size_t newChunk = std::get<2>(chunksPerRead[i][newIndex]) & maskUint64_t;
+			size_t oldChunk = std::get<2>(oldChunks[i][oldIndex]) & maskUint64_t;
+			assert(extraMatches.count(newChunk) == remapping.count(std::make_pair(newChunk, oldChunk)));
+			if (remapping.count(std::make_pair(newChunk, oldChunk)) == 1)
+			{
+				std::get<2>(chunksPerRead[i][newIndex]) = remapping.at(std::make_pair(newChunk, oldChunk)) + firstBitUint64_t;
+			}
+			newIndex += 1;
+			oldIndex += 1;
+		}
+	}
+}
+
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const TrioKmerCounter& trioHapmers, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t startStage)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
@@ -1306,7 +1441,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 2:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerBaseCounts(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
+			splitPerBaseCounts(sequenceIndex, rawReadLengths, chunksPerRead, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 1000, 3000, kmerSize);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -1535,17 +1670,25 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 //			writeReadChunkSequences("sequences-chunk19.txt", rawReadLengths, chunksPerRead, sequenceIndex);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			fragmentChunks(chunksPerRead, minimizerPositionsPerRead, kmerSize);
+			{
+				auto oldChunks = chunksPerRead;
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				fragmentChunks(chunksPerRead, minimizerPositionsPerRead, kmerSize);
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				contextResolve(chunksPerRead, kmerSize, 10000);
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				expandChunksUntilSolids(chunksPerRead, approxOneHapCoverage, kmerSize, 10000);
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				writeStage(21, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				resplitFalselyMergedChunks(chunksPerRead, oldChunks);
+			}
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			contextResolve(chunksPerRead, kmerSize, 10000);
+			writeStage(22, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-		case 20:
-			expandChunksUntilSolids(chunksPerRead, approxOneHapCoverage, kmerSize, 10000);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(21, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			[[fallthrough]];
 		case 21:
 			writeBidirectedUnitigGraphWithSequences("graph-fragmented-final.gfa", "paths-fragmented-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;

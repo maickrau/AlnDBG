@@ -74,7 +74,7 @@ void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 					{
 						continue;
 					}
-					else if (lengthsAndIndicesHere[j].first > lengthsAndIndicesHere[j-1].first+1)
+					else if (lengthsAndIndicesHere[j].first - lengthsAndIndicesHere[j-1].first < 2)
 					{
 						continue;
 					}
@@ -235,7 +235,7 @@ void splitPerFirstLastKmers(const FastaCompressor::CompressedStringIndex& sequen
 	});
 }
 
-void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
 {
 	const size_t mismatchFloor = 10;
 	std::cerr << "splitting by base counts" << std::endl;
@@ -244,7 +244,7 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 	auto oldChunks = chunksPerRead;
 	size_t countSplitted = 0;
 	size_t countSplittedTo = 0;
-	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &countSplitted, &countSplittedTo, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
+	iterateCanonicalChunksByCoverage(chunksPerRead, numThreads, [&nextNum, &resultMutex, &chunksPerRead, &sequenceIndex, &rawReadLengths, &countSplitted, &countSplittedTo, kmerSize, mismatchFloor](const size_t i, const std::vector<std::vector<std::pair<size_t, size_t>>>& occurrencesPerChunk)
 	{
 		if (occurrencesPerChunk[i].size() < 10)
 		{
@@ -256,7 +256,14 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 			nextNum += 1;
 			return;
 		}
-		if (std::get<1>(chunksPerRead[occurrencesPerChunk[i][0].first][occurrencesPerChunk[i][0].second]) - std::get<0>(chunksPerRead[occurrencesPerChunk[i][0].first][occurrencesPerChunk[i][0].second]) < 20)
+		bool allSmall = true;
+		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
+		{
+			if (std::get<1>(chunksPerRead[occurrencesPerChunk[i][0].first][occurrencesPerChunk[i][0].second]) - std::get<0>(chunksPerRead[occurrencesPerChunk[i][0].first][occurrencesPerChunk[i][0].second]) < 2*kmerSize) continue;
+			allSmall = false;
+			break;
+		}
+		if (allSmall)
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
 			for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
