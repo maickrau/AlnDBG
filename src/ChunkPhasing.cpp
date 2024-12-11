@@ -3049,6 +3049,24 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
 			}
+			bool allSmall = true;
+			for (size_t j = 0; j < chunkBeingDone.size(); j++)
+			{
+				auto chunk = chunksPerRead[chunkBeingDone[j].first][chunkBeingDone[j].second];
+				if (std::get<1>(chunk) - std::get<0>(chunk) > 2*kmerSize)
+				{
+					allSmall = false;
+					break;
+				}
+			}
+			if (allSmall)
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+//				std::cerr << "skip short chunk with coverage " << chunkBeingDone.size() << std::endl;
+				chunksDoneProcessing.emplace_back();
+				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
+				continue;
+			}
 			std::vector<std::tuple<size_t, size_t, size_t, size_t, size_t, size_t>> alleles; // startkmer, startcluster, endkmer, endcluster, occurrenceID, allele
 			size_t lastOccurrence = std::numeric_limits<size_t>::max();
 			size_t lastKmer = std::numeric_limits<size_t>::max();
@@ -3214,6 +3232,24 @@ void splitPerPhasingKmersWithinChunk(const FastaCompressor::CompressedStringInde
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
 				std::cerr << "skip chunk with coverage " << chunkBeingDone.size() << std::endl;
+				chunksDoneProcessing.emplace_back();
+				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
+				continue;
+			}
+			bool allSmall = true;
+			for (size_t j = 0; j < chunkBeingDone.size(); j++)
+			{
+				auto chunk = chunksPerRead[chunkBeingDone[j].first][chunkBeingDone[j].second];
+				if (std::get<1>(chunk) - std::get<0>(chunk) > 2*kmerSize)
+				{
+					allSmall = false;
+					break;
+				}
+			}
+			if (allSmall)
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+//				std::cerr << "skip short chunk with coverage " << chunkBeingDone.size() << std::endl;
 				chunksDoneProcessing.emplace_back();
 				std::swap(chunksDoneProcessing.back(), chunkBeingDone);
 				continue;
