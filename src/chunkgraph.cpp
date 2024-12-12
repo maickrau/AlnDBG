@@ -474,7 +474,7 @@ void resegmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t
 			if (uniqueLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] != std::get<2>(chunksPerRead[i][j-1])) canMergeLeft[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] = false;
 		}
 	}
-	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	for (size_t i = 0; i < complementChunk.size(); i++)
 	{
 		if (complementChunk[i] == std::numeric_limits<size_t>::max())
 		{
