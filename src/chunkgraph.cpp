@@ -1388,7 +1388,7 @@ void resplitFalselyMergedChunks(std::vector<std::vector<std::tuple<size_t, size_
 	}
 }
 
-void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const TrioKmerCounter& trioHapmers, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t startStage)
+void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const TrioKmerCounter& trioHapmers, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t startStage, const size_t resolveSize)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -1550,13 +1550,13 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 84:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			contextResolve(chunksPerRead, kmerSize, 10000);
+			contextResolve(chunksPerRead, kmerSize, resolveSize);
 			writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 9:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			contextResolve(chunksPerRead, kmerSize, 2000);
-			expandChunks(chunksPerRead, kmerSize, 10000);
+			expandChunks(chunksPerRead, kmerSize, resolveSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(90, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
@@ -1675,11 +1675,11 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 				fragmentChunks(chunksPerRead, minimizerPositionsPerRead, kmerSize);
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				contextResolve(chunksPerRead, kmerSize, 10000);
+				contextResolve(chunksPerRead, kmerSize, resolveSize);
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 				writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				expandChunksUntilSolids(chunksPerRead, approxOneHapCoverage, kmerSize, 10000);
+				expandChunksUntilSolids(chunksPerRead, approxOneHapCoverage, kmerSize, resolveSize);
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 				writeStage(21, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -1722,6 +1722,7 @@ int main(int argc, char** argv)
 		("t,threads", "Number of threads", cxxopts::value<size_t>()->default_value("1"))
 		("k", "K-mer size", cxxopts::value<size_t>()->default_value("11"))
 		("w", "Window size", cxxopts::value<size_t>()->default_value("5000"))
+		("r", "Resolve size", cxxopts::value<size_t>()->default_value("10000"))
 		("avg-hap-coverage", "Average single haplotype coverage", cxxopts::value<double>())
 		("max-error-rate", "Maximum error rate. Try 2-3x average read error rate", cxxopts::value<double>()->default_value("0.03"))
 		("restart", "Restart from stage", cxxopts::value<size_t>())
@@ -1764,6 +1765,7 @@ int main(int argc, char** argv)
 	const size_t numThreads = params["t"].as<size_t>();
 	const size_t k = params["k"].as<size_t>();
 	const size_t windowSize = params["w"].as<size_t>();
+	const size_t resolveSize = params["r"].as<size_t>();
 	const double approxOneHapCoverage = params["avg-hap-coverage"].as<double>();
 	mismatchFraction = params["max-error-rate"].as<double>();
 	size_t startStage = 0;
@@ -1797,5 +1799,5 @@ int main(int argc, char** argv)
 		readBasepairLengths.emplace_back(readBasepairLengths[i]);
 	}
 	std::cerr << sequenceIndex.size() << " reads" << std::endl;
-	makeGraph(sequenceIndex, readBasepairLengths, trioHapmers, numThreads, approxOneHapCoverage, k, windowSize, startStage);
+	makeGraph(sequenceIndex, readBasepairLengths, trioHapmers, numThreads, approxOneHapCoverage, k, windowSize, startStage, resolveSize);
 }
