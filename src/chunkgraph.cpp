@@ -1388,6 +1388,66 @@ void resplitFalselyMergedChunks(std::vector<std::vector<std::tuple<size_t, size_
 	}
 }
 
+void removeBadShortHighCoverageChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
+{
+	std::vector<size_t> coverage;
+	std::vector<bool> hasAnyLong;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			while (coverage.size() <= chunk) coverage.emplace_back(0);
+			while (hasAnyLong.size() <= chunk) hasAnyLong.emplace_back(false);
+			coverage[chunk] += 1;
+			if (std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) >= 2*kmerSize) hasAnyLong[chunk] = true;
+		}
+	}
+	std::vector<bool> remove;
+	remove.resize(hasAnyLong.size(), false);
+	for (size_t i = 0; i < hasAnyLong.size(); i++)
+	{
+		if (hasAnyLong[i]) continue;
+		if (coverage[i] < 1000000) continue;
+		std::cerr << "remove short chunk " << i << " with coverage " << coverage[i] << std::endl;
+		remove[i] = true;
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			if (remove[chunk])
+			{
+				std::get<2>(chunksPerRead[i][j]) = std::numeric_limits<size_t>::max();
+			}
+		}
+	}
+}
+
+void mergeNonexistentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
+{
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		if (chunksPerRead[i].size() < 2) continue;
+		bool removedAny = false;
+		for (size_t j = chunksPerRead[i].size()-1; j > 0; j--)
+		{
+			if (!NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (!NonexistantChunk(std::get<2>(chunksPerRead[i][j-1]))) continue;
+			assert(std::get<0>(chunksPerRead[i][j-1]) <= std::get<0>(chunksPerRead[i][j]));
+			assert(std::get<1>(chunksPerRead[i][j-1]) <= std::get<1>(chunksPerRead[i][j]));
+			std::get<1>(chunksPerRead[i][j-1]) = std::get<1>(chunksPerRead[i][j]);
+			std::swap(chunksPerRead[i][j], chunksPerRead[i].back());
+			chunksPerRead[i].pop_back();
+			removedAny = true;
+		}
+		if (removedAny) std::sort(chunksPerRead[i].begin(), chunksPerRead[i].end());
+	}
+}
+
 void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const TrioKmerCounter& trioHapmers, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t startStage, const size_t resolveSize)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
@@ -1434,6 +1494,9 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerLength(chunksPerRead, kmerSize, numThreads);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			removeBadShortHighCoverageChunks(chunksPerRead, kmerSize);
+			mergeNonexistentChunks(chunksPerRead);
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			mergeFakeBubbles(chunksPerRead, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
