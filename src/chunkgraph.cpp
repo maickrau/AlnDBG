@@ -249,9 +249,29 @@ void expandChunksUntilSolids(std::vector<std::vector<std::tuple<size_t, size_t, 
 	}
 }
 
+void addGapChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
+{
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		if (chunksPerRead[i].size() < 2) continue;
+		bool addedAny = false;
+		for (size_t j = chunksPerRead[i].size()-1; j > 0; j--)
+		{
+			if (std::get<1>(chunksPerRead[i][j-1]) >= std::get<0>(chunksPerRead[i][j])+kmerSize-1) continue;
+			addedAny = true;
+			chunksPerRead[i].emplace_back(std::get<1>(chunksPerRead[i][j-1])-kmerSize+1, std::get<0>(chunksPerRead[i][j])+kmerSize-1, std::numeric_limits<size_t>::max());
+		}
+		if (addedAny)
+		{
+			std::sort(chunksPerRead[i].begin(), chunksPerRead[i].end());
+		}
+	}
+}
+
 void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t expandedSize)
 {
 	std::vector<size_t> chunkLengths;
+	std::vector<bool> keepChunkAsIs;
 	{
 		std::vector<std::vector<size_t>> rawChunkLengths;
 		for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -266,11 +286,13 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 			}
 		}
 		chunkLengths.resize(rawChunkLengths.size());
+		keepChunkAsIs.resize(rawChunkLengths.size(), false);
 		for (size_t i = 0; i < rawChunkLengths.size(); i++)
 		{
 			assert(rawChunkLengths[i].size() >= 1);
 			std::sort(rawChunkLengths[i].begin(), rawChunkLengths[i].end());
 			chunkLengths[i] = rawChunkLengths[i][rawChunkLengths[i].size()/2];
+			if (rawChunkLengths[i].size() == 1) keepChunkAsIs[i] = true;
 		}
 	}
 	std::map<std::vector<uint64_t>, size_t> chunkmerToNewChunk;
@@ -279,17 +301,17 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 		std::vector<std::pair<size_t, size_t>> newChunkmerRanges;
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) newChunkmerRanges.emplace_back(j, j);
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) newChunkmerRanges.emplace_back(j, j);
 		}
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			size_t end = j;
 			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
 			while (end < chunksPerRead[i].size() && length < expandedSize)
 			{
 				if (end+1 == chunksPerRead[i].size()) break;
-				if (NonexistantChunk(std::get<2>(chunksPerRead[i][end+1]))) break;
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][end+1])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][end+1]) & maskUint64_t]) break;
 				end += 1;
 				length += chunkLengths[std::get<2>(chunksPerRead[i][end]) & maskUint64_t];
 				length -= kmerSize;
@@ -300,12 +322,12 @@ void expandChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>
 		}
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			size_t start = j;
 			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
 			while (start > 0 && length < expandedSize)
 			{
-				if (NonexistantChunk(std::get<2>(chunksPerRead[i][start-1]))) break;
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][start-1])) || keepChunkAsIs[std::get<2>(chunksPerRead[i][start-1]) & maskUint64_t]) break;
 				start -= 1;
 				length += chunkLengths[std::get<2>(chunksPerRead[i][start]) & maskUint64_t];
 				length -= kmerSize;
@@ -1612,14 +1634,15 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			}
 			[[fallthrough]];
 		case 84:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			contextResolve(chunksPerRead, kmerSize, resolveSize);
-			writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			// std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			// contextResolve(chunksPerRead, kmerSize, resolveSize);
+			// writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 9:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			contextResolve(chunksPerRead, kmerSize, 2000);
 			expandChunks(chunksPerRead, kmerSize, resolveSize);
+			addGapChunks(chunksPerRead, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(90, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
