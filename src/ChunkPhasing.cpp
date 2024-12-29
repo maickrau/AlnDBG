@@ -2086,6 +2086,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 				}
 				if (noncanonicalClusters.size() >= 1)
 				{
+					std::reverse(noncanonicalClusters.begin(), noncanonicalClusters.end());
 					for (size_t j = 1; j < noncanonicalClusters.size(); j++)
 					{
 						assert(noncanonicalClusters[j] < noncanonicalClusters[j-1]);
