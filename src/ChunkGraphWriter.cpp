@@ -507,7 +507,7 @@ void writeGraph(const std::string& graphFile, const std::string& pathsFile, cons
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
-			if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
+			// if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
 			auto t = chunksPerRead[i][j];
 			if (NonexistantChunk(std::get<2>(t)))
 			{
