@@ -138,12 +138,18 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 		for (size_t i = blockindex*chunkSize; i < blockindex*chunkSize+chunkSize && i < itemCount; i++)
 		{
 			bool found = false;
-			for (size_t j = 0; ; j++)
+			size_t midClusterIndex = 0;
+			{
+				std::lock_guard<std::mutex> lock { resultMutex };
+				if (clusterExample.size() >= 1) midClusterIndex = clusterExample.size()-1;
+			}
+			for (size_t j = midClusterIndex; j <= midClusterIndex; j--)
 			{
 				size_t clusterCenterIndex = 0;
 				{
 					std::lock_guard<std::mutex> lock { resultMutex };
-					if (j == clusterExample.size()) break;
+					assert(j < clusterExample.size() || clusterExample.size() == 0);
+					if (clusterExample.size() == 0) break;
 					clusterCenterIndex = clusterExample[j];
 					if (clusterAdditionals[j].size() > 500) continue;
 				}
@@ -158,6 +164,33 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 					clusterMaxDistance[j] = std::max(distance, clusterMaxDistance[j]);
 					merge(parent, i, clusterCenterIndex);
 					break;
+				}
+			}
+			if (!found)
+			{
+				for (size_t j = midClusterIndex+1; ; j++)
+				{
+					size_t clusterCenterIndex = 0;
+					{
+						std::lock_guard<std::mutex> lock { resultMutex };
+						assert(j <= clusterExample.size() || clusterExample.size() == 0);
+						if (clusterExample.size() == 0) break;
+						if (j == clusterExample.size()) break;
+						clusterCenterIndex = clusterExample[j];
+						if (clusterAdditionals[j].size() > 500) continue;
+					}
+					size_t allowedDistance = allowedPairwiseDistanceFunction(i, clusterCenterIndex);
+					assert(allowedDistance <= maxDistance);
+					size_t distance = distanceFunction(i, clusterCenterIndex, allowedDistance);
+					if (distance <= allowedDistance)
+					{
+						std::lock_guard<std::mutex> lock { resultMutex };
+						clusterAdditionals[j].emplace_back(i);
+						found = true;
+						clusterMaxDistance[j] = std::max(distance, clusterMaxDistance[j]);
+						merge(parent, i, clusterCenterIndex);
+						break;
+					}
 				}
 			}
 			if (!found)
