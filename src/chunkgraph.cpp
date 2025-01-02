@@ -862,6 +862,7 @@ bool contextMatches(const std::pair<std::vector<uint64_t>, std::vector<uint64_t>
 void contextResolve(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t expandedSize)
 {
 	std::vector<size_t> chunkLengths;
+	std::vector<bool> chunkIsAnchor;
 	{
 		std::vector<std::vector<size_t>> rawChunkLengths;
 		for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -876,9 +877,11 @@ void contextResolve(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 			}
 		}
 		chunkLengths.resize(rawChunkLengths.size());
+		chunkIsAnchor.resize(rawChunkLengths.size(), false);
 		for (size_t i = 0; i < rawChunkLengths.size(); i++)
 		{
 			assert(rawChunkLengths[i].size() >= 1);
+			if (rawChunkLengths[i].size() == 1) chunkIsAnchor[i] = true;
 			std::sort(rawChunkLengths[i].begin(), rawChunkLengths[i].end());
 			chunkLengths[i] = rawChunkLengths[i][rawChunkLengths[i].size()/2];
 		}
@@ -905,12 +908,14 @@ void contextResolve(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (chunkIsAnchor[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			size_t end = j;
 			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
 			while (end < chunksPerRead[i].size() && length < expandedSize)
 			{
 				if (end+1 == chunksPerRead[i].size()) break;
 				if (NonexistantChunk(std::get<2>(chunksPerRead[i][end+1]))) break;
+				if (chunkIsAnchor[std::get<2>(chunksPerRead[i][end+1]) & maskUint64_t]) break;
 				end += 1;
 				length += chunkLengths[std::get<2>(chunksPerRead[i][end]) & maskUint64_t];
 				length -= kmerSize;
@@ -922,11 +927,13 @@ void contextResolve(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (chunkIsAnchor[std::get<2>(chunksPerRead[i][j]) & maskUint64_t]) continue;
 			size_t start = j;
 			size_t length = chunkLengths[std::get<2>(chunksPerRead[i][j]) & maskUint64_t];
 			while (start > 0 && length < expandedSize)
 			{
 				if (NonexistantChunk(std::get<2>(chunksPerRead[i][start-1]))) break;
+				if (chunkIsAnchor[std::get<2>(chunksPerRead[i][start-1]) & maskUint64_t]) break;
 				start -= 1;
 				length += chunkLengths[std::get<2>(chunksPerRead[i][start]) & maskUint64_t];
 				length -= kmerSize;
@@ -992,6 +999,7 @@ void contextResolve(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			if (chunkParent[i][j].first != i || chunkParent[i][j].second != j) continue;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			newChunkClusterToIndex[chunkParent[i][j]] = nextNum;
 			nextNum += 1;
 		}
