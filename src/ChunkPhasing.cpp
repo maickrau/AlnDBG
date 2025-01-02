@@ -4763,6 +4763,32 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
 	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	double estimatedCoverage;
+	{
+		double longnodeCoverageSum = 0;
+		double longnodeLengthSum = 0;
+		double nodeCoverageSum = 0;
+		double nodeLengthSum = 0;
+		assert(graph.unitigLengths.size() == graph.coverages.size());
+		for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+		{
+			if (graph.unitigLengths[i] >= 100000)
+			{
+				longnodeCoverageSum += graph.unitigLengths[i] * graph.coverages[i];
+				longnodeLengthSum += graph.unitigLengths[i];
+			}
+			nodeCoverageSum += graph.unitigLengths[i] * graph.coverages[i];
+			nodeLengthSum += graph.unitigLengths[i];
+		}
+		if (longnodeLengthSum > 1000000)
+		{
+			estimatedCoverage = longnodeCoverageSum / longnodeLengthSum;
+		}
+		else
+		{
+			estimatedCoverage = nodeCoverageSum / nodeLengthSum;
+		}
+	}
 	std::vector<size_t> chunkBelongsToUnitig;
 	std::vector<size_t> chunkStartPosInUnitig;
 	std::vector<size_t> chunkEndPosInUnitig;
@@ -4901,7 +4927,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 	size_t nextNum = 0;
 	size_t countSplitted = 0;
 	std::mutex resultMutex;
-	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &hasFwFork, &hasBwFork, &fwForksPerUnitigSet, &bwForksPerUnitigSet,  &countSplitted, &chunkBelongsToUnitig, &rawReadLengths, &graph, &chunkStartPosInUnitig, &chunkEndPosInUnitig, &canonical, kmerSize](const size_t i)
+	iterateMultithreaded(0, occurrencesPerChunk.size(), numThreads, [&nextNum, &resultMutex, &chunksPerRead, &occurrencesPerChunk, &sequenceIndex, &hasFwFork, &hasBwFork, &fwForksPerUnitigSet, &bwForksPerUnitigSet, &countSplitted, &chunkBelongsToUnitig, &rawReadLengths, &graph, &chunkStartPosInUnitig, &chunkEndPosInUnitig, &canonical, estimatedCoverage, kmerSize](const size_t i)
 	{
 		if (chunkBelongsToUnitig[i] == std::numeric_limits<size_t>::max())
 		{
@@ -4919,12 +4945,17 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			return;
 		}
 		size_t unitig = chunkBelongsToUnitig[i];
+		size_t minCoverageHere = 4;
+		if (graph.coverages[unitig] >= estimatedCoverage*1.5)
+		{
+			minCoverageHere = 2;
+		}
 		assert(unitig < graph.unitigLengths.size());
 		bool anythingToPhase = false;
 		std::vector<std::pair<phmap::flat_hash_set<size_t>, phmap::flat_hash_set<size_t>>> maybePhaseGroups;
 		if (hasFwFork[unitig])
 		{
-			if (fwForksPerUnitigSet[unitig].first.size() >= 2 && fwForksPerUnitigSet[unitig].second.size() >= 2)
+			if (fwForksPerUnitigSet[unitig].first.size() >= minCoverageHere && fwForksPerUnitigSet[unitig].second.size() >= minCoverageHere)
 			{
 				std::vector<size_t> firstsHere;
 				std::vector<size_t> secondsHere;
@@ -4961,7 +4992,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 					if (matchesFirst) firstsHere.emplace_back(j);
 					if (matchesSecond) secondsHere.emplace_back(j);
 				}
-				if (firstsHere.size() >= 2 && secondsHere.size() >= 2 && valid)
+				if (firstsHere.size() >= minCoverageHere && secondsHere.size() >= minCoverageHere && valid)
 				{
 					maybePhaseGroups.emplace_back();
 					maybePhaseGroups.back().first.insert(firstsHere.begin(), firstsHere.end());
@@ -4971,7 +5002,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 		}
 		if (hasBwFork[unitig])
 		{
-			if (bwForksPerUnitigSet[unitig].first.size() >= 2 && bwForksPerUnitigSet[unitig].second.size() >= 2)
+			if (bwForksPerUnitigSet[unitig].first.size() >= minCoverageHere && bwForksPerUnitigSet[unitig].second.size() >= minCoverageHere)
 			{
 				std::vector<size_t> firstsHere;
 				std::vector<size_t> secondsHere;
@@ -5008,7 +5039,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 					if (matchesFirst) firstsHere.emplace_back(j);
 					if (matchesSecond) secondsHere.emplace_back(j);
 				}
-				if (firstsHere.size() >= 2 && secondsHere.size() >= 2 && valid)
+				if (firstsHere.size() >= minCoverageHere && secondsHere.size() >= minCoverageHere && valid)
 				{
 					maybePhaseGroups.emplace_back();
 					maybePhaseGroups.back().first.insert(firstsHere.begin(), firstsHere.end());
@@ -5146,6 +5177,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 					{
 						if (pair.first == '-') continue;
 						if (pair.second < 3) continue;
+						if (pair.second < minCoverageHere) continue;
 						if (pair.second < chunkSequences.size() * mismatchFraction) continue;
 						countCovered += 1;
 					}
@@ -5182,7 +5214,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			phmap::flat_hash_set<size_t> removeKmers;
 			for (auto pair : kmerCoverage)
 			{
-				if (pair.second < 2 || pair.second + 2 > occurrencesPerChunk[i].size())
+				if (pair.second < minCoverageHere || pair.second + minCoverageHere > occurrencesPerChunk[i].size())
 				{
 					removeKmers.insert(pair.first);
 				}
