@@ -1,6 +1,7 @@
 #include <iostream>
 #include "ChunkUnitigGraph.h"
 #include "Common.h"
+#include "UnionFind.h"
 
 std::pair<std::vector<bool>, SparseEdgeContainer> getAllowedNodesAndEdges(const std::vector<size_t>& coverages, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead)
 {
@@ -1075,7 +1076,7 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUniti
 
 std::pair<size_t, size_t> firstAndLastMinimizerWithinSpan(const std::vector<size_t>& minimizerPositions, const size_t start, const size_t end, const size_t kmerSize)
 {
-	assert(end >= start + kmerSize);
+	assert(end >= start + kmerSize-1);
 	size_t first = std::numeric_limits<size_t>::max();
 	size_t last = std::numeric_limits<size_t>::max();
 	for (size_t i = 0; i < minimizerPositions.size(); i++)
@@ -1131,10 +1132,10 @@ void mergeBidirected(phmap::flat_hash_map<std::pair<size_t, size_t>, std::pair<s
 	}
 }
 
-std::pair<std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>>, std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>>> getSmallchunkInfo(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& fixedChunksPerRead, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const size_t kmerSize)
+std::pair<std::vector<size_t>, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> getSmallChunkSizesAndOverlaps(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& fixedChunksPerRead, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const size_t kmerSize)
 {
-	assert(fixedChunksPerRead.size()*2 == minimizerPositionsPerRead.size());
 	std::vector<size_t> countSmallchunksPerChunk;
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> smallChunkOverlap;
 	for (size_t read = 0; read < fixedChunksPerRead.size(); read++)
 	{
 		for (size_t j = 0; j < fixedChunksPerRead[read].size(); j++)
@@ -1151,101 +1152,209 @@ std::pair<std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>>, 
 			assert(countSmallchunksPerChunk[chunk] == countSmallchunks || countSmallchunksPerChunk[chunk] == std::numeric_limits<size_t>::max());
 			countSmallchunksPerChunk[chunk] = countSmallchunks;
 		}
-	}
-	phmap::flat_hash_map<std::pair<size_t, size_t>, std::pair<std::pair<size_t, size_t>, bool>> bidirectedSmallchunkParent;
-	for (size_t i = 0; i < countSmallchunksPerChunk.size(); i++)
-	{
-		if (countSmallchunksPerChunk[i] == std::numeric_limits<size_t>::max()) continue;
-		for (size_t j = 0; j < countSmallchunksPerChunk[i]; j++)
+		for (size_t j = 1; j < fixedChunksPerRead[read].size(); j++)
 		{
-			bidirectedSmallchunkParent[std::make_pair(i, j)] = std::make_pair(std::make_pair(i, j), true);
+			if (NonexistantChunk(std::get<2>(fixedChunksPerRead[read][j-1]))) continue;
+			if (NonexistantChunk(std::get<2>(fixedChunksPerRead[read][j]))) continue;
+			size_t currchunk = std::get<2>(fixedChunksPerRead[read][j]) & maskUint64_t;
+			size_t prevchunk = std::get<2>(fixedChunksPerRead[read][j-1]) & maskUint64_t;
+			bool currfw = std::get<2>(fixedChunksPerRead[read][j]) & firstBitUint64_t;
+			bool prevfw = std::get<2>(fixedChunksPerRead[read][j-1]) & firstBitUint64_t;
+			assert(std::get<1>(fixedChunksPerRead[read][j-1]) >= std::get<0>(fixedChunksPerRead[read][j]));
+			std::pair<size_t, size_t> firstAndLast = firstAndLastMinimizerWithinSpan(minimizerPositionsPerRead[read], std::get<0>(fixedChunksPerRead[read][j]), std::get<1>(fixedChunksPerRead[read][j-1]), kmerSize);
+			assert(firstAndLast.second >= firstAndLast.first);
+			size_t overlap = firstAndLast.second - firstAndLast.first;
+			assert(prevchunk < countSmallchunksPerChunk.size());
+			assert(currchunk < countSmallchunksPerChunk.size());
+			assert(overlap <= countSmallchunksPerChunk[prevchunk]);
+			assert(overlap <= countSmallchunksPerChunk[currchunk]);
+			auto key = canonNodePair(std::get<2>(fixedChunksPerRead[read][j-1]), std::get<2>(fixedChunksPerRead[read][j]));
+			assert(smallChunkOverlap.count(key) == 0 || smallChunkOverlap.at(key) == overlap);
+			smallChunkOverlap[key] = overlap;
 		}
 	}
-	for (size_t read = 0; read < fixedChunksPerRead.size(); read++)
+	return std::make_pair(countSmallchunksPerChunk, smallChunkOverlap);
+}
+
+std::pair<std::vector<std::vector<std::pair<size_t, bool>>>, std::vector<std::vector<std::tuple<size_t, size_t, bool>>>> getSmallchunkInfo(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const std::vector<size_t>& countSmallchunksPerChunk, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& smallChunkOverlap, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& fixedChunksPerRead, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const size_t kmerSize)
+{
+	assert(fixedChunksPerRead.size()*2 == minimizerPositionsPerRead.size());
+	std::vector<std::pair<size_t, bool>> smallChunkParent;
+	std::vector<std::vector<std::pair<size_t, bool>>> smallChunksPerUnitig;
+	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
 	{
-		if (minimizerPositionsPerRead[read].size() < 2) continue;
-		std::vector<std::pair<std::pair<size_t, size_t>, bool>> smallchunksHere;
-		smallchunksHere.resize(minimizerPositionsPerRead[read].size()-1, std::make_pair(std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()), true) );
-		for (size_t j = 0; j < fixedChunksPerRead[read].size(); j++)
+		size_t countSmallChunksHere = 0;
+		for (size_t j = 0; j < graph.chunksInUnitig[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(fixedChunksPerRead[read][j]))) continue;
-			size_t chunk = std::get<2>(fixedChunksPerRead[read][j]) & maskUint64_t;
-			bool fw = std::get<2>(fixedChunksPerRead[read][j]) & firstBitUint64_t;
-			assert(chunk < countSmallchunksPerChunk.size());
-			assert(countSmallchunksPerChunk[chunk] != std::numeric_limits<size_t>::max());
-			std::pair<size_t, size_t> firstAndLast = firstAndLastMinimizerWithinSpan(minimizerPositionsPerRead[read], std::get<0>(fixedChunksPerRead[read][j]), std::get<1>(fixedChunksPerRead[read][j]), kmerSize);
-			assert(firstAndLast.first < firstAndLast.second);
-			assert(firstAndLast.second < minimizerPositionsPerRead[read].size());
-			assert(firstAndLast.second - firstAndLast.first == countSmallchunksPerChunk[chunk]);
-			for (size_t k = firstAndLast.first; k < firstAndLast.second; k++)
+			assert((graph.chunksInUnitig[i][j] & maskUint64_t) < countSmallchunksPerChunk.size());
+			countSmallChunksHere += countSmallchunksPerChunk[graph.chunksInUnitig[i][j] & maskUint64_t];
+			if (j >= 1)
 			{
-				std::pair<std::pair<size_t, size_t>, bool> key;
-				if (fw)
+				auto key = canonNodePair(graph.chunksInUnitig[i][j-1], graph.chunksInUnitig[i][j]);
+				assert(smallChunkOverlap.count(key) == 1);
+				assert(smallChunkOverlap.at(key) <= countSmallChunksHere);
+				countSmallChunksHere -= smallChunkOverlap.at(key);
+			}
+		}
+		smallChunksPerUnitig.emplace_back();
+		for (size_t j = 0; j < countSmallChunksHere; j++)
+		{
+			smallChunksPerUnitig.back().emplace_back(smallChunkParent.size(), true);
+			smallChunkParent.emplace_back(smallChunksPerUnitig.back().back().first, true);
+		}
+	}
+	assert(smallChunkParent.back().first+1 == smallChunkParent.size());
+	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
+	{
+		std::pair<size_t, bool> fw { i, true };
+		for (auto edge : graph.edges.getEdges(fw))
+		{
+			uint64_t fromChunk = graph.chunksInUnitig[i].back();
+			uint64_t toChunk;
+			if (edge.second)
+			{
+				toChunk = graph.chunksInUnitig[edge.first][0];
+			}
+			else
+			{
+				toChunk = graph.chunksInUnitig[edge.first].back() ^ firstBitUint64_t;
+			}
+			auto key = canonNodePair(fromChunk, toChunk);
+			assert(smallChunkOverlap.count(key) == 1);
+			size_t overlap = smallChunkOverlap.at(key);
+			if (overlap >= 1)
+			{
+				assert(i < smallChunksPerUnitig.size());
+				assert(edge.first < smallChunksPerUnitig.size());
+				assert(overlap <= smallChunksPerUnitig[i].size());
+				assert(overlap <= smallChunksPerUnitig[edge.first].size());
+				if (edge.second)
 				{
-					key = std::make_pair(std::make_pair(chunk, k-firstAndLast.first), true);
+					for (size_t k = 0; k < overlap; k++)
+					{
+						merge(smallChunkParent, smallChunksPerUnitig[i][smallChunksPerUnitig[i].size()-overlap+k], smallChunksPerUnitig[edge.first][k], true);
+					}
 				}
 				else
 				{
-					key = std::make_pair(std::make_pair(chunk, firstAndLast.second-1-k), false);
+					for (size_t k = 0; k < overlap; k++)
+					{
+						merge(smallChunkParent, smallChunksPerUnitig[i][smallChunksPerUnitig[i].size()-overlap+k], smallChunksPerUnitig[edge.first][smallChunksPerUnitig[edge.first].size()-1-k], false);
+					}
 				}
-				if (smallchunksHere[k].first.first == std::numeric_limits<size_t>::max())
+			}
+		}
+		std::pair<size_t, bool> bw { i, false };
+		for (auto edge : graph.edges.getEdges(bw))
+		{
+			uint64_t fromChunk = graph.chunksInUnitig[i][0] ^ firstBitUint64_t;
+			uint64_t toChunk;
+			if (edge.second)
+			{
+				toChunk = graph.chunksInUnitig[edge.first][0];
+			}
+			else
+			{
+				toChunk = graph.chunksInUnitig[edge.first].back() ^ firstBitUint64_t;
+			}
+			auto key = canonNodePair(fromChunk, toChunk);
+			assert(smallChunkOverlap.count(key) == 1);
+			size_t overlap = smallChunkOverlap.at(key);
+			if (overlap >= 1)
+			{
+				assert(i < smallChunksPerUnitig.size());
+				assert(edge.first < smallChunksPerUnitig.size());
+				assert(overlap < smallChunksPerUnitig[i].size());
+				assert(overlap < smallChunksPerUnitig[edge.first].size());
+				if (edge.second)
 				{
-					smallchunksHere[k] = key;
+					for (size_t k = 0; k < overlap; k++)
+					{
+						merge(smallChunkParent, smallChunksPerUnitig[i][overlap-1-k], smallChunksPerUnitig[edge.first][k], false);
+					}
 				}
 				else
 				{
-					mergeBidirected(bidirectedSmallchunkParent, smallchunksHere[k], key);
+					for (size_t k = 0; k < overlap; k++)
+					{
+						merge(smallChunkParent, smallChunksPerUnitig[i][overlap-1-k], smallChunksPerUnitig[edge.first][smallChunksPerUnitig[edge.first].size()-1-k], true);
+					}
 				}
 			}
 		}
 	}
-	std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>> smallchunksPerRead;
+	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
+	{
+		for (size_t j = 0; j < smallChunksPerUnitig[i].size(); j++)
+		{
+			smallChunksPerUnitig[i][j] = find(smallChunkParent, smallChunksPerUnitig[i][j]);
+		}
+	}
+	std::vector<std::tuple<size_t, size_t, size_t, bool>> chunkSmallChunkPositionInUnitig; // unitig, startpos, endpos, fw. startpos inclusive endpos exclusive even when not fw.
+	chunkSmallChunkPositionInUnitig.resize(countSmallchunksPerChunk.size(), std::make_tuple(std::numeric_limits<size_t>::max(), 0, 0, true));
+	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
+	{
+		size_t startpos = 0;
+		for (size_t j = 0; j < graph.chunksInUnitig[i].size(); j++)
+		{
+			if (j >= 1)
+			{
+				uint64_t prev = graph.chunksInUnitig[i][j-1];
+				uint64_t curr = graph.chunksInUnitig[i][j];
+				auto key = canonNodePair(prev, curr);
+				assert(smallChunkOverlap.count(key) == 1);
+				size_t overlap = smallChunkOverlap.at(key);
+				assert(startpos >= overlap);
+				startpos -= overlap;
+			}
+			size_t chunk = graph.chunksInUnitig[i][j] & maskUint64_t;
+			bool fw = graph.chunksInUnitig[i][j] & firstBitUint64_t;
+			assert(chunk < countSmallchunksPerChunk.size());
+			size_t endpos = startpos + countSmallchunksPerChunk[chunk];
+			assert(std::get<0>(chunkSmallChunkPositionInUnitig[chunk]) == std::numeric_limits<size_t>::max());
+			chunkSmallChunkPositionInUnitig[chunk] = std::make_tuple(i, startpos, endpos, fw);
+			startpos = endpos;
+		}
+		assert(startpos == smallChunksPerUnitig[i].size());
+	}
+	std::vector<std::vector<std::tuple<size_t, size_t, bool>>> smallchunksPerRead; // readminimizerindex, smallchunkindex, smallchunkfw
 	smallchunksPerRead.resize(fixedChunksPerRead.size());
-	for (size_t read = 0; read < fixedChunksPerRead.size(); read++)
+	for (size_t i = 0; i < fixedChunksPerRead.size(); i++)
 	{
-		if (minimizerPositionsPerRead[read].size() < 2) continue;
-		smallchunksPerRead[read].resize(minimizerPositionsPerRead[read].size()-1, std::make_pair(std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()), true) );
-		for (size_t j = 0; j < fixedChunksPerRead[read].size(); j++)
+		for (size_t j = 0; j < fixedChunksPerRead[i].size(); j++)
 		{
-			if (NonexistantChunk(std::get<2>(fixedChunksPerRead[read][j]))) continue;
-			size_t chunk = std::get<2>(fixedChunksPerRead[read][j]) & maskUint64_t;
-			bool fw = std::get<2>(fixedChunksPerRead[read][j]) & firstBitUint64_t;
-			assert(chunk < countSmallchunksPerChunk.size());
-			assert(countSmallchunksPerChunk[chunk] != std::numeric_limits<size_t>::max());
-			std::pair<size_t, size_t> firstAndLast = firstAndLastMinimizerWithinSpan(minimizerPositionsPerRead[read], std::get<0>(fixedChunksPerRead[read][j]), std::get<1>(fixedChunksPerRead[read][j]), kmerSize);
-			assert(firstAndLast.first < firstAndLast.second);
-			assert(firstAndLast.second < minimizerPositionsPerRead[read].size());
-			assert(firstAndLast.second - firstAndLast.first == countSmallchunksPerChunk[chunk]);
-			for (size_t k = firstAndLast.first; k < firstAndLast.second; k++)
+			if (NonexistantChunk(std::get<2>(fixedChunksPerRead[i][j]))) continue;
+			size_t chunk = std::get<2>(fixedChunksPerRead[i][j]) & maskUint64_t;
+			bool fw = std::get<2>(fixedChunksPerRead[i][j]) & firstBitUint64_t;
+			if (std::get<0>(chunkSmallChunkPositionInUnitig[chunk]) == std::numeric_limits<size_t>::max()) continue;
+			std::pair<size_t, size_t> firstAndLast = firstAndLastMinimizerWithinSpan(minimizerPositionsPerRead[i], std::get<0>(fixedChunksPerRead[i][j]), std::get<1>(fixedChunksPerRead[i][j]), kmerSize);
+			assert(firstAndLast.second > firstAndLast.first);
+			size_t unitig = std::get<0>(chunkSmallChunkPositionInUnitig[chunk]);
+			size_t start = std::get<1>(chunkSmallChunkPositionInUnitig[chunk]);
+			size_t end = std::get<2>(chunkSmallChunkPositionInUnitig[chunk]);
+			assert(end-start == countSmallchunksPerChunk[chunk]);
+			assert(end-start == firstAndLast.second-firstAndLast.first);
+			size_t chunkfw = std::get<3>(chunkSmallChunkPositionInUnitig[chunk]);
+			bool readAndUnitigOrientationMatch = (fw == chunkfw);
+			if (readAndUnitigOrientationMatch)
 			{
-				std::pair<std::pair<size_t, size_t>, bool> key;
-				if (fw)
+				for (size_t k = 0; k < end-start; k++)
 				{
-					key = std::make_pair(std::make_pair(chunk, k-firstAndLast.first), true);
+					std::pair<size_t, bool> key = smallChunksPerUnitig[unitig][start+k];
+					smallchunksPerRead[i].emplace_back(firstAndLast.first+k, key.first, key.second);
 				}
-				else
+			}
+			else
+			{
+				for (size_t k = 0; k < end-start; k++)
 				{
-					key = std::make_pair(std::make_pair(chunk, firstAndLast.second-1-k), false);
-				}
-				if (smallchunksPerRead[read][k].first.first == std::numeric_limits<size_t>::max())
-				{
-					smallchunksPerRead[read][k] = findBidirected(bidirectedSmallchunkParent, key);
+					std::pair<size_t, bool> key = reverse(smallChunksPerUnitig[unitig][end-1-k]);
+					smallchunksPerRead[i].emplace_back(firstAndLast.first+k, key.first, key.second);
 				}
 			}
 		}
 	}
-	std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>> smallchunksPerChunk;
-	smallchunksPerChunk.resize(countSmallchunksPerChunk.size());
-	for (size_t i = 0; i < countSmallchunksPerChunk.size(); i++)
-	{
-		if (countSmallchunksPerChunk[i] == std::numeric_limits<size_t>::max()) continue;
-		smallchunksPerChunk[i].reserve(countSmallchunksPerChunk[i]);
-		for (size_t j = 0; j < countSmallchunksPerChunk[i]; j++)
-		{
-			smallchunksPerChunk[i].emplace_back(findBidirected(bidirectedSmallchunkParent, std::make_pair(std::make_pair(i, j), true)));
-		}
-	}
-	return std::make_pair(std::move(smallchunksPerChunk), std::move(smallchunksPerRead));
+	return std::make_pair(smallChunksPerUnitig, smallchunksPerRead);
 }
 
 phmap::flat_hash_map<std::pair<size_t, size_t>, std::vector<std::tuple<size_t, size_t, size_t, bool>>> getReadPiecesPerSmallchunk(const std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>>& smallchunksPerRead, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const size_t kmerSize)
@@ -1265,35 +1374,47 @@ phmap::flat_hash_map<std::pair<size_t, size_t>, std::vector<std::tuple<size_t, s
 	return result;
 }
 
-phmap::flat_hash_map<std::pair<size_t, size_t>, TwobitString> getSmallchunkSequences(const FastaCompressor::CompressedStringIndex& sequenceIndex, const phmap::flat_hash_map<std::pair<size_t, size_t>, std::vector<std::tuple<size_t, size_t, size_t, bool>>>& readPiecesPerSmallchunk, const size_t numThreads, const size_t kmerSize)
+std::vector<TwobitString> getSmallchunkSequences(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::tuple<size_t, size_t, bool>>>& smallchunksPerRead, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const size_t numThreads, const size_t kmerSize)
 {
+	assert(smallchunksPerRead.size() == sequenceIndex.size());
+	std::vector<std::vector<std::tuple<size_t, size_t, bool>>> readPiecesPerSmallChunk; // read, readminimizerindex, fw
+	for (size_t i = 0; i < smallchunksPerRead.size(); i++)
+	{
+		for (auto t : smallchunksPerRead[i])
+		{
+			while (readPiecesPerSmallChunk.size() <= std::get<1>(t)) readPiecesPerSmallChunk.emplace_back();
+			readPiecesPerSmallChunk[std::get<1>(t)].emplace_back(i, std::get<0>(t), std::get<2>(t));
+		}
+	}
 	std::mutex indexMutex;
 	std::mutex resultMutex;
-	auto currentIter = readPiecesPerSmallchunk.begin();
-	auto endIter = readPiecesPerSmallchunk.end();
-	phmap::flat_hash_map<std::pair<size_t, size_t>, TwobitString> result;
+	size_t nextnum = 0;
+	std::vector<TwobitString> result;
+	result.resize(readPiecesPerSmallChunk.size());
 	std::vector<std::thread> threads;
 	for (size_t i = 0; i < numThreads; i++)
 	{
-		threads.emplace_back([&indexMutex, &sequenceIndex, &resultMutex, &currentIter, &endIter, &result, kmerSize]()
+		threads.emplace_back([&indexMutex, &sequenceIndex, &resultMutex, &nextnum, &result, &minimizerPositionsPerRead, &readPiecesPerSmallChunk, kmerSize]()
 		{
 			while (true)
 			{
-				decltype(currentIter) foundHere;
+				size_t indexHere = 0;
 				{
 					std::lock_guard<std::mutex> lock { indexMutex };
-					foundHere = currentIter;
-					if (currentIter != endIter) ++currentIter;
+					indexHere = nextnum;
+					nextnum += 1;
 				}
-				if (foundHere == endIter) return;
-				assert(foundHere->second.size() >= 1);
-				std::vector<std::string> sequencesHere;
+				if (indexHere >= readPiecesPerSmallChunk.size()) return;
+				if (readPiecesPerSmallChunk[indexHere].size() == 0) continue;
+				phmap::flat_hash_set<std::tuple<size_t, size_t, bool>> uniquePieces { readPiecesPerSmallChunk[indexHere].begin(), readPiecesPerSmallChunk[indexHere].end() };
 				phmap::flat_hash_map<std::string, size_t> sequenceCounts;
-				for (auto t : foundHere->second)
+				for (auto t : uniquePieces)
 				{
-					auto sequence = sequenceIndex.getSubstring(std::get<0>(t), std::get<1>(t), std::get<2>(t) - std::get<1>(t) + 1);
+					assert(std::get<0>(t) < minimizerPositionsPerRead.size());
+					assert(std::get<1>(t)+1 < minimizerPositionsPerRead[std::get<0>(t)].size());
+					auto sequence = sequenceIndex.getSubstring(std::get<0>(t), minimizerPositionsPerRead[std::get<0>(t)][std::get<1>(t)], minimizerPositionsPerRead[std::get<0>(t)][std::get<1>(t)+1] - minimizerPositionsPerRead[std::get<0>(t)][std::get<1>(t)] + kmerSize - 1 + 1);
 					assert(sequence.size() >= kmerSize+1);
-					if (!std::get<3>(t))
+					if (!std::get<2>(t))
 					{
 						sequence = revCompRaw(sequence);
 					}
@@ -1307,9 +1428,9 @@ phmap::flat_hash_map<std::pair<size_t, size_t>, TwobitString> getSmallchunkSeque
 					assert(pair.first.substr(pair.first.size()-kmerSize) == first.substr(first.size()-kmerSize));
 				}
 				std::string consensus;
-				if (sequenceCounts.size() >= 2 && foundHere->second.size() >= 3)
+				if (sequenceCounts.size() >= 2 && uniquePieces.size() >= 3)
 				{
-					consensus = getConsensus(sequenceCounts, foundHere->second.size());
+					consensus = getConsensus(sequenceCounts, uniquePieces.size());
 				}
 				else
 				{
@@ -1320,7 +1441,7 @@ phmap::flat_hash_map<std::pair<size_t, size_t>, TwobitString> getSmallchunkSeque
 				assert(consensus.substr(consensus.size()-kmerSize) == first.substr(first.size()-kmerSize));
 				{
 					std::lock_guard<std::mutex> lock { resultMutex };
-					result[foundHere->first] = consensus;
+					result[indexHere] = consensus;
 				}
 			}
 		});
@@ -1353,94 +1474,59 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getSmallchunkOverlap
 	return result;
 }
 
-std::pair<std::vector<TwobitString>, std::vector<std::vector<std::pair<size_t, size_t>>>> getUnitigSequences(const ChunkUnitigGraph& graph, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& smallchunkOverlap, const std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>>& smallchunksPerChunk, const phmap::flat_hash_map<std::pair<size_t, size_t>, TwobitString>& smallchunkSequences, const size_t kmerSize)
+std::tuple<std::vector<TwobitString>, std::vector<std::vector<std::pair<size_t, size_t>>>, std::vector<std::vector<size_t>>> getUnitigSequences(const ChunkUnitigGraph& graph, const std::vector<size_t>& countSmallchunksPerChunk, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& smallChunkOverlap, const std::vector<std::vector<std::pair<size_t, bool>>>& smallChunksPerUnitig, const std::vector<TwobitString>& smallchunkSequences, const size_t kmerSize)
 {
 	std::vector<TwobitString> result;
+	std::vector<std::vector<size_t>> minimizerPositionsInUnitigs;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunkPositions;
+	minimizerPositionsInUnitigs.resize(graph.chunksInUnitig.size());
 	result.resize(graph.chunksInUnitig.size());
 	chunkPositions.resize(graph.chunksInUnitig.size());
 	for (size_t unitig = 0; unitig < graph.chunksInUnitig.size(); unitig++)
 	{
-		std::vector<std::pair<std::pair<size_t, size_t>, bool>> smallchunksInUnitig;
-		assert(graph.chunksInUnitig[unitig].size() >= 1);
-		size_t lastChunkEndPos = 0;
-		for (size_t j = 0; j < graph.chunksInUnitig[unitig].size(); j++)
+		std::string resultHere;
+		minimizerPositionsInUnitigs[unitig].emplace_back(0);
+		for (size_t j = 0; j < smallChunksPerUnitig[unitig].size(); j++)
 		{
-			assert(!NonexistantChunk(graph.chunksInUnitig[unitig][j]));
-			assert((graph.chunksInUnitig[unitig][j] & maskUint64_t) < smallchunksPerChunk.size());
-			std::vector<std::pair<std::pair<size_t, size_t>, bool>> add = smallchunksPerChunk[graph.chunksInUnitig[unitig][j] & maskUint64_t];
-			if (graph.chunksInUnitig[unitig][j] & firstBitUint64_t)
-			{
-			}
-			else
-			{
-				std::reverse(add.begin(), add.end());
-				for (size_t k = 0; k < add.size(); k++)
-				{
-					add[k].second = !add[k].second;
-				}
-			}
-			size_t overlap = 0;
-			size_t chunkStartPos = 0;
-			size_t chunkEndPos = 0;
-			size_t sequenceHere = 0;
-			for (size_t k = 0; k < add.size(); k++)
-			{
-				assert(add[k].first.first != std::numeric_limits<size_t>::max());
-				assert(smallchunkSequences.count(add[k].first) == 1);
-				sequenceHere += smallchunkSequences.at(add[k].first).size();
-			}
-			sequenceHere -= (add.size()-1) * kmerSize;
-			if (j == 0)
-			{
-				chunkEndPos = sequenceHere;
-			}
-			else
-			{
-				auto key = canonNodePair(graph.chunksInUnitig[unitig][j-1], graph.chunksInUnitig[unitig][j]);
-				assert(smallchunkOverlap.count(key) == 1);
-				overlap = smallchunkOverlap.at(key);
-				size_t overlapBases = 0;
-				for (size_t k = 0; k < overlap; k++)
-				{
-					assert(smallchunkSequences.count(add[k].first) == 1);
-					overlapBases += smallchunkSequences.at(add[k].first).size();
-				}
-				if (overlap > 0) overlapBases -= (overlap-1) * kmerSize;
-				chunkEndPos = lastChunkEndPos + sequenceHere - overlapBases;
-				assert(chunkEndPos >= sequenceHere);
-				chunkStartPos = chunkEndPos - sequenceHere;
-			}
-			chunkPositions[unitig].emplace_back(chunkStartPos, chunkEndPos);
-			lastChunkEndPos = chunkEndPos;
-			smallchunksInUnitig.insert(smallchunksInUnitig.end(), add.begin() + overlap, add.end());
-		}
-		assert(chunkPositions[unitig].size() == graph.chunksInUnitig[unitig].size());
-		assert(smallchunksInUnitig.size() >= 1);
-		for (size_t j = 0; j < smallchunksInUnitig.size(); j++)
-		{
-			assert(smallchunkSequences.count(smallchunksInUnitig[j].first) == 1);
-			std::string addSequence = smallchunkSequences.at(smallchunksInUnitig[j].first).toString();
-			assert(addSequence.size() >= kmerSize+1);
-			if (!smallchunksInUnitig[j].second)
-			{
-				addSequence = revCompRaw(addSequence);
-			}
-			size_t start = 0;
+			std::string add = smallchunkSequences[smallChunksPerUnitig[unitig][j].first].toString();
+			assert(add.size() >= kmerSize+1);
+			if (!smallChunksPerUnitig[unitig][j].second) add = revCompRaw(add);
 			if (j > 0)
 			{
-				assert(result[unitig].size() >= kmerSize+1);
-				assert(result[unitig].substr(result[unitig].size()-kmerSize) == addSequence.substr(0, kmerSize));
-				addSequence.erase(addSequence.begin(), addSequence.begin()+kmerSize);
+				assert(resultHere.size() >= kmerSize+1);
+				assert(add.substr(0, kmerSize) == resultHere.substr(resultHere.size()-kmerSize));
+				resultHere.erase(resultHere.begin()+resultHere.size()-kmerSize, resultHere.end());
 			}
-			result[unitig] += addSequence;
+			resultHere += add;
+			minimizerPositionsInUnitigs[unitig].emplace_back(resultHere.size() - kmerSize);
 		}
+		assert(resultHere.size() >= kmerSize+1);
+		result[unitig] = resultHere;
 		assert(result[unitig].size() >= kmerSize+1);
+		size_t startMinimizerIndex = 0;
+		for (size_t j = 0; j < graph.chunksInUnitig[unitig].size(); j++)
+		{
+			if (j >= 1)
+			{
+				uint64_t prev = graph.chunksInUnitig[unitig][j-1];
+				uint64_t curr = graph.chunksInUnitig[unitig][j];
+				auto key = canonNodePair(prev, curr);
+				assert(smallChunkOverlap.count(key) == 1);
+				size_t overlap = smallChunkOverlap.at(key);
+				assert(startMinimizerIndex >= overlap);
+				startMinimizerIndex -= overlap;
+			}
+			size_t chunk = graph.chunksInUnitig[unitig][j] & maskUint64_t;
+			size_t endMinimizerIndex = startMinimizerIndex+countSmallchunksPerChunk[chunk];
+			chunkPositions[unitig].emplace_back(minimizerPositionsInUnitigs[unitig][startMinimizerIndex], minimizerPositionsInUnitigs[unitig][endMinimizerIndex]+kmerSize-1);
+			startMinimizerIndex = endMinimizerIndex;
+		}
+		assert(startMinimizerIndex+1 == minimizerPositionsInUnitigs[unitig].size());
 	}
-	return std::make_pair(std::move(result), std::move(chunkPositions));
+	return std::make_tuple(std::move(result), std::move(chunkPositions), std::move(minimizerPositionsInUnitigs));
 }
 
-phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getFixedOverlaps(const ChunkUnitigGraph& graph, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& smallchunkOverlap, const std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>>& smallchunksPerChunk, const phmap::flat_hash_map<std::pair<size_t, size_t>, TwobitString>& smallchunkSequences, const size_t kmerSize)
+phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getFixedOverlaps(const ChunkUnitigGraph& graph, const std::vector<std::vector<size_t>>& minimizerPositionsInUnitigs, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& smallChunkOverlap, const size_t kmerSize)
 {
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> result;
 	for (const auto& unitigpair : graph.edgeOverlaps)
@@ -1464,53 +1550,54 @@ phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> getFixedOverlaps(con
 			chunkTo = graph.chunksInUnitig[unitigpair.first.second & maskUint64_t].back() ^ firstBitUint64_t;
 		}
 		auto chunkpair = canonNodePair(chunkFrom, chunkTo);
-		assert(smallchunkOverlap.count(chunkpair) == 1);
-		size_t overlap = smallchunkOverlap.at(chunkpair);
+		assert(smallChunkOverlap.count(chunkpair) == 1);
+		size_t overlap = smallChunkOverlap.at(chunkpair);
 		size_t overlapBases = 0;
-		for (size_t i = 0; i < overlap; i++)
+		assert((unitigpair.first.first & maskUint64_t) < minimizerPositionsInUnitigs.size());
+		assert((unitigpair.first.second & maskUint64_t) < minimizerPositionsInUnitigs.size());
+		assert(overlap < minimizerPositionsInUnitigs[unitigpair.first.second & maskUint64_t].size());
+		if (unitigpair.first.second & firstBitUint64_t)
 		{
-			if (chunkpair.second & firstBitUint64_t)
-			{
-				overlapBases += smallchunkSequences.at(smallchunksPerChunk[chunkpair.second & maskUint64_t][i].first).size();
-			}
-			else
-			{
-				overlapBases += smallchunkSequences.at(smallchunksPerChunk[chunkpair.second & maskUint64_t][smallchunksPerChunk[chunkpair.second & maskUint64_t].size()-1-i].first).size();
-			}
+			overlapBases = minimizerPositionsInUnitigs[unitigpair.first.second & maskUint64_t][overlap] + kmerSize;
 		}
-		if (overlap > 0)
+		else
 		{
-			assert(overlapBases >= (overlap-1) * kmerSize);
-			overlapBases -= (overlap-1) * kmerSize;
+			overlapBases = minimizerPositionsInUnitigs[unitigpair.first.second & maskUint64_t][minimizerPositionsInUnitigs[unitigpair.first.second & maskUint64_t].size()-1] - minimizerPositionsInUnitigs[unitigpair.first.second & maskUint64_t][minimizerPositionsInUnitigs[unitigpair.first.second & maskUint64_t].size()-1-overlap] + kmerSize;
 		}
-		if (overlap == 0)
+		if (unitigpair.first.first & firstBitUint64_t)
 		{
-			overlapBases = kmerSize;
+			assert(overlapBases == (minimizerPositionsInUnitigs[unitigpair.first.first & maskUint64_t][minimizerPositionsInUnitigs[unitigpair.first.first & maskUint64_t].size()-1] - minimizerPositionsInUnitigs[unitigpair.first.first & maskUint64_t][minimizerPositionsInUnitigs[unitigpair.first.first & maskUint64_t].size()-1-overlap] + kmerSize));
+		}
+		else
+		{
+			assert(overlapBases == (minimizerPositionsInUnitigs[unitigpair.first.first & maskUint64_t][overlap] + kmerSize));
 		}
 		result[unitigpair.first] = overlapBases;
 	}
 	return result;
 }
 
-std::tuple<std::vector<TwobitString>, std::vector<std::vector<std::pair<size_t, size_t>>>, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> getUnitigDBGSequences(const ChunkUnitigGraph& graph, const size_t kmerSize, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& fixedChunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const size_t numThreads)
+std::tuple<std::vector<TwobitString>, std::vector<std::vector<std::pair<size_t, size_t>>>, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> getUnitigDBGSequences(const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const size_t kmerSize, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& fixedChunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<size_t>>& minimizerPositionsPerRead, const size_t numThreads)
 {
-	std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>> smallchunksPerChunk;
-	std::vector<std::vector<std::pair<std::pair<size_t, size_t>, bool>>> smallchunksPerRead;
-	std::tie(smallchunksPerChunk, smallchunksPerRead) = getSmallchunkInfo(fixedChunksPerRead, minimizerPositionsPerRead, kmerSize);
-	phmap::flat_hash_map<std::pair<size_t, size_t>, std::vector<std::tuple<size_t, size_t, size_t, bool>>> readPiecesPerSmallchunk = getReadPiecesPerSmallchunk(smallchunksPerRead, minimizerPositionsPerRead, kmerSize);
-	phmap::flat_hash_map<std::pair<size_t, size_t>, TwobitString> smallchunkSequences = getSmallchunkSequences(sequenceIndex, readPiecesPerSmallchunk, numThreads, kmerSize);
-	for (size_t i = 0; i < smallchunksPerChunk.size(); i++)
+	std::vector<size_t> countSmallchunksPerChunk;
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> smallChunkOverlap;
+	std::tie(countSmallchunksPerChunk, smallChunkOverlap) = getSmallChunkSizesAndOverlaps(fixedChunksPerRead, minimizerPositionsPerRead, kmerSize);
+	std::vector<std::vector<std::pair<size_t, bool>>> smallChunksPerUnitig;
+	std::vector<std::vector<std::tuple<size_t, size_t, bool>>> smallchunksPerRead; // readminimizerindex, smallchunkindex, smallchunkfw
+	std::tie(smallChunksPerUnitig, smallchunksPerRead) = getSmallchunkInfo(graph, readPaths, countSmallchunksPerChunk, smallChunkOverlap, fixedChunksPerRead, minimizerPositionsPerRead, kmerSize);
+	std::vector<TwobitString> smallchunkSequences = getSmallchunkSequences(sequenceIndex, smallchunksPerRead, minimizerPositionsPerRead, numThreads, kmerSize);
+	for (size_t i = 0; i < smallChunksPerUnitig.size(); i++)
 	{
-		for (size_t j = 0; j < smallchunksPerChunk[i].size(); j++)
+		for (size_t j = 0; j < smallChunksPerUnitig[i].size(); j++)
 		{
-			assert(readPiecesPerSmallchunk.count(smallchunksPerChunk[i][j].first) == 1);
-			assert(smallchunkSequences.count(smallchunksPerChunk[i][j].first) == 1);
+			assert(smallChunksPerUnitig[i][j].first < smallchunkSequences.size());
+			assert(smallchunkSequences[smallChunksPerUnitig[i][j].first].size() >= kmerSize+1);
 		}
 	}
-	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> smallchunkOverlap = getSmallchunkOverlapPerchunk(smallchunksPerRead, fixedChunksPerRead, minimizerPositionsPerRead, kmerSize);
 	std::vector<TwobitString> unitigSequences;
-	std::vector<std::vector<std::pair<size_t, size_t>>> chunkSequencePositionsWithinUnitigs;
-	std::tie(unitigSequences, chunkSequencePositionsWithinUnitigs) = getUnitigSequences(graph, smallchunkOverlap, smallchunksPerChunk, smallchunkSequences, kmerSize);
-	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> fixedOverlaps = getFixedOverlaps(graph, smallchunkOverlap, smallchunksPerChunk, smallchunkSequences, kmerSize);
+	std::vector<std::vector<size_t>> minimizerPositionsInUnitigs;
+	std::vector<std::vector<std::pair<size_t, size_t>>> chunkSequencePositionsWithinUnitigs; // end inclusive!
+	std::tie(unitigSequences, chunkSequencePositionsWithinUnitigs, minimizerPositionsInUnitigs) = getUnitigSequences(graph, countSmallchunksPerChunk, smallChunkOverlap, smallChunksPerUnitig, smallchunkSequences, kmerSize);
+	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> fixedOverlaps = getFixedOverlaps(graph, minimizerPositionsInUnitigs, smallChunkOverlap, kmerSize);
 	return std::make_tuple(std::move(unitigSequences), std::move(chunkSequencePositionsWithinUnitigs), std::move(fixedOverlaps));
 }

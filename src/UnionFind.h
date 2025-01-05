@@ -7,7 +7,9 @@
 void merge(phmap::flat_hash_map<size_t, size_t>& parent, size_t left, size_t right);
 size_t find(phmap::flat_hash_map<size_t, size_t>& parent, size_t val);
 void merge(std::vector<std::pair<size_t, bool>>& parent, size_t left, size_t right, bool fw);
+void merge(std::vector<std::pair<size_t, bool>>& parent, std::pair<size_t, bool> left, std::pair<size_t, bool> right, bool fw);
 std::pair<size_t, bool> find(std::vector<std::pair<size_t, bool>>& parent, size_t val); // bool true is fw, false is reverse orientation
+std::pair<size_t, bool> find(std::vector<std::pair<size_t, bool>>& parent, std::pair<size_t, bool> val); // bool true is fw, false is reverse orientation
 void merge(std::vector<size_t>& parent, size_t left, size_t right);
 size_t find(std::vector<size_t>& parent, size_t val);
 void merge(std::vector<std::vector<std::pair<size_t, size_t>>>& parent, std::pair<size_t, size_t> left, std::pair<size_t, size_t> right);

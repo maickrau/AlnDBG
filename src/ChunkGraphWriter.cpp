@@ -251,10 +251,14 @@ void fixPathClips(std::vector<std::vector<UnitigPath>>& readPaths, const ChunkUn
 			else
 			{
 				readPaths[i][j].pathLeftClipBases = unitigDBGSequences[readPaths[i][j].path[0] & maskUint64_t].size() - chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t][chunkSequencePositionsWithinUnitigs[readPaths[i][j].path[0] & maskUint64_t].size()-1-chunkLeftClip].second;
+				assert(readPaths[i][j].pathLeftClipBases >= 1);
+				readPaths[i][j].pathLeftClipBases -= 1;
 			}
 			if (readPaths[i][j].path.back() & firstBitUint64_t)
 			{
 				readPaths[i][j].pathRightClipBases = unitigDBGSequences[readPaths[i][j].path.back() & maskUint64_t].size() - chunkSequencePositionsWithinUnitigs[readPaths[i][j].path.back() & maskUint64_t][chunkSequencePositionsWithinUnitigs[readPaths[i][j].path.back() & maskUint64_t].size()-1-chunkRightClip].second;
+				assert(readPaths[i][j].pathRightClipBases >= 1);
+				readPaths[i][j].pathRightClipBases -= 1;
 			}
 			else
 			{
@@ -367,7 +371,7 @@ void writeBidirectedUnitigGraphWithSequences(const std::string& graphFile, const
 	std::vector<TwobitString> unitigDBGSequences;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunkSequencePositionsWithinUnitigs;
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> fixedOverlaps;
-	std::tie(unitigDBGSequences, chunkSequencePositionsWithinUnitigs, fixedOverlaps) = getUnitigDBGSequences(graph, kmerSize, fixedChunksPerRead, sequenceIndex, minimizerPositionsPerRead, numThreads);
+	std::tie(unitigDBGSequences, chunkSequencePositionsWithinUnitigs, fixedOverlaps) = getUnitigDBGSequences(graph, readPaths, kmerSize, fixedChunksPerRead, sequenceIndex, minimizerPositionsPerRead, numThreads);
 	fixPathClips(readPaths, graph, unitigDBGSequences, chunkSequencePositionsWithinUnitigs);
 	// ensure that edge overlap does not contain any unitigs
 	for (size_t i = 0; i+1 < kmerSize; i++)

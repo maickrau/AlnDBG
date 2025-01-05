@@ -72,7 +72,26 @@ std::pair<size_t, bool> find(std::vector<std::pair<size_t, bool>>& parent, size_
 	return parent[val];
 }
 
+std::pair<size_t, bool> find(std::vector<std::pair<size_t, bool>>& parent, std::pair<size_t, bool> val)
+{
+	auto result = find(parent, val.first);
+	if (!val.second) result.second = !result.second;
+	return result;
+}
+
 void merge(std::vector<std::pair<size_t, bool>>& parent, size_t left, size_t right, bool fw)
+{
+	std::pair<size_t, bool> leftp = find(parent, left);
+	std::pair<size_t, bool> rightp = find(parent, right);
+	if (leftp.first == rightp.first)
+	{
+		assert(leftp.second ^ rightp.second ^ fw);
+		return;
+	}
+	parent[rightp.first] = std::make_pair(leftp.first, rightp.second ^ leftp.second ^ fw);
+}
+
+void merge(std::vector<std::pair<size_t, bool>>& parent, std::pair<size_t, bool> left, std::pair<size_t, bool> right, bool fw)
 {
 	std::pair<size_t, bool> leftp = find(parent, left);
 	std::pair<size_t, bool> rightp = find(parent, right);
