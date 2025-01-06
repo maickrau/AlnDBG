@@ -1264,8 +1264,8 @@ std::pair<std::vector<std::vector<std::pair<size_t, bool>>>, std::vector<std::ve
 			{
 				assert(i < smallChunksPerUnitig.size());
 				assert(edge.first < smallChunksPerUnitig.size());
-				assert(overlap < smallChunksPerUnitig[i].size());
-				assert(overlap < smallChunksPerUnitig[edge.first].size());
+				assert(overlap <= smallChunksPerUnitig[i].size());
+				assert(overlap <= smallChunksPerUnitig[edge.first].size());
 				if (edge.second)
 				{
 					for (size_t k = 0; k < overlap; k++)
