@@ -331,6 +331,314 @@ void expandResolvableChunks(std::vector<std::vector<std::tuple<size_t, size_t, u
 	}
 }
 
+std::tuple<uint64_t, uint64_t, uint64_t> checkYForkEdge(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const ChunkUnitigGraph& graph, const std::vector<std::vector<UnitigPath>>& readPaths, const double averageCoverage, const size_t minLongUnitigLength, const std::pair<size_t, bool> startNode)
+{
+	std::tuple<uint64_t, uint64_t, uint64_t> notFound { std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max() };
+	if (graph.edges.getEdges(startNode).size() != 2) return notFound;
+	uint64_t firstEdge = std::numeric_limits<uint64_t>::max();
+	uint64_t secondEdge = std::numeric_limits<uint64_t>::max();
+	for (auto edge : graph.edges.getEdges(startNode))
+	{
+		if (graph.edges.getEdges(reverse(edge)).size() != 1) return notFound;
+		if (graph.unitigLengths[edge.first] < minLongUnitigLength) return notFound;
+		if (graph.coverages[edge.first] < 0.5 * averageCoverage) return notFound;
+		if (graph.coverages[edge.first] > 1.5 * averageCoverage) return notFound;
+		if (firstEdge == std::numeric_limits<uint64_t>::max())
+		{
+			firstEdge = edge.first + (edge.second ? 0 : firstBitUint64_t); // reversed edge, ie points towards y fork
+		}
+		else
+		{
+			secondEdge = edge.first + (edge.second ? 0 : firstBitUint64_t); // reversed edge, ie points towards y fork
+		}
+	}
+	assert(firstEdge != std::numeric_limits<uint64_t>::max());
+	assert(secondEdge != std::numeric_limits<uint64_t>::max());
+	return std::make_tuple(startNode.first + (startNode.second ? firstBitUint64_t : 0), firstEdge, secondEdge);
+}
+
+void fixYForks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t kmerSize)
+{
+	const size_t minLongUnitigLength = 100000;
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	double coverageSum = 0;
+	double coverageDivisor = 0;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (graph.unitigLengths[i] < minLongUnitigLength) continue;
+		coverageSum += graph.unitigLengths[i] * graph.coverages[i];
+		coverageDivisor += graph.unitigLengths[i];
+	}
+	if (coverageDivisor == 0) return;
+	double averageCoverage = coverageSum/coverageDivisor;
+	std::cerr << "average coverage " << averageCoverage << std::endl;
+	std::vector<std::tuple<uint64_t, uint64_t, uint64_t>> yForks; // stem, first branch, second branch. all three point towards y fork (middle)
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (graph.unitigLengths[i] < minLongUnitigLength) continue;
+		if (graph.coverages[i] < averageCoverage * 0.5) continue;
+		if (graph.coverages[i] > averageCoverage * 1.5) continue;
+		auto found = checkYForkEdge(chunksPerRead, graph, readPaths, averageCoverage, minLongUnitigLength, std::make_pair(i, true));
+		if (std::get<0>(found) != std::numeric_limits<uint64_t>::max())
+		{
+			assert(std::get<1>(found) != std::numeric_limits<uint64_t>::max());
+			assert(std::get<2>(found) != std::numeric_limits<uint64_t>::max());
+			yForks.emplace_back(found);
+		}
+		found = checkYForkEdge(chunksPerRead, graph, readPaths, averageCoverage, minLongUnitigLength, std::make_pair(i, false));
+		if (std::get<0>(found) != std::numeric_limits<uint64_t>::max())
+		{
+			assert(std::get<1>(found) != std::numeric_limits<uint64_t>::max());
+			assert(std::get<2>(found) != std::numeric_limits<uint64_t>::max());
+			yForks.emplace_back(found);
+		}
+	}
+	if (yForks.size() == 0) return;
+	phmap::flat_hash_map<uint64_t, size_t> unitigBelongsToForkBranch;
+	phmap::flat_hash_map<uint64_t, size_t> unitigIsForkStem;
+	for (size_t i = 0; i < yForks.size(); i++)
+	{
+		auto t = yForks[i];
+		assert(unitigIsForkStem.count(std::get<0>(t)) == 0);
+		unitigIsForkStem[std::get<0>(t)] = i;
+		assert(unitigBelongsToForkBranch.count(std::get<1>(t)) == 0);
+		unitigBelongsToForkBranch[std::get<1>(t)] = i;
+		assert(unitigBelongsToForkBranch.count(std::get<2>(t)) == 0);
+		unitigBelongsToForkBranch[std::get<2>(t)] = i;
+	}
+	phmap::flat_hash_set<uint64_t> longnodeTips;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (graph.unitigLengths[i] < minLongUnitigLength) continue;
+		if (graph.coverages[i] < 0.5 * averageCoverage) continue;
+		if (graph.coverages[i] > 1.5 * averageCoverage) continue;
+		if (graph.edges.getEdges(std::make_pair(i, true)).size() == 0)
+		{
+			longnodeTips.insert(i + firstBitUint64_t);
+		}
+		if (graph.edges.getEdges(std::make_pair(i, false)).size() == 0)
+		{
+			longnodeTips.insert(i);
+		}
+	}
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, size_t>> forkBranchLongNodeConnections;
+	phmap::flat_hash_map<uint64_t, size_t> forkBranchLongestHomozygousChunks;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		uint64_t lastLongNode = std::numeric_limits<uint64_t>::max();
+		std::vector<uint64_t> longNodes;
+		std::vector<std::pair<size_t, size_t>> unitigChunksInLongnode;
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				assert(readPaths[i][j].path[k] & firstBitUint64_t);
+				size_t unitig = readPaths[i][j].path[k] & maskUint64_t;
+				assert(unitig < graph.unitigLengths.size());
+				if (graph.unitigLengths[unitig] < minLongUnitigLength) continue;
+				if (graph.coverages[unitig] < 0.5 * averageCoverage) continue;
+				if (graph.coverages[unitig] > 1.5 * averageCoverage) continue;
+				longNodes.emplace_back(readPaths[i][j].path[k]);
+				unitigChunksInLongnode.emplace_back(0, graph.chunksInUnitig[unitig].size()-1);
+				if (k == 0 && readPaths[i][j].pathLeftClipChunks > 0)
+				{
+					unitigChunksInLongnode.back().first = readPaths[i][j].pathLeftClipChunks;
+				}
+				if (k+1 == readPaths[i][j].path.size() && readPaths[i][j].pathRightClipChunks > 0)
+				{
+					unitigChunksInLongnode.back().second -= readPaths[i][j].pathRightClipChunks;
+				}
+				assert(unitigChunksInLongnode.back().second >= unitigChunksInLongnode.back().first);
+				assert(unitigChunksInLongnode.back().second < graph.chunksInUnitig[unitig].size());
+			}
+		}
+		for (size_t j = 0; j+1 < longNodes.size(); j++)
+		{
+			if (longnodeTips.count(longNodes[j]) == 0) continue;
+			if (unitigBelongsToForkBranch.count(longNodes[j+1] ^ firstBitUint64_t) == 1)
+			{
+				forkBranchLongNodeConnections[longNodes[j+1] ^ firstBitUint64_t][longNodes[j] ^ firstBitUint64_t] += 1;
+			}
+			else if (j+2 < longNodes.size() && unitigIsForkStem.count(longNodes[j+1]) == 1 && unitigBelongsToForkBranch.count(longNodes[j+2] ^ firstBitUint64_t) == 1 && unitigIsForkStem.at(longNodes[j+1]) == unitigBelongsToForkBranch.at(longNodes[j+2] ^ firstBitUint64_t))
+			{
+				forkBranchLongNodeConnections[longNodes[j+2] ^ firstBitUint64_t][longNodes[j] ^ firstBitUint64_t] += 1;
+			}
+		}
+		for (size_t j = 1; j < longNodes.size(); j++)
+		{
+			if (longnodeTips.count(longNodes[j] ^ firstBitUint64_t) == 0) continue;
+			if (unitigBelongsToForkBranch.count(longNodes[j-1]) == 1)
+			{
+				forkBranchLongNodeConnections[longNodes[j-1]][longNodes[j]] += 1;
+			}
+			else if (j >= 2 && unitigIsForkStem.count(longNodes[j-1] ^ firstBitUint64_t) == 1 && unitigBelongsToForkBranch.count(longNodes[j-2]) == 1 && unitigIsForkStem.at(longNodes[j-1] ^ firstBitUint64_t) && unitigBelongsToForkBranch.at(longNodes[j-2]))
+			{
+				forkBranchLongNodeConnections[longNodes[j+2] ^ firstBitUint64_t][longNodes[j] ^ firstBitUint64_t] += 1;
+			}
+		}
+		for (size_t j = 0; j+1 < longNodes.size(); j++)
+		{
+			if (unitigBelongsToForkBranch.count(longNodes[j]) == 0) continue;
+			if (unitigIsForkStem.count(longNodes[j+1] ^ firstBitUint64_t) == 0) continue;
+			if (unitigBelongsToForkBranch.at(longNodes[j]) != unitigIsForkStem.at(longNodes[j+1] ^ firstBitUint64_t)) continue;
+			forkBranchLongestHomozygousChunks[longNodes[j]] = std::max(forkBranchLongestHomozygousChunks[longNodes[j]], unitigChunksInLongnode[j+1].second + 1);
+		}
+		for (size_t j = 1; j < longNodes.size(); j++)
+		{
+			if (unitigBelongsToForkBranch.count(longNodes[j] ^ firstBitUint64_t) == 0) continue;
+			if (unitigIsForkStem.count(longNodes[j-1]) == 0) continue;
+			if (unitigBelongsToForkBranch.at(longNodes[j] ^ firstBitUint64_t) != unitigIsForkStem.at(longNodes[j-1])) continue;
+			forkBranchLongestHomozygousChunks[longNodes[j] ^ firstBitUint64_t] = std::max(forkBranchLongestHomozygousChunks[longNodes[j] ^ firstBitUint64_t], graph.chunksInUnitig[longNodes[j-1] & maskUint64_t].size() - unitigChunksInLongnode[j-1].first);
+		}
+	}
+	phmap::flat_hash_map<size_t, std::pair<size_t, size_t>> chunkImpliesForkAllele;
+	phmap::flat_hash_map<size_t, size_t> chunkIsForkHomozygous;
+	phmap::flat_hash_map<size_t, size_t> chunkNewAlleleNum;
+	size_t nextNum = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			nextNum = std::max(nextNum, std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+		}
+	}
+	nextNum += 1;
+	for (size_t i = 0; i < yForks.size(); i++)
+	{
+		uint64_t intactBranch = std::numeric_limits<uint64_t>::max();
+		uint64_t brokenBranch = std::numeric_limits<uint64_t>::max();
+		assert(forkBranchLongestHomozygousChunks.count(std::get<1>(yForks[i])) == 1);
+		assert(forkBranchLongestHomozygousChunks.count(std::get<2>(yForks[i])) == 1);
+		if (forkBranchLongestHomozygousChunks.at(std::get<1>(yForks[i])) > forkBranchLongestHomozygousChunks.at(std::get<2>(yForks[i])))
+		{
+			intactBranch = std::get<1>(yForks[i]);
+			brokenBranch = std::get<2>(yForks[i]);
+		}
+		if (forkBranchLongestHomozygousChunks.at(std::get<1>(yForks[i])) < forkBranchLongestHomozygousChunks.at(std::get<2>(yForks[i])))
+		{
+			intactBranch = std::get<2>(yForks[i]);
+			brokenBranch = std::get<1>(yForks[i]);
+		}
+		if (intactBranch == std::numeric_limits<uint64_t>::max())
+		{
+			// both branches extend equally deep into stem node, can't pick which one was broken
+			continue;
+		}
+		phmap::flat_hash_set<uint64_t> otherEndCandidates;
+		if (forkBranchLongNodeConnections.count(brokenBranch) == 0) continue;
+		if (forkBranchLongNodeConnections.count(intactBranch) == 1)
+		{
+			bool allIntactConnectionsSmall = false;
+			for (auto pair : forkBranchLongNodeConnections.at(intactBranch))
+			{
+				if (pair.second != 1)
+				{
+					allIntactConnectionsSmall = false;
+					break;
+				}
+			}
+			if (allIntactConnectionsSmall) continue;
+		}
+		for (auto pair : forkBranchLongNodeConnections.at(brokenBranch))
+		{
+			if (pair.second == 1) continue;
+			otherEndCandidates.insert(pair.first);
+		}
+		if (otherEndCandidates.size() != 1) continue;
+		size_t otherEnd = *otherEndCandidates.begin();
+		size_t homozygousCount = forkBranchLongestHomozygousChunks.at(brokenBranch);
+		assert(homozygousCount >= 1);
+		assert(homozygousCount < graph.chunksInUnitig[std::get<0>(yForks[i])].size());
+		std::cerr << "mend stem " << ((std::get<0>(yForks[i]) & firstBitUint64_t) ? ">" : "<") << (std::get<0>(yForks[i]) & maskUint64_t) << " intact branch " << ((intactBranch & firstBitUint64_t) ? ">" : "<") << (intactBranch & maskUint64_t) << " broken branch " << ((brokenBranch & firstBitUint64_t) ? ">" : "<") << (brokenBranch & maskUint64_t) << " to " << ((otherEnd & firstBitUint64_t) ? ">" : "<") << (otherEnd & maskUint64_t) << " homozygous chunk count " << homozygousCount << std::endl;
+		if (std::get<0>(yForks[i]) & firstBitUint64_t)
+		{
+			for (size_t j = 0; j+homozygousCount < graph.chunksInUnitig[std::get<0>(yForks[i]) & maskUint64_t].size(); j++)
+			{
+				chunkImpliesForkAllele[graph.chunksInUnitig[std::get<0>(yForks[i])][j] & maskUint64_t] = std::make_pair(i, 0);
+			}
+			for (size_t j = graph.chunksInUnitig[std::get<0>(yForks[i]) & maskUint64_t].size() - homozygousCount; j < graph.chunksInUnitig[std::get<0>(yForks[i]) & maskUint64_t].size(); j++)
+			{
+				chunkIsForkHomozygous[graph.chunksInUnitig[std::get<0>(yForks[i])][j] & maskUint64_t] = i;
+				chunkNewAlleleNum[graph.chunksInUnitig[std::get<0>(yForks[i])][j] & maskUint64_t] = nextNum;
+				nextNum += 2;
+			}
+		}
+		else
+		{
+			for (size_t j = homozygousCount; j < graph.chunksInUnitig[std::get<0>(yForks[i]) & maskUint64_t].size(); j++)
+			{
+				chunkImpliesForkAllele[graph.chunksInUnitig[std::get<0>(yForks[i])][j] & maskUint64_t] = std::make_pair(i, 0);
+			}
+			for (size_t j = 0; j < homozygousCount; j++)
+			{
+				chunkIsForkHomozygous[graph.chunksInUnitig[std::get<0>(yForks[i])][j] & maskUint64_t] = i;
+				chunkNewAlleleNum[graph.chunksInUnitig[std::get<0>(yForks[i])][j] & maskUint64_t] = nextNum;
+				nextNum += 2;
+			}
+		}
+		for (uint64_t chunk : graph.chunksInUnitig[intactBranch & maskUint64_t])
+		{
+			chunkImpliesForkAllele[chunk & maskUint64_t] = std::make_pair(i, 0);
+		}
+		for (uint64_t chunk : graph.chunksInUnitig[brokenBranch & maskUint64_t])
+		{
+			chunkImpliesForkAllele[chunk & maskUint64_t] = std::make_pair(i, 1);
+		}
+		for (uint64_t chunk : graph.chunksInUnitig[otherEnd & maskUint64_t])
+		{
+			chunkImpliesForkAllele[chunk & maskUint64_t] = std::make_pair(i, 1);
+		}
+	}
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		phmap::flat_hash_map<size_t, std::pair<size_t, size_t>> forkAlleleCounts;
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (chunkImpliesForkAllele.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 0) continue;
+			std::pair<size_t, size_t> forkAndAllele = chunkImpliesForkAllele.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+			assert(forkAndAllele.second == 0 || forkAndAllele.second == 1);
+			if (forkAndAllele.second == 0)
+			{
+				forkAlleleCounts[forkAndAllele.first].first += 1;
+			}
+			if (forkAndAllele.second == 1)
+			{
+				forkAlleleCounts[forkAndAllele.first].second += 1;
+			}
+		}
+		phmap::flat_hash_map<size_t, size_t> forkAlleleAssignments;
+		for (auto pair : forkAlleleCounts)
+		{
+			if (pair.second.first > pair.second.second)
+			{
+				forkAlleleAssignments[pair.first] = 0;
+			}
+			if (pair.second.first < pair.second.second)
+			{
+				forkAlleleAssignments[pair.first] = 1;
+			}
+		}
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (chunkIsForkHomozygous.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 0) continue;
+			size_t fork = chunkIsForkHomozygous.at(std::get<2>(chunksPerRead[i][j]) & maskUint64_t);
+			if (forkAlleleAssignments.count(fork) == 0)
+			{
+				std::get<2>(chunksPerRead[i][j]) = std::numeric_limits<uint64_t>::max();
+				continue;
+			}
+			size_t allele = forkAlleleAssignments.at(fork);
+			assert(allele == 0 || allele == 1);
+			std::get<2>(chunksPerRead[i][j]) = chunkNewAlleleNum[std::get<2>(chunksPerRead[i][j]) & maskUint64_t] + allele + firstBitUint64_t;
+		}
+	}
+}
+
 void expandChunksUntilSolids(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t kmerSize, const size_t expandedSize)
 {
 	std::vector<size_t> chunkLengths;
@@ -2027,6 +2335,12 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		case 23:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			expandResolvableChunks(chunksPerRead, approxOneHapCoverage, kmerSize, 50000);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeStage(235, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			[[fallthrough]];
+		case 235:
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			fixYForks(chunksPerRead, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(24, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
