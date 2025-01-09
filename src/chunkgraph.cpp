@@ -101,6 +101,7 @@ std::vector<std::pair<size_t, size_t>> getUniqueRanges(std::vector<std::pair<siz
 
 bool expandResolvableChunksOnce(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t kmerSize, const size_t expandedSize)
 {
+	const size_t minSolidCoverage = 4;
 	size_t maxChunk = 0;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
@@ -163,12 +164,12 @@ bool expandResolvableChunksOnce(std::vector<std::vector<std::tuple<size_t, size_
 			for (auto pair2 : pair.second)
 			{
 				if (pair2.second == 1) continue;
-				if (pair2.second < 4)
+				if (pair2.second < minSolidCoverage)
 				{
 					valid = false;
 					break;
 				}
-				assert(pair2.second >= 4);
+				assert(pair2.second >= minSolidCoverage);
 				solidPredecessors.insert(pair2.first.first);
 				solidSuccessors.insert(pair2.first.second);
 			}
