@@ -102,3 +102,24 @@ void merge(std::vector<std::pair<size_t, bool>>& parent, std::pair<size_t, bool>
 	}
 	parent[rightp.first] = std::make_pair(leftp.first, rightp.second ^ leftp.second ^ fw);
 }
+
+void mergeAllowPalindrome(std::vector<std::pair<size_t, bool>>& parent, std::pair<size_t, bool> left, std::pair<size_t, bool> right, bool fw)
+{
+	std::pair<size_t, bool> leftp = find(parent, left);
+	std::pair<size_t, bool> rightp = find(parent, right);
+	if (leftp.first == rightp.first)
+	{
+		assert(parent[leftp.first].first == leftp.first);
+		assert(parent[rightp.first].first == leftp.first);
+		if (leftp.second ^ rightp.second ^ fw)
+		{
+			return;
+		}
+		else
+		{
+			parent[leftp.first].second = false;
+			return;
+		}
+	}
+	parent[rightp.first] = std::make_pair(leftp.first, rightp.second ^ leftp.second ^ fw);
+}
