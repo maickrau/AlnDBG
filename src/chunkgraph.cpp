@@ -474,9 +474,9 @@ void fixYForks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& c
 			{
 				forkBranchLongNodeConnections[longNodes[j-1]][longNodes[j]] += 1;
 			}
-			else if (j >= 2 && unitigIsForkStem.count(longNodes[j-1] ^ firstBitUint64_t) == 1 && unitigBelongsToForkBranch.count(longNodes[j-2]) == 1 && unitigIsForkStem.at(longNodes[j-1] ^ firstBitUint64_t) && unitigBelongsToForkBranch.at(longNodes[j-2]))
+			else if (j >= 2 && unitigIsForkStem.count(longNodes[j-1] ^ firstBitUint64_t) == 1 && unitigBelongsToForkBranch.count(longNodes[j-2]) == 1 && unitigIsForkStem.at(longNodes[j-1] ^ firstBitUint64_t) == unitigBelongsToForkBranch.at(longNodes[j-2]))
 			{
-				forkBranchLongNodeConnections[longNodes[j+2] ^ firstBitUint64_t][longNodes[j] ^ firstBitUint64_t] += 1;
+				forkBranchLongNodeConnections[longNodes[j-2]][longNodes[j]] += 1;
 			}
 		}
 		for (size_t j = 0; j+1 < longNodes.size(); j++)
