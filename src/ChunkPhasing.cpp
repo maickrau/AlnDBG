@@ -1707,7 +1707,7 @@ std::vector<std::vector<size_t>> tryPairPhasingGroupSplitting(const std::vector<
 {
 	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
 	std::vector<std::vector<size_t>> pairPhasingGroups = getPairPhasingGroups(readFakeMSABases);
-	std::vector<size_t> parent = getFastTransitiveClosure(unfilteredReadFakeMSABases.size(), 0, [&pairPhasingGroups](const size_t i, const size_t j, const size_t maxEdits) { return (pairPhasingGroups[i] == pairPhasingGroups[j]) ? 0 : 1; });
+	std::vector<size_t> parent = getFastTransitiveClosure(unfilteredReadFakeMSABases.size(), 0, [&pairPhasingGroups](const size_t i, const size_t j, const size_t maxEdits) { return (pairPhasingGroups[i] == pairPhasingGroups[j]) ? (size_t)0 : (size_t)1; });
 	size_t nextNum = 0;
 	phmap::flat_hash_map<size_t, size_t> keyToNode;
 	for (size_t j = 0; j < parent.size(); j++)
@@ -1730,7 +1730,7 @@ std::vector<std::vector<size_t>> tryPairPhasingGroupSplittingDiscardSingletons(c
 {
 	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
 	std::vector<std::vector<size_t>> pairPhasingGroups = getPairPhasingGroupsDiscardSingletons(readFakeMSABases);
-	std::vector<size_t> parent = getFastTransitiveClosure(unfilteredReadFakeMSABases.size(), 0, [&pairPhasingGroups](const size_t i, const size_t j, const size_t maxEdits) { return (pairPhasingGroups[i] == pairPhasingGroups[j]) ? 0 : 1; });
+	std::vector<size_t> parent = getFastTransitiveClosure(unfilteredReadFakeMSABases.size(), 0, [&pairPhasingGroups](const size_t i, const size_t j, const size_t maxEdits) { return (pairPhasingGroups[i] == pairPhasingGroups[j]) ? (size_t)0 : (size_t)1; });
 	size_t nextNum = 0;
 	phmap::flat_hash_map<size_t, size_t> keyToNode;
 	for (size_t j = 0; j < parent.size(); j++)
