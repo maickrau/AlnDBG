@@ -260,6 +260,12 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 					found = true;
 					break;
 				}
+				if (!found)
+				{
+					// check in case another thread transitively merged these
+					std::lock_guard<std::mutex> lock { resultMutex };
+					if (find(parent, clusterExample[i]) == find(parent, clusterExample[j])) found = true;
+				}
 				if (found) continue;
 				for (size_t l : clusterAdditionals[j])
 				{
@@ -271,6 +277,12 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 					merge(parent, l, clusterExample[i]);
 					found = true;
 					break;
+				}
+				if (!found)
+				{
+					// check in case another thread transitively merged these
+					std::lock_guard<std::mutex> lock { resultMutex };
+					if (find(parent, clusterExample[i]) == find(parent, clusterExample[j])) found = true;
 				}
 				if (found) continue;
 				for (size_t k : clusterAdditionals[i])
