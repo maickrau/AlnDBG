@@ -27,6 +27,8 @@
 #include "OverlapMatcher.h"
 #include "PathWalker.h"
 
+const size_t RestartStageLatest = std::numeric_limits<size_t>::max()-1;
+
 double mismatchFraction;
 
 void countReadRepetitiveUnitigs(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t kmerSize)
@@ -2018,19 +2020,58 @@ void mergeNonexistentChunks(std::vector<std::vector<std::tuple<size_t, size_t, u
 	}
 }
 
-void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t startStage, const size_t resolveSize)
+void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, size_t startStage, const size_t resolveSize)
 {
-	std::cerr << "start at stage " << startStage << std::endl;
+	if (startStage != RestartStageLatest)
+	{
+		std::cerr << "start at stage " << startStage << std::endl;
+	}
+	else
+	{
+		std::cerr << "restart from latest stage" << std::endl;
+	}
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> chunksPerRead;
 	std::vector<std::vector<size_t>> minimizerPositionsPerRead;
-	if (startStage > 0)
+	if (startStage == RestartStageLatest)
+	{
+		startStage = 0;
+		bool good = true;
+		try
+		{
+			minimizerPositionsPerRead = readMinimizersFromFile("fakepaths_minimizers.txt");
+		}
+		catch (FileCorruptedException& e)
+		{
+			std::cerr << "Minimizer file " << "fakepaths_minimizers.txt" << " is corrupted or not found, restart from scratch" << std::endl;
+			good = false;
+		}
+		if (good)
+		{
+			for (int i = 21; i >= 0; i--)
+			{
+				std::string filename = "fakepaths" + std::to_string(i) + ".txt";
+				std::cerr << "try to read stage " << i << std::endl;
+				try
+				{
+					chunksPerRead = readChunksFromFakePathsFile(filename);
+					startStage = i;
+					break;
+				}
+				catch (FileCorruptedException& e)
+				{
+				}
+			}
+			std::cerr << "start from stage " << startStage << std::endl;
+		}
+	}
+	else if (startStage > 0)
 	{
 		try
 		{
 			chunksPerRead = readChunksFromFakePathsFile("fakepaths" + std::to_string(startStage) + ".txt");
 		}
-		catch (FileCorruptedException e)
+		catch (FileCorruptedException& e)
 		{
 			std::cerr << "Chunk file " << "fakepaths" << std::to_string(startStage) << ".txt" << " is corrupted" << std::endl;
 			std::abort();
@@ -2039,7 +2080,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		{
 			minimizerPositionsPerRead = readMinimizersFromFile("fakepaths_minimizers.txt");
 		}
-		catch (FileCorruptedException e)
+		catch (FileCorruptedException& e)
 		{
 			std::cerr << "Minimizer file " << "fakepaths_minimizers.txt" << " is corrupted" << std::endl;
 			std::abort();
@@ -2223,6 +2264,11 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		case 21:
 			writeBidirectedUnitigGraphWithSequences("graph-resolved-final.gfa", "paths-resolved-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			break;
+		default:
+			std::cerr << "invalid start stage " << startStage << "!" << std::endl;
+			std::abort();
+
 	}
 }
 
@@ -2241,6 +2287,7 @@ int main(int argc, char** argv)
 		("avg-hap-coverage", "Average single haplotype coverage", cxxopts::value<double>())
 		("max-error-rate", "Maximum error rate. Try 2-3x average read error rate", cxxopts::value<double>()->default_value("0.03"))
 		("restart", "Restart from stage", cxxopts::value<size_t>())
+		("restart-latest", "Restart from latest stage")
 		;
 	auto params = options.parse(argc, argv);
 	if (params.count("v") == 1)
@@ -2264,6 +2311,11 @@ int main(int argc, char** argv)
 		std::cerr << "Input reads are required" << std::endl;
 		paramError = true;
 	}
+	if (params.count("restart") == 1 && params.count("restart-latest") == 1)
+	{
+		std::cerr << "Cannot use both --restart and --restart-latest, pick only one" << std::endl;
+		paramError = true;
+	}
 	if (paramError) std::abort();
 	const size_t numThreads = params["t"].as<size_t>();
 	const size_t k = params["k"].as<size_t>();
@@ -2273,6 +2325,7 @@ int main(int argc, char** argv)
 	mismatchFraction = params["max-error-rate"].as<double>();
 	size_t startStage = 0;
 	if (params.count("restart") == 1) startStage = params["restart"].as<size_t>();
+	if (params.count("restart-latest") == 1) startStage = RestartStageLatest;
 	std::vector<std::string> readFiles = params["i"].as<std::vector<std::string>>();
 	FastaCompressor::CompressedStringIndex sequenceIndex { 5, 100 };
 	std::vector<size_t> readBasepairLengths;
