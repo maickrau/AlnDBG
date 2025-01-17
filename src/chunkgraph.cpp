@@ -2264,16 +2264,6 @@ int main(int argc, char** argv)
 		std::cerr << "Input reads are required" << std::endl;
 		paramError = true;
 	}
-	if (params.count("parent-1-reads") == 1 && params.count("parent-2-reads") == 0)
-	{
-		std::cerr << "Parent 2 reads missing" << std::endl;
-		paramError = true;
-	}
-	if (params.count("parent-1-reads") == 0 && params.count("parent-2-reads") == 1)
-	{
-		std::cerr << "Parent 1 reads missing" << std::endl;
-		paramError = true;
-	}
 	if (paramError) std::abort();
 	const size_t numThreads = params["t"].as<size_t>();
 	const size_t k = params["k"].as<size_t>();
