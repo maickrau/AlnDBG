@@ -86,7 +86,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 			sequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
 			longestLength = std::max(longestLength, sequences.back().size());
 		}
-		std::vector<size_t> parent = getFastTransitiveClosureMultithread(sequences.size(), std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), numThreads, [&sequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[i], sequences[j], maxDist); }, [&sequences, mismatchFloor](const size_t i, const size_t j) { return std::max((size_t)(std::min(sequences[i].size(), sequences[j].size()) * mismatchFraction), mismatchFloor); });
+		std::vector<size_t> parent = getFastTransitiveClosureMultithread(sequences.size(), std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), longestLength, numThreads, [&sequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[i], sequences[j], maxDist); }, [&sequences, mismatchFloor](const size_t i, const size_t j) { return std::max((size_t)(std::min(sequences[i].size(), sequences[j].size()) * mismatchFraction), mismatchFloor); });
 		phmap::flat_hash_map<size_t, size_t> parentToCluster;
 		for (size_t j = 0; j < parent.size(); j++)
 		{
