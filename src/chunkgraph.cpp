@@ -2030,13 +2030,12 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		minimizerPositionsPerRead = readMinimizersFromFile("fakepaths_minimizers.txt");
 		while (chunksPerRead.size() < sequenceIndex.size()*2) chunksPerRead.emplace_back();
 		assert(minimizerPositionsPerRead.size() == sequenceIndex.size()*2);
-		std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	}
+	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	switch(startStage)
 	{
 		case 0:
 			std::cerr << "getting chunks from reads" << std::endl;
-			//chunksPerRead = getCorrectnessWeightedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize, middleSkip);
 			std::tie(chunksPerRead, minimizerPositionsPerRead) = getMinimizerBoundedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize);
 			for (size_t i = 0; i < chunksPerRead.size(); i++)
 			{
@@ -2046,7 +2045,6 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 					std::get<2>(chunksPerRead[i][j]) |= firstBitUint64_t;
 				}
 			}
-			//addMissingPiecesBetweenChunks(chunksPerRead, k);
 			{
 				size_t numChunks = 0;
 				for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -2060,216 +2058,126 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeMinimizers("fakepaths_minimizers.txt", minimizerPositionsPerRead);
 			[[fallthrough]];
 		case 1:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerLength(chunksPerRead, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			removeBadShortHighCoverageChunks(chunksPerRead, kmerSize);
 			mergeNonexistentChunks(chunksPerRead);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			mergeFakeBubbles(chunksPerRead, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 2:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerBaseCounts(sequenceIndex, rawReadLengths, chunksPerRead, kmerSize, numThreads);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 1000, 3000, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveTinyNodesRecklessly(chunksPerRead, numThreads, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			removeTinyProblemNodes(chunksPerRead, k);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(3, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 3:
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeStage(4, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 4:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerSequenceIdentityRoughly(sequenceIndex, rawReadLengths, chunksPerRead, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			// splitPerSequenceIdentity(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
-			// std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 1000, 3000, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveTinyNodesRecklessly(chunksPerRead, numThreads, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			removeTinyProblemNodes(chunksPerRead, k);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeStage(4, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			[[fallthrough]];
+		case 4:
+			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(5, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 5:
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			contextResolve(chunksPerRead, kmerSize, 1000);
-//			expandChunks(chunksPerRead, kmerSize, 5000);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeStage(51, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 51:
-//			resegmentChunks(chunksPerRead, rawReadLengths, approxOneHapCoverage, kmerSize);
-//			writeStage(52, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 52:
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveTinyNodesRecklessly(chunksPerRead, numThreads, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeStage(6, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			splitPerPhasingKmersWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeStage(6, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 6:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
+			splitPerSNPTransitiveClosureClustering(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(7, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 7:
+			expandChunks(chunksPerRead, kmerSize, resolveSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerPhasingKmersWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
+			addGapChunks(chunksPerRead, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveTinyNodesRecklessly(chunksPerRead, numThreads, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			resegmentChunks(chunksPerRead, rawReadLengths, approxOneHapCoverage, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(8, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 8:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			splitPerCorrectedKmerClustering(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeStage(81, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 81:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			splitPerCorrectedKmerPhasing(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeStage(82, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 82:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerSNPTransitiveClosureClustering(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(83, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 84:
-			// std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			// contextResolve(chunksPerRead, kmerSize, resolveSize);
-			// writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeStage(9, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 9:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			contextResolve(chunksPerRead, kmerSize, 2000);
-			expandChunks(chunksPerRead, kmerSize, resolveSize);
-			addGapChunks(chunksPerRead, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(90, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 90:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			resegmentChunks(chunksPerRead, rawReadLengths, approxOneHapCoverage, kmerSize);
-			writeStage(91, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 91:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerSNPTransitiveClosureClustering(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(93, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			[[fallthrough]];
-		case 93:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(10, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 10:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerPhasingKmersWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(11, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 11:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerInterchunkPhasedKmers(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, 11);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			splitPerInterchunkPhasedKmers(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, 31);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(12, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 12:
 			splitPerNeighborForksPolyploid(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 11);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerDiploidChunkWithNeighbors(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(13, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 13:
-//			splitPerDiploidChunkWithNeighbors(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 31);
+			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
-			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(14, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 14:
 			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, 2, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, approxOneHapCoverage*0.25, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, approxOneHapCoverage*0.5, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(15, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 15:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerNeighborForksPolyploid(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 11);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerInterchunkPhasedKmers(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(16, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 16:
 			splitPerNeighborForksPolyploid(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 11);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerDiploidChunkWithNeighbors(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 11);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
-			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
-			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			splitPerInterchunkPhasedKmers(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, 31);
+			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(17, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 17:
-//			splitPerDiploidChunkWithNeighbors(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 31);
+			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
-			resolveUnambiguouslyResolvableUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			resolveSemiAmbiguousUnitigs(chunksPerRead, numThreads, approxOneHapCoverage, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerNeighborForksPolyploid(sequenceIndex, rawReadLengths, chunksPerRead, numThreads, approxOneHapCoverage, 11);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(18, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 18:
-//			resolveTinyNodesRecklessly(chunksPerRead, numThreads, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			countReadRepetitiveUnitigs(chunksPerRead, approxOneHapCoverage, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			writeBidirectedUnitigGraphWithSequences("graph-dbg-final.gfa", "paths-dbg-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			[[fallthrough]];
-		case 19:
-//			writeReadChunkSequences("sequences-chunk19.txt", rawReadLengths, chunksPerRead, sequenceIndex);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			{
 				auto oldChunks = chunksPerRead;
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -2277,55 +2185,28 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 				contextResolve(chunksPerRead, kmerSize, resolveSize);
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 				expandChunksUntilSolids(chunksPerRead, approxOneHapCoverage, kmerSize, resolveSize);
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				writeStage(21, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 				resplitFalselyMergedChunks(chunksPerRead, oldChunks);
 			}
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(22, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeStage(19, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			[[fallthrough]];
-		case 22:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeBidirectedUnitigGraphWithSequences("graph-fragmented-final.gfa", "paths-fragmented-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			[[fallthrough]];
-		case 23:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+		case 19:
 			expandResolvableChunks(chunksPerRead, approxOneHapCoverage, kmerSize, 50000);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(235, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
-		case 235:
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+		case 20:
 			fixYForks(chunksPerRead, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(24, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeStage(21, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			[[fallthrough]];
-		case 24:
+		case 21:
 			writeBidirectedUnitigGraphWithSequences("graph-resolved-final.gfa", "paths-resolved-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeReadUnitigSequences("sequences-dbg-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			getContigPathsAndConsensuses(chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize, "paths-final.txt", "contigs-final.fa", numThreads);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 30000, 60000);
-//			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 30000, 60000);
-//			resolveBetweenLongUnitigs(chunksPerRead, rawReadLengths, numThreads, approxOneHapCoverage, 50000, 100000);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeStage(20, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-//			[[fallthrough]];
-//		case 20:
-//			writeBidirectedUnitigGraph("graph-final.gfa", "paths-final.gaf", "unitigs-final.fa", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-//			writeReadUnitigSequences("sequences-final.txt", chunksPerRead, sequenceIndex, approxOneHapCoverage, kmerSize);
-//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	}
 }
 
