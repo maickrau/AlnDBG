@@ -8,6 +8,8 @@
 #include "ChunkUnitigGraph.h"
 #include "CompressedStringIndex.h"
 
+class FileCorruptedException : public std::exception {};
+
 void writeStage(const size_t stage, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t kmerSize);
 void writeMinimizers(const std::string& filename, std::vector<std::vector<size_t>>& minimizerPositionsPerRead);
 std::vector<std::vector<size_t>> readMinimizersFromFile(const std::string& filename);

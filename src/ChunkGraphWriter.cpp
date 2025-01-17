@@ -19,49 +19,70 @@ std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> readChunksFromFak
 	std::cerr << "reading chunks from file " << filename << std::endl;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;
 	std::ifstream file { filename };
-	if (!file.good())
-	{
-		std::cerr << "file " << filename << " could not be opened!" << std::endl;
-		std::abort();
-	}
+	if (!file.good()) throw FileCorruptedException {};
 	size_t countChunks = 0;
-	while (file.good())
+	size_t countReads = 0;
 	{
 		std::string line;
 		std::getline(file, line);
-		if (!file.good()) break;
 		std::stringstream sstr { line };
-		size_t readindex = 0;
-		size_t chunkindex = 0;
-		size_t readstart = 0;
-		size_t readend = 0;
-		sstr >> readindex >> chunkindex >> readstart >> readend;
-		assert((readindex >= result.size() && chunkindex == 0) || (readindex == result.size()-1 && chunkindex == result.back().size()));
-		assert(readend > readstart);
-		while (readindex >= result.size()) result.emplace_back();
-		assert(result.back().size() == chunkindex);
-		std::string nodestr;
-		sstr >> nodestr;
-		uint64_t node;
-		assert(nodestr.size() >= 1);
-		assert(nodestr.size() >= 2 || nodestr == "-");
-		if (nodestr == "-")
-		{
-			node = std::numeric_limits<size_t>::max();
-		}
-		else if (nodestr[0] == '>')
-		{
-			node = std::stoull(nodestr.substr(1)) + firstBitUint64_t;
-		}
-		else
-		{
-			assert(nodestr[0] == '<');
-			node = std::stoull(nodestr.substr(1));
-		}
-		result.back().emplace_back(readstart, readend, node);
-		countChunks += 1;
+		sstr >> countReads;
 	}
-	std::cerr << "read " << countChunks << " chunks" << std::endl;
+	result.resize(countReads);
+	for (size_t i = 0; i < countReads; i++)
+	{
+		if (!file.good()) throw FileCorruptedException {};
+		size_t countChunksHere = 0;
+		{
+			std::string line;
+			std::getline(file, line);
+			std::stringstream sstr { line };
+			sstr >> countChunksHere;
+		}
+		if (!file.good()) throw FileCorruptedException {};
+		result[i].reserve(countChunksHere);
+		for (size_t j = 0; j < countChunksHere; j++)
+		{
+			std::string line;
+			std::getline(file, line);
+			if (line.size() == 0) throw FileCorruptedException {};
+			if (!file.good()) throw FileCorruptedException {};
+			std::stringstream sstr { line };
+			size_t readindex = 0;
+			size_t chunkindex = 0;
+			size_t readstart = 0;
+			size_t readend = 0;
+			sstr >> readindex >> chunkindex >> readstart >> readend;
+			if (readindex != i) throw FileCorruptedException {};
+			if (chunkindex != result[i].size()) throw FileCorruptedException {};
+			assert(readend > readstart);
+			std::string nodestr;
+			sstr >> nodestr;
+			uint64_t node;
+			assert(nodestr.size() >= 1);
+			assert(nodestr.size() >= 2 || nodestr == "-");
+			if (nodestr == "-")
+			{
+				node = std::numeric_limits<size_t>::max();
+			}
+			else if (nodestr[0] == '>')
+			{
+				node = std::stoull(nodestr.substr(1)) + firstBitUint64_t;
+			}
+			else
+			{
+				assert(nodestr[0] == '<');
+				node = std::stoull(nodestr.substr(1));
+			}
+			result[i].emplace_back(readstart, readend, node);
+			countChunks += 1;
+		}
+	}
+	if (!file.good()) throw FileCorruptedException {};
+	int dummy = 1;
+	file >> dummy;
+	if (dummy != -1) throw FileCorruptedException {};
+	std::cerr << "read " << countChunks << " chunks in " << countReads << " fw/bw reads" << std::endl;
 	return result;
 }
 
@@ -507,8 +528,10 @@ void writeGraph(const std::string& graphFile, const std::string& pathsFile, cons
 {
 	std::cerr << "writing paths " << pathsFile << std::endl;
 	std::ofstream pathfile { pathsFile };
+	pathfile << chunksPerRead.size() << std::endl;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
+		pathfile << chunksPerRead[i].size() << std::endl;
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			// if (j > 0 && std::get<0>(chunksPerRead[i][j]) == std::get<0>(chunksPerRead[i][j-1]) && std::get<1>(chunksPerRead[i][j]) == std::get<1>(chunksPerRead[i][j-1])) continue;
@@ -522,6 +545,7 @@ void writeGraph(const std::string& graphFile, const std::string& pathsFile, cons
 			pathfile << i << " " << j << " " << std::get<0>(t) << " " << std::get<1>(t) << " " << ((rawnode & firstBitUint64_t) ? ">" : "<") << (rawnode & maskUint64_t) << std::endl;
 		}
 	}
+	pathfile << "-1";
 	std::cerr << "writing graph " << graphFile << std::endl;
 	std::vector<std::vector<size_t>> lengths;
 	std::vector<size_t> coverages;
@@ -601,6 +625,8 @@ void writeMinimizers(const std::string& filename, std::vector<std::vector<size_t
 		}
 		file << "\n";
 	}
+	file << "-1";
+	assert(file.good());
 }
 
 std::vector<std::vector<size_t>> readMinimizersFromFile(const std::string& filename)
@@ -612,14 +638,20 @@ std::vector<std::vector<size_t>> readMinimizersFromFile(const std::string& filen
 	result.resize(count);
 	for (size_t i = 0; i < result.size(); i++)
 	{
+		if (!file.good()) throw FileCorruptedException {};
 		assert(file.good());
 		file >> count;
 		result[i].resize(count);
 		for (size_t j = 0; j < result[i].size(); j++)
 		{
+			if (!file.good()) throw FileCorruptedException {};
 			assert(file.good());
 			file >> result[i][j];
 		}
 	}
+	if (!file.good()) throw FileCorruptedException {};
+	int dummy = 1;
+	file >> dummy;
+	if (dummy != -1) throw FileCorruptedException {};
 	return result;
 }

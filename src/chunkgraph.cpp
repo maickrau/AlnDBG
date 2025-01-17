@@ -2026,9 +2026,25 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	std::vector<std::vector<size_t>> minimizerPositionsPerRead;
 	if (startStage > 0)
 	{
-		chunksPerRead = readChunksFromFakePathsFile("fakepaths" + std::to_string(startStage) + ".txt");
-		minimizerPositionsPerRead = readMinimizersFromFile("fakepaths_minimizers.txt");
-		while (chunksPerRead.size() < sequenceIndex.size()*2) chunksPerRead.emplace_back();
+		try
+		{
+			chunksPerRead = readChunksFromFakePathsFile("fakepaths" + std::to_string(startStage) + ".txt");
+		}
+		catch (FileCorruptedException e)
+		{
+			std::cerr << "Chunk file " << "fakepaths" << std::to_string(startStage) << ".txt" << " is corrupted" << std::endl;
+			std::abort();
+		}
+		try
+		{
+			minimizerPositionsPerRead = readMinimizersFromFile("fakepaths_minimizers.txt");
+		}
+		catch (FileCorruptedException e)
+		{
+			std::cerr << "Minimizer file " << "fakepaths_minimizers.txt" << " is corrupted" << std::endl;
+			std::abort();
+		}
+		assert(chunksPerRead.size() == sequenceIndex.size()*2);
 		assert(minimizerPositionsPerRead.size() == sequenceIndex.size()*2);
 	}
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
