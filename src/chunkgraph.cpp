@@ -26,7 +26,6 @@
 #include "ChunkResolution.h"
 #include "OverlapMatcher.h"
 #include "PathWalker.h"
-#include "TrioKmerCounter.h"
 
 double mismatchFraction;
 
@@ -2019,7 +2018,7 @@ void mergeNonexistentChunks(std::vector<std::vector<std::tuple<size_t, size_t, u
 	}
 }
 
-void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const TrioKmerCounter& trioHapmers, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t startStage, const size_t resolveSize)
+void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t numThreads, const double approxOneHapCoverage, const size_t kmerSize, const size_t windowSize, const size_t startStage, const size_t resolveSize)
 {
 	std::cerr << "start at stage " << startStage << std::endl;
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -2110,14 +2109,6 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(5, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 5:
-			if (trioHapmers.notEmpty())
-			{
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				splitPerTrioPhasing(sequenceIndex, rawReadLengths, chunksPerRead, trioHapmers, numThreads);
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				writeStage(6, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			}
 //			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 //			contextResolve(chunksPerRead, kmerSize, 1000);
 //			expandChunks(chunksPerRead, kmerSize, 5000);
@@ -2172,16 +2163,6 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(83, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
-		case 83:
-			if (trioHapmers.notEmpty())
-			{
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				splitPerTrioPhasing(sequenceIndex, rawReadLengths, chunksPerRead, trioHapmers, numThreads);
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				writeStage(84, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			}
-			[[fallthrough]];
 		case 84:
 			// std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			// contextResolve(chunksPerRead, kmerSize, resolveSize);
@@ -2201,32 +2182,12 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeStage(91, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 91:
-			if (trioHapmers.notEmpty())
-			{
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				splitPerTrioPhasing(sequenceIndex, rawReadLengths, chunksPerRead, trioHapmers, numThreads);
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				writeStage(92, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			}
-			[[fallthrough]];
-		case 92:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerSNPTransitiveClosureClustering(sequenceIndex, rawReadLengths, chunksPerRead, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(93, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
 		case 93:
-			if (trioHapmers.notEmpty())
-			{
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				splitPerTrioPhasing(sequenceIndex, rawReadLengths, chunksPerRead, trioHapmers, numThreads);
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-				writeStage(94, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			}
-			[[fallthrough]];
-		case 94:
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerAllelePhasingWithinChunk(sequenceIndex, rawReadLengths, chunksPerRead, 11, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -2383,8 +2344,6 @@ int main(int argc, char** argv)
 		("avg-hap-coverage", "Average single haplotype coverage", cxxopts::value<double>())
 		("max-error-rate", "Maximum error rate. Try 2-3x average read error rate", cxxopts::value<double>()->default_value("0.03"))
 		("restart", "Restart from stage", cxxopts::value<size_t>())
-		("parent-1-reads", "Trio reads from parent 1", cxxopts::value<std::string>())
-		("parent-2-reads", "Trio reads from parent 2", cxxopts::value<std::string>())
 		;
 	auto params = options.parse(argc, argv);
 	if (params.count("v") == 1)
@@ -2428,17 +2387,6 @@ int main(int argc, char** argv)
 	size_t startStage = 0;
 	if (params.count("restart") == 1) startStage = params["restart"].as<size_t>();
 	std::vector<std::string> readFiles = params["i"].as<std::vector<std::string>>();
-	TrioKmerCounter trioHapmers;
-	if (params.count("parent-1-reads") == 1)
-	{
-		assert(params.count("parent-2-reads") == 1);
-		std::cerr << "getting parent-specific kmers" << std::endl;
-		std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-		trioHapmers.initialize(params["parent-1-reads"].as<std::string>(), params["parent-2-reads"].as<std::string>(), 31, 20);
-		std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-		std::cerr << trioHapmers.hap1KmerCount() << " parent 1 specific kmers" << std::endl;
-		std::cerr << trioHapmers.hap2KmerCount() << " parent 2 specific kmers" << std::endl;
-	}
 	FastaCompressor::CompressedStringIndex sequenceIndex { 5, 100 };
 	std::vector<size_t> readBasepairLengths;
 	for (auto file : readFiles)
@@ -2456,5 +2404,5 @@ int main(int argc, char** argv)
 		readBasepairLengths.emplace_back(readBasepairLengths[i]);
 	}
 	std::cerr << sequenceIndex.size() << " reads" << std::endl;
-	makeGraph(sequenceIndex, readBasepairLengths, trioHapmers, numThreads, approxOneHapCoverage, k, windowSize, startStage, resolveSize);
+	makeGraph(sequenceIndex, readBasepairLengths, numThreads, approxOneHapCoverage, k, windowSize, startStage, resolveSize);
 }
