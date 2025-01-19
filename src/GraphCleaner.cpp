@@ -327,11 +327,13 @@ phmap::flat_hash_set<uint64_t> getValidBubbleForks(const ChunkUnitigGraph& graph
 	{
 		if (pair.second.size() != 2) continue;
 		bool valid = true;
+		size_t totalCoverage = 0;
 		for (auto pair2 : pair.second)
 		{
 			if (pair2.second < 2) valid = false;
+			totalCoverage += pair2.second;
 		}
-		if (!valid) continue;
+		if (!valid && totalCoverage < 6) continue;
 		phmap::flat_hash_set<uint64_t> prevs;
 		phmap::flat_hash_set<uint64_t> nexts;
 		for (auto pair2 : pair.second)
