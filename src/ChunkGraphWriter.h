@@ -13,7 +13,7 @@ class FileCorruptedException : public std::exception {};
 void writeStage(const size_t stage, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t kmerSize);
 void writeMinimizers(const std::string& filename, std::vector<std::vector<size_t>>& minimizerPositionsPerRead);
 std::vector<std::vector<size_t>> readMinimizersFromFile(const std::string& filename);
-std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> readChunksFromFakePathsFile(const std::string& filename);
+std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> readChunksFromTempPathsFile(const std::string& filename);
 void writeGraph(const std::string& filename, const std::vector<bool>& allowedNode, const SparseEdgeContainer& allowedEdges, const std::vector<std::vector<size_t>>& lengths, const std::vector<size_t>& coverages, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeCoverage, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps);
 void writeUnitigGraph(const std::string& filename, const ChunkUnitigGraph& unitigGraph);
 void writeUnitigPaths(const std::string& filename, const ChunkUnitigGraph& unitigGraph, const std::vector<std::vector<UnitigPath>>& readPaths, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths);

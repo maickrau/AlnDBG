@@ -9,12 +9,12 @@
 
 void writeStage(const size_t stage, const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const double approxOneHapCoverage, const size_t kmerSize)
 {
-	writeGraph("fakegraph" + std::to_string(stage) + ".gfa", "fakepaths" + std::to_string(stage) + ".txt", chunksPerRead);
+	writeGraph("tmpgraph" + std::to_string(stage) + ".gfa", "tmppaths" + std::to_string(stage) + ".txt", chunksPerRead);
 	writeUnitigGraph("digraph-round" + std::to_string(stage) + ".gfa", "dipaths" + std::to_string(stage) + ".gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 	writeBidirectedUnitigGraph("graph-round" + std::to_string(stage) + ".gfa", "paths" + std::to_string(stage) + ".gaf", chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 }
 
-std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> readChunksFromFakePathsFile(const std::string& filename)
+std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> readChunksFromTempPathsFile(const std::string& filename)
 {
 	std::cerr << "reading chunks from file " << filename << std::endl;
 	std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>> result;

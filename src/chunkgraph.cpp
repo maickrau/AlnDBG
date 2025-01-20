@@ -2037,24 +2037,25 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	{
 		startStage = 0;
 		bool good = true;
+		std::string minimizerFileName = "tmppaths_minimizers.txt";
 		try
 		{
-			minimizerPositionsPerRead = readMinimizersFromFile("fakepaths_minimizers.txt");
+			minimizerPositionsPerRead = readMinimizersFromFile(minimizerFileName);
 		}
 		catch (FileCorruptedException& e)
 		{
-			std::cerr << "Minimizer file " << "fakepaths_minimizers.txt" << " is corrupted or not found, restart from scratch" << std::endl;
+			std::cerr << "Minimizer file " << minimizerFileName << " is corrupted or not found, restart from scratch" << std::endl;
 			good = false;
 		}
 		if (good)
 		{
 			for (int i = 22; i >= 0; i--)
 			{
-				std::string filename = "fakepaths" + std::to_string(i) + ".txt";
+				std::string chunkFilename = "tmppaths" + std::to_string(i) + ".txt";
 				std::cerr << "try to read stage " << i << std::endl;
 				try
 				{
-					chunksPerRead = readChunksFromFakePathsFile(filename);
+					chunksPerRead = readChunksFromTempPathsFile(chunkFilename);
 					startStage = i;
 					break;
 				}
@@ -2067,22 +2068,24 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	}
 	else if (startStage > 0)
 	{
+		std::string minimizerFileName = "tmppaths_minimizers.txt";
+		std::string chunkFilename = "tmppaths" + std::to_string(startStage) + ".txt";
 		try
 		{
-			chunksPerRead = readChunksFromFakePathsFile("fakepaths" + std::to_string(startStage) + ".txt");
+			chunksPerRead = readChunksFromTempPathsFile(chunkFilename);
 		}
 		catch (FileCorruptedException& e)
 		{
-			std::cerr << "Chunk file " << "fakepaths" << std::to_string(startStage) << ".txt" << " is corrupted" << std::endl;
+			std::cerr << "Chunk file " << chunkFilename << " is corrupted" << std::endl;
 			std::abort();
 		}
 		try
 		{
-			minimizerPositionsPerRead = readMinimizersFromFile("fakepaths_minimizers.txt");
+			minimizerPositionsPerRead = readMinimizersFromFile(minimizerFileName);
 		}
 		catch (FileCorruptedException& e)
 		{
-			std::cerr << "Minimizer file " << "fakepaths_minimizers.txt" << " is corrupted" << std::endl;
+			std::cerr << "Minimizer file " << minimizerFileName << " is corrupted" << std::endl;
 			std::abort();
 		}
 		assert(chunksPerRead.size() == sequenceIndex.size()*2);
@@ -2112,7 +2115,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			}
 			writeStage(1, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			writeMinimizers("fakepaths_minimizers.txt", minimizerPositionsPerRead);
+			writeMinimizers("tmppaths_minimizers.txt", minimizerPositionsPerRead);
 			[[fallthrough]];
 		case 1:
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize, numThreads);
