@@ -1443,3 +1443,428 @@ void removeTinyProblemNodes(std::vector<std::vector<std::tuple<size_t, size_t, u
 	}
 	std::cerr << countRemovableChunks << " distinct removable chunks, removed " << countRemoved << " total chunks" << std::endl;
 }
+
+void resolveBetweenTangles(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t longUnitigThreshold, const size_t kmerSize)
+{
+	std::cerr << "resolving between tangles" << std::endl;
+	ChunkUnitigGraph graph;
+	std::vector<std::vector<UnitigPath>> readPaths;
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	std::vector<bool> unitigIsLong;
+	unitigIsLong.resize(graph.unitigLengths.size(), false);
+	size_t countLongUnitigs = 0;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (graph.unitigLengths[i] >= longUnitigThreshold)
+		{
+			unitigIsLong[i] = true;
+			countLongUnitigs += 1;
+		}
+	}
+	std::cerr << "unitigs " << graph.unitigLengths.size() << " of which long " << countLongUnitigs << std::endl;
+	if (countLongUnitigs < 2) return;
+	std::vector<size_t> parent;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		parent.emplace_back(i*2);
+		parent.emplace_back(i*2+1);
+	}
+	for (size_t i = 0; i < unitigIsLong.size(); i++)
+	{
+		if (unitigIsLong[i]) continue;
+		merge(parent, i*2, i*2+1);
+	}
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		for (auto edge : graph.edges.getEdges(std::make_pair(i, true)))
+		{
+			merge(parent, i*2+1, edge.first*2 + (edge.second ? 0 : 1));
+		}
+		for (auto edge : graph.edges.getEdges(std::make_pair(i, false)))
+		{
+			merge(parent, i*2, edge.first*2 + (edge.second ? 0 : 1));
+		}
+	}
+	phmap::flat_hash_set<size_t> tangles;
+	for (size_t i = 0; i < parent.size(); i++)
+	{
+		tangles.emplace(find(parent, i));
+	}
+	for (size_t i = 0; i < parent.size(); i++)
+	{
+		std::cerr << "tip " << ((i%2) ? ">" : "<") << (i/2) << " in tangle " << find(parent, i) << std::endl;
+	}
+	phmap::flat_hash_map<size_t, std::vector<uint64_t>> longUnitigsPerTangle;
+	for (size_t i = 0; i < unitigIsLong.size(); i++)
+	{
+		if (!unitigIsLong[i]) continue;
+		longUnitigsPerTangle[find(parent, i*2+1)].emplace_back(i + firstBitUint64_t);
+		longUnitigsPerTangle[find(parent, i*2)].emplace_back(i);
+	}
+	for (const auto& pair : longUnitigsPerTangle)
+	{
+		if (pair.second.size() < 4)
+		{
+			assert(tangles.count(pair.first) == 1);
+			tangles.erase(pair.first);
+		}
+	}
+	std::cerr << tangles.size() << " tangles after filtering for long unitig touchers" << std::endl;
+	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, size_t>> connectionCounts;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		uint64_t lastLongUnitig = std::numeric_limits<uint64_t>::max();
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				size_t unitig = readPaths[i][j].path[k] & maskUint64_t;
+				assert(unitig < unitigIsLong.size());
+				if (!unitigIsLong[unitig]) continue;
+				uint64_t longUnitigHere = readPaths[i][j].path[k];
+				if (lastLongUnitig == std::numeric_limits<size_t>::max())
+				{
+					lastLongUnitig = longUnitigHere;
+					continue;
+				}
+				if (find(parent, 2 * (lastLongUnitig & maskUint64_t) + ((lastLongUnitig & firstBitUint64_t) ? 1 : 0)) != find(parent, 2 * (longUnitigHere & maskUint64_t) + ((longUnitigHere & firstBitUint64_t) ? 0 : 1)))
+				{
+					lastLongUnitig = longUnitigHere;
+					continue;
+				}
+				connectionCounts[lastLongUnitig][longUnitigHere ^ firstBitUint64_t] += 1;
+				connectionCounts[longUnitigHere ^ firstBitUint64_t][lastLongUnitig] += 1;
+				lastLongUnitig = longUnitigHere;
+			}
+		}
+	}
+	phmap::flat_hash_set<size_t> forbiddenTangles;
+	for (size_t i = 0; i < unitigIsLong.size(); i++)
+	{
+		if (!unitigIsLong[i]) continue;
+		if (connectionCounts.count(i) == 0)
+		{
+			forbiddenTangles.emplace(find(parent, 2*i));
+		}
+		else
+		{
+			bool good = true;
+			size_t minCoverage = 4;
+			if (connectionCounts.at(i).size() == 1)
+			{
+				minCoverage = 2;
+			}
+			for (auto pair : connectionCounts.at(i))
+			{
+				if (pair.second < minCoverage) good = false;
+			}
+			if (!good) forbiddenTangles.emplace(find(parent, 2*i));
+		}
+		if (connectionCounts.count(i+firstBitUint64_t) == 0)
+		{
+			forbiddenTangles.emplace(find(parent, 2*i+1));
+		}
+		else
+		{
+			bool good = true;
+			size_t minCoverage = 4;
+			if (connectionCounts.at(i+firstBitUint64_t).size() == 1)
+			{
+				minCoverage = 2;
+			}
+			for (auto pair : connectionCounts.at(i+firstBitUint64_t))
+			{
+				if (pair.second < minCoverage) good = false;
+			}
+			if (!good) forbiddenTangles.emplace(find(parent, 2*i+1));
+		}
+	}
+	for (auto tangle : forbiddenTangles)
+	{
+		if (tangles.count(tangle) == 1) tangles.erase(tangle);
+	}
+	std::cerr << tangles.size() << " tangles after filtering for connections" << std::endl;
+	phmap::flat_hash_map<uint64_t, uint64_t> longUnitigTipParent;
+	for (const auto& pair : connectionCounts)
+	{
+		size_t tangle = find(parent, 2 * (pair.first & maskUint64_t) + ((pair.first & firstBitUint64_t) ? 1 : 0));
+		if (tangles.count(tangle) == 0) continue;
+		longUnitigTipParent[pair.first] = pair.first;
+	}
+	for (const auto& pair : connectionCounts)
+	{
+		size_t tangle = find(parent, 2 * (pair.first & maskUint64_t) + ((pair.first & firstBitUint64_t) ? 1 : 0));
+		if (tangles.count(tangle) == 0) continue;
+		assert(longUnitigTipParent.count(pair.first) == 1);
+		for (auto pair2 : pair.second)
+		{
+			assert(longUnitigTipParent.count(pair2.first) == 1);
+			merge(longUnitigTipParent, pair.first, pair2.first);
+		}
+	}
+	phmap::flat_hash_set<size_t> tanglesWhichHaveShortNodes;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (unitigIsLong[i]) continue;
+		size_t tangle = find(parent, 2*i);
+		if (tangles.count(tangle) == 0) continue;
+		tanglesWhichHaveShortNodes.insert(tangle);
+	}
+	phmap::flat_hash_set<size_t> tanglesForbiddenByLackOfShortNodes;
+	for (size_t tangle : tangles)
+	{
+		if (tanglesWhichHaveShortNodes.count(tangle) == 1) continue;
+		tanglesForbiddenByLackOfShortNodes.emplace(tangle);
+	}
+	for (size_t tangle : tanglesForbiddenByLackOfShortNodes)
+	{
+		assert(tangles.count(tangle) == 1);
+		tangles.erase(tangle);
+	}
+	std::cerr << tangles.size() << " tangles after filtering for short nodes" << std::endl;
+	phmap::flat_hash_set<size_t> tanglesForbiddenByLackOfResolutions;
+	for (size_t tangle : tangles)
+	{
+		phmap::flat_hash_set<uint64_t> longUnitigTipClustersHere;
+		assert(longUnitigsPerTangle.count(tangle) == 1);
+		for (uint64_t longUnitigTip : longUnitigsPerTangle.at(tangle))
+		{
+			assert(longUnitigTipParent.count(longUnitigTip) == 1);
+			longUnitigTipClustersHere.emplace(find(longUnitigTipParent, longUnitigTip));
+		}
+		if (longUnitigTipClustersHere.size() < 2) tanglesForbiddenByLackOfResolutions.insert(tangle);
+	}
+	for (size_t tangle : tanglesForbiddenByLackOfResolutions)
+	{
+		assert(tangles.count(tangle) == 1);
+		tangles.erase(tangle);
+	}
+	std::cerr << tangles.size() << " tangles after filtering for resolutions" << std::endl;
+	{
+		phmap::flat_hash_map<size_t, std::vector<uint64_t>> nodesPerTangle;
+		for (size_t i = 0; i < parent.size(); i++)
+		{
+			nodesPerTangle[find(parent, i)].emplace_back(i);
+		}
+		for (size_t tangle : tangles)
+		{
+			std::cerr << "resolve tangle " << tangle << " with tips:";
+			for (uint64_t node : nodesPerTangle.at(tangle))
+			{
+				std::cerr << " " << (node % 2 ? ">" : "<") << (node/2);
+			}
+			std::cerr << std::endl;
+		}
+	}
+	phmap::flat_hash_map<size_t, phmap::flat_hash_map<size_t, std::vector<std::pair<size_t, size_t>>>> readUnitigBordersPerTangle; // tangle -> read -> pathindex, nodeindex
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				size_t unitig = readPaths[i][j].path[k] & maskUint64_t;
+				if (!unitigIsLong[unitig]) continue;
+				size_t prevTangle = find(parent, 2*unitig);
+				if (tangles.count(prevTangle) == 1) readUnitigBordersPerTangle[prevTangle][i].emplace_back(j, k);
+				size_t nextTangle = find(parent, 2*unitig+1);
+				if (tangles.count(nextTangle) == 1) readUnitigBordersPerTangle[nextTangle][i].emplace_back(j, k);
+			}
+		}
+	}
+	phmap::flat_hash_map<size_t, phmap::flat_hash_map<size_t, std::vector<std::tuple<size_t, size_t, size_t, size_t>>>> readPartsPerTangle; // tangle -> read -> startpathindex, startnodeindex, endpathindex, endnodeindex (INCLUSIVE)
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		size_t currentTangle = std::numeric_limits<size_t>::max();
+		size_t currentStartPath = std::numeric_limits<size_t>::max();
+		size_t currentStartNode = std::numeric_limits<size_t>::max();
+		size_t currentEndPath = std::numeric_limits<size_t>::max();
+		size_t currentEndNode = std::numeric_limits<size_t>::max();
+		for (size_t j = 0; j < readPaths[i].size(); j++)
+		{
+			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+			{
+				size_t unitig = readPaths[i][j].path[k] & maskUint64_t;
+				size_t tangleHere = find(parent, 2*unitig);
+				if (unitigIsLong[unitig] || tangles.count(tangleHere) == 0 || tangleHere != currentTangle)
+				{
+					if (currentTangle != std::numeric_limits<size_t>::max())
+					{
+						readPartsPerTangle[currentTangle][i].emplace_back(currentStartPath, currentStartNode, currentEndPath, currentEndNode);
+					}
+					currentStartPath = std::numeric_limits<size_t>::max();
+					currentStartNode = std::numeric_limits<size_t>::max();
+					currentTangle = std::numeric_limits<size_t>::max();
+					if (unitigIsLong[unitig] || tangles.count(tangleHere) == 0)
+					{
+						continue;
+					}
+				}
+				if (currentTangle == std::numeric_limits<size_t>::max())
+				{
+					currentTangle = tangleHere;
+					currentStartPath = j;
+					currentStartNode = k;
+				}
+				assert(currentTangle == tangleHere);
+				currentEndPath = j;
+				currentEndNode = k;
+			}
+		}
+		if (currentTangle != std::numeric_limits<size_t>::max())
+		{
+			readPartsPerTangle[currentTangle][i].emplace_back(currentStartPath, currentStartNode, currentEndPath, currentEndNode);
+		}
+	}
+	std::vector<std::vector<std::tuple<size_t, size_t, size_t, size_t, size_t>>> readTanglePartAssignments; // startpathindex, startnodeindex, endpathindex, endnodeindex, allele
+	readTanglePartAssignments.resize(readPaths.size());
+	for (size_t tangle : tangles)
+	{
+		assert(readUnitigBordersPerTangle.count(tangle) == 1);
+		assert(readPartsPerTangle.count(tangle) == 1);
+		phmap::flat_hash_map<size_t, uint64_t> innerNodesBelongToResolution;
+		for (const auto& pair : readPartsPerTangle.at(tangle))
+		{
+			size_t read = pair.first;
+			if (readUnitigBordersPerTangle.at(tangle).count(read) == 0) continue;
+			for (const auto& partt : readPartsPerTangle.at(tangle).at(read))
+			{
+				size_t tangle = find(parent, 2*readPaths[read][std::get<0>(partt)].path[std::get<1>(partt)]);
+				size_t alleleIndexBefore = std::numeric_limits<size_t>::max();
+				size_t alleleIndexAfter = std::numeric_limits<size_t>::max();
+				for (const auto& bordert : readUnitigBordersPerTangle.at(tangle).at(read))
+				{
+					if (std::get<0>(bordert) < std::get<0>(partt) || (std::get<0>(bordert) == std::get<0>(partt) && std::get<1>(bordert) < std::get<1>(partt)))
+					{
+						uint64_t node = readPaths[read][std::get<0>(bordert)].path[std::get<1>(bordert)];
+						size_t foundTangle = find(parent, 2*(node & maskUint64_t) + ((node & firstBitUint64_t) ? 1 : 0));
+						if (foundTangle != tangle) continue;
+						alleleIndexBefore = find(longUnitigTipParent, node);
+					}
+					if (alleleIndexAfter == std::numeric_limits<size_t>::max())
+					{
+						if (std::get<0>(bordert) > std::get<0>(partt) || (std::get<0>(bordert) == std::get<0>(partt) && std::get<1>(bordert) > std::get<1>(partt)))
+						{
+							uint64_t node = readPaths[read][std::get<0>(bordert)].path[std::get<1>(bordert)] ^ firstBitUint64_t;
+							size_t foundTangle = find(parent, 2*(node & maskUint64_t) + ((node & firstBitUint64_t) ? 1 : 0));
+							if (foundTangle != tangle) continue;
+							alleleIndexAfter = find(longUnitigTipParent, node);
+						}
+					}
+				}
+				assert(alleleIndexAfter == alleleIndexBefore || alleleIndexAfter == std::numeric_limits<size_t>::max() || alleleIndexBefore == std::numeric_limits<size_t>::max());
+				if (alleleIndexAfter == std::numeric_limits<size_t>::max() && alleleIndexBefore == std::numeric_limits<size_t>::max()) continue;
+				size_t allele = alleleIndexBefore;
+				if (alleleIndexBefore == std::numeric_limits<size_t>::max()) allele = alleleIndexAfter;
+				for (size_t j = std::get<0>(partt); j <= std::get<2>(partt); j++)
+				{
+					for (size_t k = (j == std::get<0>(partt) ? std::get<1>(partt) : 0); k <= (j == std::get<2>(partt) ? std::get<3>(partt) : readPaths[read][j].path.size()-1); k++)
+					{
+						size_t node = readPaths[read][j].path[k] & maskUint64_t;
+						if (innerNodesBelongToResolution.count(node) == 1 && innerNodesBelongToResolution.at(node) != allele)
+						{
+							innerNodesBelongToResolution[node] = std::numeric_limits<size_t>::max();
+						}
+						else
+						{
+							innerNodesBelongToResolution[node] = allele;
+						}
+					}
+				}
+				readTanglePartAssignments[read].emplace_back(std::get<0>(partt), std::get<1>(partt), std::get<2>(partt), std::get<3>(partt), allele);
+			}
+		}
+		for (const auto& pair : readPartsPerTangle.at(tangle))
+		{
+			size_t read = pair.first;
+			for (const auto& partt : readPartsPerTangle.at(tangle).at(read))
+			{
+				bool alreadyAssigned = false;
+				for (auto t : readTanglePartAssignments[read])
+				{
+					if (std::get<0>(t) == std::get<0>(partt) && std::get<1>(t) == std::get<1>(partt) && std::get<2>(t) == std::get<2>(partt) && std::get<3>(t) == std::get<3>(partt))
+					{
+						alreadyAssigned = true;
+						break;
+					}
+				}
+				if (alreadyAssigned) continue;
+				phmap::flat_hash_set<size_t> potentialAlleles;
+				for (size_t j = std::get<0>(partt); j <= std::get<2>(partt); j++)
+				{
+					for (size_t k = (j == std::get<0>(partt) ? std::get<1>(partt) : 0); k <= (j == std::get<2>(partt) ? std::get<3>(partt) : readPaths[read][j].path.size()-1); k++)
+					{
+						size_t node = readPaths[read][j].path[k] & maskUint64_t;
+						if (innerNodesBelongToResolution.count(node) == 0) continue;
+						if (innerNodesBelongToResolution.at(node) == std::numeric_limits<size_t>::max()) continue;
+						potentialAlleles.emplace(innerNodesBelongToResolution.at(node));
+					}
+				}
+				if (potentialAlleles.size() != 1) continue;
+				size_t allele = *potentialAlleles.begin();
+				readTanglePartAssignments[read].emplace_back(std::get<0>(partt), std::get<1>(partt), std::get<2>(partt), std::get<3>(partt), allele);
+			}
+		}
+	}
+	size_t nextNum = 0;
+	for (size_t i = 0; i < chunksPerRead.size(); i++)
+	{
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
+			{
+				continue;
+			}
+			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			nextNum = std::max(nextNum, chunk);
+		}
+	}
+	nextNum += 1;
+	phmap::flat_hash_set<size_t> chunksWillBeReplaced;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (unitigIsLong[i]) continue;
+		assert(find(parent, i*2) == find(parent, i*2+1));
+		if (tangles.count(find(parent, i*2)) == 0) continue;
+		for (uint64_t chunk : graph.chunksInUnitig[i])
+		{
+			chunksWillBeReplaced.emplace(chunk & maskUint64_t);
+		}
+	}
+	phmap::flat_hash_map<std::pair<size_t, size_t>, size_t> chunkPlusAlleleToNewChunk;
+	for (size_t i = 0; i < readPaths.size(); i++)
+	{
+		std::vector<std::tuple<size_t, size_t, size_t>> replacementSpans;
+		for (auto t : readTanglePartAssignments[i])
+		{
+			size_t chunkStart = readPaths[i][std::get<0>(t)].chunksInPathnode[std::get<1>(t)].first;
+			size_t chunkEnd = readPaths[i][std::get<2>(t)].chunksInPathnode[std::get<3>(t)].second;
+			size_t allele = std::get<4>(t);
+			assert(chunkEnd >= chunkStart);
+			assert(chunkEnd < chunksPerRead[i].size());
+			for (size_t j = chunkStart; j <= chunkEnd; j++)
+			{
+				if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+				if (chunksWillBeReplaced.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 0) continue;
+				std::pair<size_t, size_t> replacement { std::get<2>(chunksPerRead[i][j]) & maskUint64_t, allele };
+				size_t newChunk = nextNum;
+				if (chunkPlusAlleleToNewChunk.count(replacement) == 0)
+				{
+					chunkPlusAlleleToNewChunk[replacement] = newChunk;
+					nextNum += 1;
+				}
+				else
+				{
+					newChunk = chunkPlusAlleleToNewChunk.at(replacement);
+				}
+				std::get<2>(chunksPerRead[i][j]) = newChunk + (std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t);
+			}
+		}
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (chunksWillBeReplaced.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 0) continue;
+			std::get<2>(chunksPerRead[i][j]) = std::numeric_limits<size_t>::max();
+		}
+	}
+}
