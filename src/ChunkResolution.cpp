@@ -1509,6 +1509,16 @@ void resolveBetweenTangles(std::vector<std::vector<std::tuple<size_t, size_t, ui
 			tangles.erase(pair.first);
 		}
 	}
+	phmap::flat_hash_set<size_t> tanglesWithoutAnyLongNodes;
+	for (size_t tangle : tangles)
+	{
+		if (longUnitigsPerTangle.count(tangle) == 0) tanglesWithoutAnyLongNodes.insert(tangle);
+	}
+	for (size_t tangle : tanglesWithoutAnyLongNodes)
+	{
+		assert(tangles.count(tangle) == 1);
+		tangles.erase(tangle);
+	}
 	std::cerr << tangles.size() << " tangles after filtering for long unitig touchers" << std::endl;
 	phmap::flat_hash_map<uint64_t, phmap::flat_hash_map<uint64_t, size_t>> connectionCounts;
 	for (size_t i = 0; i < readPaths.size(); i++)
