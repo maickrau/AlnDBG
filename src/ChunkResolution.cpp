@@ -1444,7 +1444,7 @@ void removeTinyProblemNodes(std::vector<std::vector<std::tuple<size_t, size_t, u
 	std::cerr << countRemovableChunks << " distinct removable chunks, removed " << countRemoved << " total chunks" << std::endl;
 }
 
-void resolveBetweenTangles(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t longUnitigThreshold, const size_t kmerSize)
+void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t longUnitigThreshold, const size_t kmerSize, const bool allowGaps)
 {
 	std::cerr << "resolving between tangles" << std::endl;
 	ChunkUnitigGraph graph;
@@ -1483,6 +1483,46 @@ void resolveBetweenTangles(std::vector<std::vector<std::tuple<size_t, size_t, ui
 		for (auto edge : graph.edges.getEdges(std::make_pair(i, false)))
 		{
 			merge(parent, i*2, edge.first*2 + (edge.second ? 0 : 1));
+		}
+	}
+	phmap::flat_hash_set<size_t> tipsConnectAcrossTangles;
+	if (allowGaps)
+	{
+		std::vector<std::pair<uint64_t, uint64_t>> merges;
+		for (size_t i = 0; i < readPaths.size(); i++)
+		{
+			uint64_t lastLongUnitig = std::numeric_limits<uint64_t>::max();
+			for (size_t j = 0; j < readPaths[i].size(); j++)
+			{
+				for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
+				{
+					size_t unitig = readPaths[i][j].path[k] & maskUint64_t;
+					assert(unitig < unitigIsLong.size());
+					if (!unitigIsLong[unitig]) continue;
+					uint64_t longUnitigHere = readPaths[i][j].path[k];
+					if (lastLongUnitig != std::numeric_limits<size_t>::max())
+					{
+						if (k >= 1 || readPaths[i][j].pathLeftClipChunks == 0)
+						{
+							if (find(parent, 2 * (lastLongUnitig & maskUint64_t) + ((lastLongUnitig & firstBitUint64_t) ? 1 : 0)) != find(parent, 2 * (longUnitigHere & maskUint64_t) + ((longUnitigHere & firstBitUint64_t) ? 0 : 1)))
+							{
+								merges.emplace_back(2 * (lastLongUnitig & maskUint64_t) + ((lastLongUnitig & firstBitUint64_t) ? 1 : 0), 2 * (longUnitigHere & maskUint64_t) + ((longUnitigHere & firstBitUint64_t) ? 0 : 1));
+								tipsConnectAcrossTangles.emplace(2 * (lastLongUnitig & maskUint64_t) + ((lastLongUnitig & firstBitUint64_t) ? 1 : 0));
+								tipsConnectAcrossTangles.emplace(2 * (longUnitigHere & maskUint64_t) + ((longUnitigHere & firstBitUint64_t) ? 0 : 1));
+							}
+						}
+					}
+					lastLongUnitig = std::numeric_limits<size_t>::max();
+					if (k+1 < readPaths[i][j].path.size() || readPaths[i][j].pathRightClipChunks == 0)
+					{
+						lastLongUnitig = longUnitigHere;
+					}
+				}
+			}
+		}
+		for (auto pair : merges)
+		{
+			merge(parent, pair.first, pair.second);
 		}
 	}
 	phmap::flat_hash_set<size_t> tangles;
@@ -1877,4 +1917,14 @@ void resolveBetweenTangles(std::vector<std::vector<std::tuple<size_t, size_t, ui
 			std::get<2>(chunksPerRead[i][j]) = std::numeric_limits<size_t>::max();
 		}
 	}
+}
+
+void resolveBetweenTangles(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t longUnitigThreshold, const size_t kmerSize)
+{
+	resolveBetweenTanglesInner(chunksPerRead, approxOneHapCoverage, longUnitigThreshold, kmerSize, false);
+}
+
+void resolveBetweenTanglesAllowGaps(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t longUnitigThreshold, const size_t kmerSize)
+{
+	resolveBetweenTanglesInner(chunksPerRead, approxOneHapCoverage, longUnitigThreshold, kmerSize, true);
 }

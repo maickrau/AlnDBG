@@ -19,5 +19,6 @@ void resolveUnambiguouslyResolvableUnitigs(std::vector<std::vector<std::tuple<si
 void resolveTinyNodesRecklessly(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const size_t kmerSize);
 void removeTinyProblemNodes(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize);
 void resolveBetweenTangles(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t longNodeThreshold, const size_t kmerSize);
+void resolveBetweenTanglesAllowGaps(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t longNodeThreshold, const size_t kmerSize);
 
 #endif

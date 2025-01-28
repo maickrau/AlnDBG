@@ -2271,15 +2271,21 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			[[fallthrough]];
 		case 22:
+			resolveBetweenTanglesAllowGaps(chunksPerRead, approxOneHapCoverage, 50000, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeStage(23, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			[[fallthrough]];
+		case 23:
 			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, 2, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, approxOneHapCoverage*0.25, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			cleanTips(chunksPerRead, numThreads, approxOneHapCoverage, approxOneHapCoverage*0.5, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			writeStage(23, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeStage(24, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
-		case 23:
+		case 24:
 			writeBidirectedUnitigGraphWithSequences("graph-resolved-final.gfa", "paths-resolved-final.gaf", chunksPerRead, minimizerPositionsPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, numThreads, kmerSize);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			break;
