@@ -1564,6 +1564,7 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
 		uint64_t lastLongUnitig = std::numeric_limits<uint64_t>::max();
+		size_t lastLongUnitigChunkPos;
 		for (size_t j = 0; j < readPaths[i].size(); j++)
 		{
 			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)
@@ -1572,19 +1573,37 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 				assert(unitig < unitigIsLong.size());
 				if (!unitigIsLong[unitig]) continue;
 				uint64_t longUnitigHere = readPaths[i][j].path[k];
+				size_t chunkPosHere = graph.chunksInUnitig[longUnitigHere & maskUint64_t].size();
+				if (k+1 == readPaths[i][j].path.size())
+				{
+					assert(chunkPosHere >= readPaths[i][j].pathRightClipChunks);
+					chunkPosHere -= readPaths[i][j].pathRightClipChunks;
+				}
 				if (lastLongUnitig == std::numeric_limits<size_t>::max())
 				{
 					lastLongUnitig = longUnitigHere;
+					lastLongUnitigChunkPos = chunkPosHere;
 					continue;
+				}
+				if (lastLongUnitig == longUnitigHere)
+				{
+					if (chunkPosHere > lastLongUnitigChunkPos)
+					{
+						lastLongUnitig = longUnitigHere;
+						lastLongUnitigChunkPos = chunkPosHere;
+						continue;
+					}
 				}
 				if (find(parent, 2 * (lastLongUnitig & maskUint64_t) + ((lastLongUnitig & firstBitUint64_t) ? 1 : 0)) != find(parent, 2 * (longUnitigHere & maskUint64_t) + ((longUnitigHere & firstBitUint64_t) ? 0 : 1)))
 				{
 					lastLongUnitig = longUnitigHere;
+					lastLongUnitigChunkPos = chunkPosHere;
 					continue;
 				}
 				connectionCounts[lastLongUnitig][longUnitigHere ^ firstBitUint64_t] += 1;
 				connectionCounts[longUnitigHere ^ firstBitUint64_t][lastLongUnitig] += 1;
 				lastLongUnitig = longUnitigHere;
+				lastLongUnitigChunkPos = chunkPosHere;
 			}
 		}
 	}
@@ -1592,6 +1611,24 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 	for (size_t i = 0; i < unitigIsLong.size(); i++)
 	{
 		if (!unitigIsLong[i]) continue;
+		if (connectionCounts.count(i + firstBitUint64_t) == 0)
+		{
+			forbiddenTangles.emplace(find(parent, 2*i+1));
+		}
+		else
+		{
+			bool good = true;
+			size_t minCoverage = 4;
+			if (connectionCounts.at(i + firstBitUint64_t).size() == 1)
+			{
+				minCoverage = 2;
+			}
+			for (auto pair : connectionCounts.at(i + firstBitUint64_t))
+			{
+				if (pair.second < minCoverage) good = false;
+			}
+			if (!good) forbiddenTangles.emplace(find(parent, 2*i+1));
+		}
 		if (connectionCounts.count(i) == 0)
 		{
 			forbiddenTangles.emplace(find(parent, 2*i));
@@ -1610,30 +1647,33 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 			}
 			if (!good) forbiddenTangles.emplace(find(parent, 2*i));
 		}
-		if (connectionCounts.count(i+firstBitUint64_t) == 0)
-		{
-			forbiddenTangles.emplace(find(parent, 2*i+1));
-		}
-		else
-		{
-			bool good = true;
-			size_t minCoverage = 4;
-			if (connectionCounts.at(i+firstBitUint64_t).size() == 1)
-			{
-				minCoverage = 2;
-			}
-			for (auto pair : connectionCounts.at(i+firstBitUint64_t))
-			{
-				if (pair.second < minCoverage) good = false;
-			}
-			if (!good) forbiddenTangles.emplace(find(parent, 2*i+1));
-		}
 	}
 	for (auto tangle : forbiddenTangles)
 	{
 		if (tangles.count(tangle) == 1) tangles.erase(tangle);
 	}
 	std::cerr << tangles.size() << " tangles after filtering for connections" << std::endl;
+	phmap::flat_hash_set<size_t> tanglesWhichHaveShortNodes;
+	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
+	{
+		if (unitigIsLong[i]) continue;
+		assert(find(parent, 2*i) == find(parent, 2*i+1));
+		size_t tangle = find(parent, 2*i);
+		if (tangles.count(tangle) == 0) continue;
+		tanglesWhichHaveShortNodes.insert(tangle);
+	}
+	phmap::flat_hash_set<size_t> tanglesForbiddenByLackOfShortNodes;
+	for (size_t tangle : tangles)
+	{
+		if (tanglesWhichHaveShortNodes.count(tangle) == 1) continue;
+		tanglesForbiddenByLackOfShortNodes.emplace(tangle);
+	}
+	for (size_t tangle : tanglesForbiddenByLackOfShortNodes)
+	{
+		assert(tangles.count(tangle) == 1);
+		tangles.erase(tangle);
+	}
+	std::cerr << tangles.size() << " tangles after filtering for short nodes" << std::endl;
 	phmap::flat_hash_map<uint64_t, uint64_t> longUnitigTipParent;
 	for (const auto& pair : connectionCounts)
 	{
@@ -1652,26 +1692,6 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 			merge(longUnitigTipParent, pair.first, pair2.first);
 		}
 	}
-	phmap::flat_hash_set<size_t> tanglesWhichHaveShortNodes;
-	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
-	{
-		if (unitigIsLong[i]) continue;
-		size_t tangle = find(parent, 2*i);
-		if (tangles.count(tangle) == 0) continue;
-		tanglesWhichHaveShortNodes.insert(tangle);
-	}
-	phmap::flat_hash_set<size_t> tanglesForbiddenByLackOfShortNodes;
-	for (size_t tangle : tangles)
-	{
-		if (tanglesWhichHaveShortNodes.count(tangle) == 1) continue;
-		tanglesForbiddenByLackOfShortNodes.emplace(tangle);
-	}
-	for (size_t tangle : tanglesForbiddenByLackOfShortNodes)
-	{
-		assert(tangles.count(tangle) == 1);
-		tangles.erase(tangle);
-	}
-	std::cerr << tangles.size() << " tangles after filtering for short nodes" << std::endl;
 	phmap::flat_hash_set<size_t> tanglesForbiddenByLackOfResolutions;
 	for (size_t tangle : tangles)
 	{
