@@ -1799,7 +1799,7 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 			if (readUnitigBordersPerTangle.at(tangle).count(read) == 0) continue;
 			for (const auto& partt : readPartsPerTangle.at(tangle).at(read))
 			{
-				size_t tangle = find(parent, 2*readPaths[read][std::get<0>(partt)].path[std::get<1>(partt)]);
+				assert(find(parent, 2*readPaths[read][std::get<0>(partt)].path[std::get<1>(partt)]) == tangle);
 				size_t alleleIndexBefore = std::numeric_limits<size_t>::max();
 				size_t alleleIndexAfter = std::numeric_limits<size_t>::max();
 				for (const auto& bordert : readUnitigBordersPerTangle.at(tangle).at(read))
@@ -1822,8 +1822,13 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 						}
 					}
 				}
-				assert(alleleIndexAfter == alleleIndexBefore || alleleIndexAfter == std::numeric_limits<size_t>::max() || alleleIndexBefore == std::numeric_limits<size_t>::max());
 				if (alleleIndexAfter == std::numeric_limits<size_t>::max() && alleleIndexBefore == std::numeric_limits<size_t>::max()) continue;
+				if (alleleIndexAfter != std::numeric_limits<size_t>::max() && alleleIndexBefore != std::numeric_limits<size_t>::max() && alleleIndexAfter != alleleIndexBefore)
+				{
+					readTanglePartAssignments[read].emplace_back(std::get<0>(partt), std::get<1>(partt), std::get<2>(partt), std::get<3>(partt), std::numeric_limits<size_t>::max());
+					continue;
+				}
+				assert(alleleIndexAfter == alleleIndexBefore || alleleIndexAfter == std::numeric_limits<size_t>::max() || alleleIndexBefore == std::numeric_limits<size_t>::max());
 				size_t allele = alleleIndexBefore;
 				if (alleleIndexBefore == std::numeric_limits<size_t>::max()) allele = alleleIndexAfter;
 				for (size_t j = std::get<0>(partt); j <= std::get<2>(partt); j++)
@@ -1917,6 +1922,11 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 				if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 				if (chunksWillBeReplaced.count(std::get<2>(chunksPerRead[i][j]) & maskUint64_t) == 0) continue;
 				std::pair<size_t, size_t> replacement { std::get<2>(chunksPerRead[i][j]) & maskUint64_t, allele };
+				if (allele == std::numeric_limits<size_t>::max())
+				{
+					std::get<2>(chunksPerRead[i][j]) = std::numeric_limits<size_t>::max();
+					continue;
+				}
 				size_t newChunk = nextNum;
 				if (chunkPlusAlleleToNewChunk.count(replacement) == 0)
 				{
