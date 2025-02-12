@@ -38,9 +38,9 @@ std::vector<std::vector<int>> getBinCheckOrderNotSymmetric(const int maxDistance
 	std::vector<std::vector<int>> result;
 	for (int i = 0; i <= maxDistance; i++)
 	{
-		for (int j = -maxDistance; j <= maxDistance; j++)
+		for (int j = (i == 0 ? 0 : -maxDistance); j <= maxDistance; j++)
 		{
-			for (int k = -maxDistance; k <= maxDistance; k++)
+			for (int k = ((i == 0 && j == 0) ? 0 : -maxDistance); k <= maxDistance; k++)
 			{
 				result.emplace_back();
 				result.back().emplace_back(i);
@@ -49,7 +49,7 @@ std::vector<std::vector<int>> getBinCheckOrderNotSymmetric(const int maxDistance
 			}
 		}
 	}
-	assert(result.size() == pow(2*maxDistance+1, 2)*(maxDistance+1));
+//	assert(result.size() == pow(2*maxDistance+1, 2)*(maxDistance+1));
 	std::sort(result.begin(), result.end(), [](const std::vector<int>& left, const std::vector<int>& right)
 	{
 		assert(left.size() == right.size());

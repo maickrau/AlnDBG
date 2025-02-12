@@ -129,7 +129,7 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 	static const std::vector<std::vector<int>> binCheckOrder = getBinCheckOrder(1);
 	static const std::vector<std::vector<int>> binCheckOrderDistanceTwoNotsymmetric = getBinCheckOrderNotSymmetric(2);
 	assert(binCheckOrder.size() == 27);
-	assert(binCheckOrderDistanceTwoNotsymmetric.size() == 3*5*5);
+	assert(binCheckOrderDistanceTwoNotsymmetric.size() == 1*1*3 + 1*2*5 + 2*5*5);
 	std::vector<size_t> parent;
 	parent.resize(itemCount);
 	for (size_t i = 0; i < itemCount; i++)
