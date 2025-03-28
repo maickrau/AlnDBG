@@ -4066,7 +4066,8 @@ void splitPerNeighborForksPolyploid(const FastaCompressor::CompressedStringIndex
 	auto oldChunks = chunksPerRead;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	std::vector<size_t> chunkBelongsToUnitig;
 	std::vector<size_t> chunkStartPosInUnitig;
 	std::vector<size_t> chunkEndPosInUnitig;
@@ -4762,7 +4763,8 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 	auto oldChunks = chunksPerRead;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	double estimatedCoverage;
 	{
 		double longnodeCoverageSum = 0;

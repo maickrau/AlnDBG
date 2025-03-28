@@ -279,23 +279,67 @@ std::vector<uint64_t> getUnitig(const uint64_t startNode, const std::vector<bool
 	return result;
 }
 
-std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>, std::vector<std::vector<std::pair<size_t, size_t>>>> getUnitigs(const std::vector<bool>& allowedNode, const SparseEdgeContainer& allowedEdges, const std::vector<std::vector<size_t>>& lengths, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps)
+void rotateCircularUnitigsToBeConsistent(std::vector<std::vector<uint64_t>>& unitigs, const SparseEdgeContainer& allowedEdges, const std::vector<size_t>& reverseChunk)
+{
+	for (size_t i = 0; i < unitigs.size(); i++)
+	{
+		if (unitigs[i].size() < 2) continue;
+		std::pair<size_t, bool> last { unitigs[i].back() & maskUint64_t, unitigs[i].back() & firstBitUint64_t };
+		std::pair<size_t, bool> firstreverse { unitigs[i][0] & maskUint64_t, (unitigs[i][0] ^ firstBitUint64_t) & firstBitUint64_t };
+		if (allowedEdges.getEdges(last).size() != 1) continue;
+		if (allowedEdges.getEdges(firstreverse).size() != 1) continue;
+		if (allowedEdges.getEdges(last)[0] != reverse(firstreverse)) continue;
+		assert(allowedEdges.getEdges(firstreverse)[0] == reverse(last));
+		// is circular
+		size_t minIndex = 0;
+		bool minIndexFw = true;
+		size_t minValue = std::numeric_limits<size_t>::max();
+		for (size_t j = 0; j < unitigs[i].size(); j++)
+		{
+			if ((unitigs[i][j] & maskUint64_t) < minValue)
+			{
+				minIndex = j;
+				minIndexFw = true;
+				minValue = unitigs[i][j] & maskUint64_t;
+			}
+			if (reverseChunk[unitigs[i][j] & maskUint64_t] < minValue)
+			{
+				minIndex = j;
+				minIndexFw = false;
+				minValue = reverseChunk[unitigs[i][j] & maskUint64_t];
+			}
+		}
+		assert(minValue != std::numeric_limits<size_t>::max());
+		assert(minIndex < unitigs[i].size());
+		if (minIndexFw)
+		{
+			std::vector<uint64_t> rotatedUnitig;
+			rotatedUnitig.insert(rotatedUnitig.end(), unitigs[i].begin()+minIndex, unitigs[i].end());
+			rotatedUnitig.insert(rotatedUnitig.end(), unitigs[i].begin(), unitigs[i].begin()+minIndex);
+			std::swap(unitigs[i], rotatedUnitig);
+		}
+		else
+		{
+			std::vector<uint64_t> rotatedUnitig;
+			rotatedUnitig.insert(rotatedUnitig.end(), unitigs[i].begin()+minIndex+1, unitigs[i].end());
+			rotatedUnitig.insert(rotatedUnitig.end(), unitigs[i].begin(), unitigs[i].begin()+minIndex+1);
+			std::swap(unitigs[i], rotatedUnitig);
+		}
+	}
+}
+
+std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<std::tuple<uint64_t, size_t, size_t, size_t>>, std::vector<std::vector<std::pair<size_t, size_t>>>> getUnitigs(const std::vector<bool>& allowedNode, const SparseEdgeContainer& allowedEdges, const std::vector<std::vector<size_t>>& lengths, const phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>& edgeOverlaps, const std::vector<size_t>& reverseChunk)
 {
 	std::vector<std::vector<uint64_t>> unitigs;
 	std::vector<bool> checked;
 	checked.resize(allowedNode.size(), false);
-	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig;
-	std::vector<std::vector<std::pair<size_t, size_t>>> unitigChunkBreakpointPositions;
-	chunkLocationInUnitig.resize(allowedNode.size(), std::make_tuple(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()));
 	for (size_t i = 0; i < allowedNode.size(); i++)
 	{
 		if (!allowedNode[i]) continue;
 		if (checked[i])
 		{
-			assert(std::get<0>(chunkLocationInUnitig[i]) != std::numeric_limits<size_t>::max());
 			continue;
 		}
-		assert(std::get<0>(chunkLocationInUnitig[i]) == std::numeric_limits<size_t>::max());
 		auto unitig = getUnitig(i, allowedNode, allowedEdges);
 		assert(unitig.size() >= 1);
 		unitigs.emplace_back(unitig);
@@ -304,11 +348,22 @@ std::tuple<std::vector<std::vector<uint64_t>>, std::vector<size_t>, std::vector<
 			uint64_t node = unitig[j];
 			assert(!NonexistantChunk(node));
 			assert(!checked[node & maskUint64_t]);
-			assert(std::get<0>(chunkLocationInUnitig[node & maskUint64_t]) == std::numeric_limits<size_t>::max());
-			chunkLocationInUnitig[node & maskUint64_t] = std::make_tuple(unitigs.size()-1 + (node & firstBitUint64_t), j, 0, 0);
 			checked[node & maskUint64_t] = true;
 		}
 	}
+	if (reverseChunk.size() >= 1) rotateCircularUnitigsToBeConsistent(unitigs, allowedEdges, reverseChunk);
+	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig;
+	chunkLocationInUnitig.resize(allowedNode.size(), std::make_tuple(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()));
+	for (size_t i = 0; i < unitigs.size(); i++)
+	{
+		for (size_t j = 0; j < unitigs[i].size(); j++)
+		{
+			uint64_t node = unitigs[i][j];
+			assert(std::get<0>(chunkLocationInUnitig[node & maskUint64_t]) == std::numeric_limits<size_t>::max());
+			chunkLocationInUnitig[node & maskUint64_t] = std::make_tuple(i + (node & firstBitUint64_t), j, 0, 0);
+		}
+	}
+	std::vector<std::vector<std::pair<size_t, size_t>>> unitigChunkBreakpointPositions;
 	std::vector<size_t> unitigLengths;
 	unitigChunkBreakpointPositions.resize(unitigs.size());
 	for (size_t i = 0; i < unitigs.size(); i++)
@@ -974,9 +1029,41 @@ SparseEdgeContainer filterOutZEdges(const std::vector<std::vector<uint64_t>>& un
 	return result;
 }
 
-std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphInner(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const bool alsoConsensuses, const double approxOneHapCoverage, const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t numThreads, const size_t kmerSize)
+std::vector<size_t> getChunkReverses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t countReads)
+{
+	std::vector<size_t> result;
+	if (chunksPerRead.size() == countReads) return result;
+	assert(chunksPerRead.size() == countReads*2);
+	for (size_t i = 0; i < countReads; i++)
+	{
+		size_t otheri = i + countReads;
+		assert(chunksPerRead[i].size() == chunksPerRead[otheri].size());
+		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
+		{
+			size_t otherj = chunksPerRead[i].size()-1-j;
+			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j])))
+			{
+				assert(NonexistantChunk(std::get<2>(chunksPerRead[otheri][otherj])));
+				continue;
+			}
+			assert(!NonexistantChunk(std::get<2>(chunksPerRead[otheri][otherj])));
+			size_t chunkHere = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
+			size_t chunkOther = std::get<2>(chunksPerRead[otheri][otherj]) & maskUint64_t;
+			while (result.size() <= chunkHere) result.emplace_back(std::numeric_limits<size_t>::max());
+			while (result.size() <= chunkOther) result.emplace_back(std::numeric_limits<size_t>::max());
+			assert(result[chunkHere] == std::numeric_limits<size_t>::max() || result[chunkHere] == chunkOther);
+			result[chunkHere] = chunkOther;
+			assert(result[chunkOther] == std::numeric_limits<size_t>::max() || result[chunkOther] == chunkHere);
+			result[chunkOther] = chunkHere;
+		}
+	}
+	return result;
+}
+
+std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphInner(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const bool alsoConsensuses, const double approxOneHapCoverage, const FastaCompressor::CompressedStringIndex& sequenceIndex, const size_t numThreads, const size_t kmerSize, const size_t countReads)
 {
 	ChunkUnitigGraph result;
+	std::vector<size_t> chunkReverse = getChunkReverses(chunksPerRead, countReads);
 	std::vector<std::vector<size_t>> lengths;
 	std::vector<size_t> coverages;
 	std::tie(lengths, coverages) = getLengthsAndCoverages(chunksPerRead);
@@ -989,10 +1076,10 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<C
 	std::vector<size_t> unitigLengths;
 	std::vector<std::vector<std::pair<size_t, size_t>>> unitigChunkBreakpointPositions;
 	std::vector<std::tuple<uint64_t, size_t, size_t, size_t>> chunkLocationInUnitig; // unitig, index, startpos, endpos. reverse also reverses index and poses.
-	std::tie(unitigs, unitigLengths, chunkLocationInUnitig, unitigChunkBreakpointPositions) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps);
+	std::tie(unitigs, unitigLengths, chunkLocationInUnitig, unitigChunkBreakpointPositions) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps, chunkReverse);
 	{
 		allowedEdges = filterOutZEdges(unitigs, unitigLengths, allowedEdges, lengths, coverages, edgeCoverage, chunkLocationInUnitig, approxOneHapCoverage);
-		std::tie(unitigs, unitigLengths, chunkLocationInUnitig, unitigChunkBreakpointPositions) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps);
+		std::tie(unitigs, unitigLengths, chunkLocationInUnitig, unitigChunkBreakpointPositions) = getUnitigs(allowedNode, allowedEdges, lengths, edgeOverlaps, chunkReverse);
 	}
 	std::swap(result.unitigChunkBreakpointPositions, unitigChunkBreakpointPositions);
 	result.unitigLengths = unitigLengths;
@@ -1064,13 +1151,13 @@ std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<C
 
 std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>, std::vector<ConsensusString>> getChunkUnitigGraphWithConsensuses(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const FastaCompressor::CompressedStringIndex& sequenceIndex, const double approxOneHapCoverage, const size_t numThreads, const size_t kmerSize)
 {
-	return getChunkUnitigGraphInner(chunksPerRead, true, approxOneHapCoverage, sequenceIndex, numThreads, kmerSize);
+	return getChunkUnitigGraphInner(chunksPerRead, true, approxOneHapCoverage, sequenceIndex, numThreads, kmerSize, sequenceIndex.size());
 }
 
-std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUnitigGraph(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t kmerSize)
+std::tuple<ChunkUnitigGraph, std::vector<std::vector<UnitigPath>>> getChunkUnitigGraph(const std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double approxOneHapCoverage, const size_t kmerSize, const size_t countReads)
 {
 	FastaCompressor::CompressedStringIndex fakeSequences { 0, 0 };
-	auto result = getChunkUnitigGraphInner(chunksPerRead, false, approxOneHapCoverage, fakeSequences, 1, kmerSize);
+	auto result = getChunkUnitigGraphInner(chunksPerRead, false, approxOneHapCoverage, fakeSequences, 1, kmerSize, countReads);
 	return std::make_tuple(std::get<0>(result), std::get<1>(result));
 }
 

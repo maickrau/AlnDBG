@@ -36,7 +36,8 @@ void countReadRepetitiveUnitigs(const std::vector<std::vector<std::tuple<size_t,
 	std::cerr << "counting read-repetitive unitigs" << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	std::vector<size_t> chunkBelongsToUnitig;
 	for (size_t i = 0; i < graph.chunksInUnitig.size(); i++)
 	{
@@ -121,7 +122,8 @@ bool expandResolvableChunksOnce(std::vector<std::vector<std::tuple<size_t, size_
 	{
 		ChunkUnitigGraph graph;
 		std::vector<std::vector<UnitigPath>> readPaths;
-		std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+		assert(chunksPerRead.size()%2 == 0);
+		std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 		unitigChunkCounts.resize(graph.unitigLengths.size(), 0);
 		std::vector<bool> canExpandUnitig;
 		canExpandUnitig.resize(graph.unitigLengths.size(), false);
@@ -364,7 +366,8 @@ void fixYForks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& c
 	const size_t minLongUnitigLength = 100000;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	double coverageSum = 0;
 	double coverageDivisor = 0;
 	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
@@ -670,7 +673,8 @@ void expandChunksUntilSolids(std::vector<std::vector<std::tuple<size_t, size_t, 
 	{
 		ChunkUnitigGraph graph;
 		std::vector<std::vector<UnitigPath>> readPaths;
-		std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+		assert(chunksPerRead.size()%2 == 0);
+		std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 		for (size_t i = 0; i < graph.unitigLengths.size(); i++)
 		{
 			if (graph.unitigLengths[i] > expandedSize) continue;

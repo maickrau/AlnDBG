@@ -419,7 +419,8 @@ void resolveVerySmallNodes(std::vector<std::vector<std::tuple<size_t, size_t, ui
 	std::cerr << "resolving very small nodes" << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	phmap::flat_hash_set<size_t> resolvableTinies;
 	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
 	{
@@ -516,7 +517,8 @@ void resolveSemiAmbiguousUnitigs(std::vector<std::vector<std::tuple<size_t, size
 	std::cerr << "resolving semiambiguous resolvable unitigs" << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	std::vector<phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> tripletsPerUnitig;
 	tripletsPerUnitig.resize(graph.unitigLengths.size());
 	for (size_t i = 0; i < readPaths.size(); i++)
@@ -793,7 +795,8 @@ void resolveBetweenLongUnitigs(std::vector<std::vector<std::tuple<size_t, size_t
 	std::cerr << "resolving between long unitigs" << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	phmap::flat_hash_set<size_t> chunkInsideLongUnitig;
 	for (size_t i = 0; i < graph.unitigLengths.size(); i++)
 	{
@@ -1011,7 +1014,8 @@ void resolveUnambiguouslyResolvableUnitigs(std::vector<std::vector<std::tuple<si
 	std::cerr << "resolving unambiguously resolvable unitigs" << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	std::vector<bool> edgesBalanced;
 	std::vector<bool> unitigHasContainedPath;
 	std::vector<phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> tripletsPerUnitig;
@@ -1449,7 +1453,8 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 	std::cerr << "resolving between tangles" << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	std::vector<bool> unitigIsLong;
 	unitigIsLong.resize(graph.unitigLengths.size(), false);
 	size_t countLongUnitigs = 0;

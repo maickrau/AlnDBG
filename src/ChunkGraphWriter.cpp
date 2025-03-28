@@ -386,9 +386,11 @@ void writeBidirectedUnitigGraphWithSequences(const std::string& graphFile, const
 {
 	std::cerr << "writing unitig graph with sequences " << graphFile << std::endl;
 	auto fixedChunksPerRead = getBidirectedChunks(rawChunksPerRead);
+	assert(rawChunksPerRead.size() % 2 == 0);
+	assert(fixedChunksPerRead.size()*2 == rawChunksPerRead.size());
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(fixedChunksPerRead, approxOneHapCoverage, kmerSize);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(fixedChunksPerRead, approxOneHapCoverage, kmerSize, rawChunksPerRead.size()/2);
 	std::vector<TwobitString> unitigDBGSequences;
 	std::vector<std::vector<std::pair<size_t, size_t>>> chunkSequencePositionsWithinUnitigs;
 	phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t> fixedOverlaps;
@@ -426,7 +428,9 @@ void writeBidirectedUnitigGraph(const std::string& graphFile, const std::string&
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
 	auto fixedChunksPerRead = getBidirectedChunks(chunksPerRead);
-	std::tie(graph, readPaths) = getChunkUnitigGraph(fixedChunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size() % 2 == 0);
+	assert(fixedChunksPerRead.size()*2 == chunksPerRead.size());
+	std::tie(graph, readPaths) = getChunkUnitigGraph(fixedChunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	writeUnitigGraph(graphFile, graph);
 	std::cerr << "writing unitig paths " << pathsFile << std::endl;
 	writeUnitigPaths(pathsFile, graph, readPaths, sequenceIndex, rawReadLengths);
@@ -437,7 +441,8 @@ void writeUnitigGraph(const std::string& graphFile, const std::string& pathsFile
 	std::cerr << "writing unitig digraph " << graphFile << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size() % 2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	writeUnitigGraph(graphFile, graph);
 	std::cerr << "writing unitig paths " << pathsFile << std::endl;
 	writeUnitigPaths(pathsFile, graph, readPaths, sequenceIndex, rawReadLengths);
@@ -588,9 +593,11 @@ void writeReadUnitigSequences(const std::string& filename, const std::vector<std
 {
 	std::cerr << "writing read unitig sequences" << std::endl;
 	auto chunksPerRead = getBidirectedChunks(rawChunksPerRead);
+	assert(rawChunksPerRead.size()%2 == 0);
+	assert(chunksPerRead.size()*2 == rawChunksPerRead.size());
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, rawChunksPerRead.size()/2);
 	std::ofstream file { filename };
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{

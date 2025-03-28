@@ -1500,7 +1500,8 @@ void getContigPathsAndConsensuses(const std::vector<std::vector<std::tuple<size_
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
 	auto fixedChunksPerRead = getBidirectedChunks(chunksPerRead);
-	std::tie(graph, readPaths) = getChunkUnitigGraph(fixedChunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(fixedChunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	double estimatedSingleCopyCoverage = getAverageLongNodeCoverage(graph, longUnitigThreshold);
 	std::cerr << "estimated single copy coverage " << estimatedSingleCopyCoverage << std::endl;
 	std::vector<bool> isUniqueUnitig = estimateUniqueUnitigs(graph, readPaths, longUnitigThreshold, estimatedSingleCopyCoverage);

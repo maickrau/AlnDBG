@@ -367,7 +367,8 @@ void cleanTips(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& c
 	std::cerr << "cleaning tips" << std::endl;
 	ChunkUnitigGraph graph;
 	std::vector<std::vector<UnitigPath>> readPaths;
-	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize);
+	assert(chunksPerRead.size()%2 == 0);
+	std::tie(graph, readPaths) = getChunkUnitigGraph(chunksPerRead, approxOneHapCoverage, kmerSize, chunksPerRead.size()/2);
 	double reestimatedCoverage = estimateCoverage(graph);
 	if (reestimatedCoverage < 1) reestimatedCoverage = approxOneHapCoverage;
 	phmap::flat_hash_set<uint64_t> solidFork;
