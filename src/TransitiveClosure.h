@@ -125,6 +125,7 @@ std::vector<size_t> getFastTransitiveClosure(const size_t itemCount, const size_
 template <typename F, typename F2>
 std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, const size_t maxAllowedDistance, const size_t maxDistanceEver, const size_t numThreads, F distanceFunction, F2 allowedPairwiseDistanceFunction)
 {
+	const size_t maxClusterSize = 100;
 	const size_t chunkSize = 100;
 	static const std::vector<std::vector<int>> binCheckOrder = getBinCheckOrder(1);
 	static const std::vector<std::vector<int>> binCheckOrderDistanceTwoNotsymmetric = getBinCheckOrderNotSymmetric(2);
@@ -192,7 +193,7 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 				if (distance <= allowedPairwiseDistanceFunction(i, anchors[j]))
 				{
 					std::lock_guard<std::mutex> lock { resultMutex };
-					if (clusterAdditionals[j].size() < 500)
+					if (clusterAdditionals[j].size() < maxClusterSize)
 					{
 						found = true;
 						if (distance > 0)
@@ -235,7 +236,7 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 							break;
 						}
 						clusterIndex += 1;
-						if (clusterAdditionals[cluster].size() > 500) continue;
+						if (clusterAdditionals[cluster].size() > maxClusterSize) continue;
 					}
 					if (cluster == std::numeric_limits<size_t>::max()) break;
 					size_t allowedDistance = allowedPairwiseDistanceFunction(i, clusterCenterIndex);
@@ -342,6 +343,7 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 			}
 		}
 	}
+	std::sort(remainingChecks.begin(), remainingChecks.end(), [](auto left, auto right) { return std::get<2>(left) < std::get<2>(right); });
 	std::vector<std::thread> threads;
 	size_t checkIndex = 0;
 	for (size_t threadi = 0; threadi < numThreads; threadi++)
