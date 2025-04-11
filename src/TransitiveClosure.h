@@ -127,10 +127,14 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 {
 	const size_t maxClusterSize = 100;
 	const size_t chunkSize = 100;
-	static const std::vector<std::vector<int>> binCheckOrder = getBinCheckOrder(1);
-	static const std::vector<std::vector<int>> binCheckOrderDistanceTwoNotsymmetric = getBinCheckOrderNotSymmetric(2);
-	assert(binCheckOrder.size() == 27);
-	assert(binCheckOrderDistanceTwoNotsymmetric.size() == 1*1*3 + 1*2*5 + 2*5*5);
+//	static const std::vector<std::vector<int>> binCheckOrder = getBinCheckOrder(1);
+//	assert(binCheckOrder.size() == 27);
+	static const std::vector<std::vector<int>> binCheckOrder = std::vector<std::vector<int>>{{0, 0, 0}};
+	assert(binCheckOrder.size() == 1);
+//	static const std::vector<std::vector<int>> binCheckOrderDistanceTwoNotsymmetric = getBinCheckOrderNotSymmetric(2);
+//	assert(binCheckOrderDistanceTwoNotsymmetric.size() == 1*1*3 + 1*2*5 + 2*5*5);
+	static const std::vector<std::vector<int>> binCheckOrderDistanceTwoNotsymmetric = getBinCheckOrderNotSymmetric(1);
+	assert(binCheckOrderDistanceTwoNotsymmetric.size() == 1*1*2 + 1*1*3 + 1*3*3);
 	std::vector<size_t> parent;
 	parent.resize(itemCount);
 	for (size_t i = 0; i < itemCount; i++)
