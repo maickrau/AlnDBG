@@ -1513,7 +1513,7 @@ std::vector<std::vector<bool>> getGoodKmersFromAlignments(const FastaCompressor:
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerFirstLastKmers(sequenceIndex, chunks, kmerSize, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-	splitPerLength(chunks, kmerSize, numThreads);
+	splitPerLength(chunks, 0.02, 50, kmerSize, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 	splitPerBaseCounts(sequenceIndex, rawReadLengths, chunks, kmerSize, numThreads);
 	std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
@@ -2124,7 +2124,8 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 		case 1:
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			splitPerLength(chunksPerRead, kmerSize, numThreads);
+			splitPerLength(chunksPerRead, 0.02, 50, kmerSize, numThreads);
+			splitPerLength(chunksPerRead, mismatchFraction, 10, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			removeBadShortHighCoverageChunks(chunksPerRead, kmerSize);
 			mergeNonexistentChunks(chunksPerRead);

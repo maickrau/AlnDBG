@@ -44,11 +44,9 @@ size_t findBiggestSmallerIndex(const std::vector<size_t>& nums, const size_t val
 	return low-1;
 }
 
-void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads)
+void splitPerLength(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const double differenceFraction, const size_t differenceConstant, const size_t kmerSize, const size_t numThreads)
 {
 	std::cerr << "splitting by length" << std::endl;
-	const double differenceFraction = 0.02;
-	const size_t differenceConstant = 50;
 	size_t nextNum = 0;
 	std::mutex resultMutex;
 	auto oldChunks = chunksPerRead;
