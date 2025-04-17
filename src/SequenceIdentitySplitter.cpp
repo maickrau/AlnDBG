@@ -84,6 +84,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 		{
 			parent.emplace_back(j);
 		}
+		std::vector<size_t> lengthCounts;
 		phmap::flat_hash_map<std::string, size_t> distinctSequences;
 		std::vector<size_t> indicesWithDistinctSequences;
 		for (size_t j = 0; j < occurrencesPerChunk[i].size(); j++)
@@ -101,6 +102,8 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 				merge(parent, j, distinctSequences.at(sequences.back()));
 				continue;
 			}
+			while (lengthCounts.size() <= sequences.back().size()) lengthCounts.emplace_back(0);
+			lengthCounts[sequences.back().size()] += 1;
 			indicesWithDistinctSequences.emplace_back(j);
 			distinctSequences[sequences.back()] = j;
 		}
@@ -108,11 +111,80 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 			decltype(distinctSequences) tmp;
 			std::swap(tmp, distinctSequences);
 		}
-		longestLength = sequences.back().size();
-		std::vector<size_t> parentOfDistinctSequences = getFastTransitiveClosureMultithread(indicesWithDistinctSequences.size(), std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), longestLength, numThreads, [&sequences, &indicesWithDistinctSequences](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[indicesWithDistinctSequences[i]], sequences[indicesWithDistinctSequences[j]], maxDist); }, [&sequences, mismatchFloor, &indicesWithDistinctSequences](const size_t i, const size_t j) { return std::max((size_t)(std::min(sequences[indicesWithDistinctSequences[i]].size(), sequences[indicesWithDistinctSequences[j]].size()) * mismatchFraction), mismatchFloor); });
-		for (size_t j = 0; j < parentOfDistinctSequences.size(); j++)
+		size_t maxRangeSize = 0;
+		for (size_t i = 21; i < lengthCounts.size(); i++)
 		{
-			merge(parent, indicesWithDistinctSequences[j], indicesWithDistinctSequences[find(parentOfDistinctSequences, j)]);
+			size_t counts = 0;
+			for (size_t j = i-1; j >= i-std::max<size_t>(i*mismatchFraction, mismatchFloor) && j < lengthCounts.size(); j--)
+			{
+				counts += lengthCounts[j];
+			}
+			maxRangeSize = std::max(maxRangeSize, counts);
+		}
+		std::vector<std::pair<size_t, size_t>> ranges;
+		if (maxRangeSize > 1000)
+		{
+			std::vector<std::pair<size_t, size_t>> lengthRanges;
+			size_t currentRangeStart = 0;
+			size_t currentBlockMinimum = std::numeric_limits<size_t>::max();
+			size_t currentBlockMinimumIndex = 0;
+			bool hadAnySolidsSoFar = false;
+			for (size_t i = 21; i < lengthCounts.size(); i++)
+			{
+				size_t counts = 0;
+				for (size_t j = i-1; j >= i-std::max<size_t>(i*mismatchFraction, mismatchFloor) && j < lengthCounts.size(); j--)
+				{
+					counts += lengthCounts[j];
+				}
+				if (counts >= maxRangeSize/1000)
+				{
+					hadAnySolidsSoFar = true;
+				}
+				if (!hadAnySolidsSoFar) continue;
+				if (counts >= maxRangeSize/1000)
+				{
+					if (currentBlockMinimum != std::numeric_limits<size_t>::max())
+					{
+						lengthRanges.emplace_back(currentRangeStart, currentBlockMinimumIndex);
+						currentRangeStart = currentBlockMinimumIndex - std::max<size_t>(currentBlockMinimumIndex * mismatchFraction, mismatchFloor);
+					}
+					currentBlockMinimum = std::numeric_limits<size_t>::max();
+				}
+				else
+				{
+					if (counts < currentBlockMinimum)
+					{
+						currentBlockMinimum = counts;
+						currentBlockMinimumIndex = i;
+					}
+				}
+			}
+			lengthRanges.emplace_back(currentRangeStart, sequences.back().size());
+			ranges.resize(lengthRanges.size(), std::make_pair(std::numeric_limits<size_t>::max(), 0));
+			for (size_t i = 0; i < indicesWithDistinctSequences.size(); i++)
+			{
+				for (size_t j = 0; j < lengthRanges.size(); j++)
+				{
+					if (sequences[indicesWithDistinctSequences[i]].size() < lengthRanges[j].first) continue;
+					if (sequences[indicesWithDistinctSequences[i]].size() > lengthRanges[j].second) continue;
+					ranges[j].first = std::min<size_t>(ranges[j].first, i);
+					ranges[j].second = std::max<size_t>(ranges[j].second, i+1);
+				}
+			}
+		}
+		else
+		{
+			ranges.emplace_back(0, indicesWithDistinctSequences.size());
+		}
+		for (auto range : ranges)
+		{
+			assert(range.second > range.first);
+			longestLength = sequences[indicesWithDistinctSequences[range.second-1]].size();
+			std::vector<size_t> parentOfDistinctSequences = getFastTransitiveClosureMultithread(range.second-range.first, std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), longestLength, numThreads, [&sequences, &indicesWithDistinctSequences, range](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[indicesWithDistinctSequences[range.first+i]], sequences[indicesWithDistinctSequences[range.first+j]], maxDist); }, [&sequences, mismatchFloor, &indicesWithDistinctSequences, range](const size_t i, const size_t j) { return std::max((size_t)(std::min(sequences[indicesWithDistinctSequences[range.first+i]].size(), sequences[indicesWithDistinctSequences[range.first+j]].size()) * mismatchFraction), mismatchFloor); });
+			for (size_t j = 0; j < parentOfDistinctSequences.size(); j++)
+			{
+				merge(parent, indicesWithDistinctSequences[range.first+j], indicesWithDistinctSequences[range.first+find(parentOfDistinctSequences, j)]);
+			}
 		}
 		phmap::flat_hash_map<size_t, size_t> parentToCluster;
 		for (size_t j = 0; j < parent.size(); j++)
