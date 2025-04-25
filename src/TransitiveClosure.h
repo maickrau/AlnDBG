@@ -1,6 +1,7 @@
 #ifndef TransitiveClosure_h
 #define TransitiveClosure_h
 
+#include <iostream>
 #include <mutex>
 #include <vector>
 #include "Common.h"
@@ -127,6 +128,9 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 {
 	const size_t maxClusterSize = 100;
 	const size_t chunkSize = 100;
+	auto startTime = getTime();
+	std::cerr << "transitive closure start" << std::endl;
+	std::cerr << "time " << formatTime(startTime, getTime()) << std::endl;
 //	static const std::vector<std::vector<int>> binCheckOrder = getBinCheckOrder(1);
 //	assert(binCheckOrder.size() == 27);
 	static const std::vector<std::vector<int>> binCheckOrder = std::vector<std::vector<int>>{{0, 0, 0}};
@@ -182,6 +186,8 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 		merge(parent, anchors[1], anchors[2]);
 	}
 	std::mutex resultMutex;
+	std::cerr << "transitive closure step A" << std::endl;
+	std::cerr << "time " << formatTime(startTime, getTime()) << std::endl;
 	iterateMultithreaded(0, (itemCount+chunkSize-1)/chunkSize, numThreads, [&resultMutex, &clusterExample, &clusterBins, &clusterAdditionals, &clusterMaxDistance, &parent, &binCheckOrder, &anchors, distanceFunction, allowedPairwiseDistanceFunction, maxAllowedDistance, clusteringDistance, maxDistanceEver, itemCount](const size_t blockindex)
 	{
 		for (size_t i = blockindex*chunkSize; i < blockindex*chunkSize+chunkSize && i < itemCount; i++)
@@ -267,6 +273,8 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 			clusterBins[binIndices[0]][binIndices[1]][binIndices[2]].emplace_back(cluster);
 		}
 	});
+	std::cerr << "transitive closure step B" << std::endl;
+	std::cerr << "time " << formatTime(startTime, getTime()) << std::endl;
 	assert(clusterExample.size() >= 1);
 	std::vector<size_t> remainingCheckClusterParent;
 	for (size_t i = 0; i < clusterExample.size(); i++)
@@ -290,6 +298,8 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 			}
 		}
 	});
+	std::cerr << "transitive closure step C" << std::endl;
+	std::cerr << "time " << formatTime(startTime, getTime()) << std::endl;
 	for (const std::vector<int>& offset : binCheckOrderDistanceTwoNotsymmetric)
 	{
 		for (size_t clusterDimOne = 0; clusterDimOne < clusterBins.size(); clusterDimOne++)
@@ -341,6 +351,8 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 			}
 		}
 	}
+	std::cerr << "transitive closure step D" << std::endl;
+	std::cerr << "time " << formatTime(startTime, getTime()) << std::endl;
 	std::vector<std::vector<size_t>> remainingCheckClusters;
 	phmap::flat_hash_map<size_t, size_t> clusterToId;
 	for (size_t i = 0; i < remainingCheckClusterParent.size(); i++)
@@ -353,6 +365,8 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 		}
 		remainingCheckClusters[clusterToId.at(found)].emplace_back(i);
 	}
+	std::cerr << "transitive closure step E" << std::endl;
+	std::cerr << "time " << formatTime(startTime, getTime()) << std::endl;
 	for (size_t bigclusteri = 0; bigclusteri < remainingCheckClusters.size(); bigclusteri++)
 	{
 		assert(remainingCheckClusters[bigclusteri].size() >= 1);
@@ -462,6 +476,8 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 			}
 		});
 	}
+	std::cerr << "transitive closure done" << std::endl;
+	std::cerr << "time " << formatTime(startTime, getTime()) << std::endl;
 	return parent;
 }
 

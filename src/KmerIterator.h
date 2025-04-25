@@ -353,6 +353,35 @@ void iterateKmers(const TwobitString& baseSequence, const size_t start, const si
 	}
 }
 
+template <typename F>
+void iterateKmers(const std::string& baseSequenceATCG, const size_t start, const size_t end, const bool fw, const size_t k, F callback)
+{
+	const size_t mask = (1ull << (2ull*k))-1;
+	size_t kmer = 0;
+	if (fw)
+	{
+		for (size_t m = start; m <= end; m++)
+		{
+			kmer <<= 2;
+			kmer += charToInt(baseSequenceATCG[m]);
+			kmer &= mask;
+			if (m < start+k-1) continue;
+			callback(kmer, m - (start+k-1));
+		}
+	}
+	else
+	{
+		for (size_t m = end; m >= start && m < baseSequenceATCG.size(); m--)
+		{
+			kmer <<= 2;
+			kmer += 3 - charToInt(baseSequenceATCG[m]);
+			kmer &= mask;
+			if (m > end-k+1) continue;
+			callback(kmer, end - m + 1 - k);
+		}
+	}
+}
+
 template <typename KmerType, typename F>
 phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSolidKmersWithKmerType(const std::vector<TwobitString>& chunkSequences, const size_t kmerSize, const size_t minSolidThreshold, const bool allowTwoAlleleRepeats, const bool needClusters, F callback)
 {

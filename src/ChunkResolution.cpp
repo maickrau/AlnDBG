@@ -1961,3 +1961,125 @@ void resolveBetweenTanglesAllowGaps(std::vector<std::vector<std::tuple<size_t, s
 {
 	resolveBetweenTanglesInner(chunksPerRead, approxOneHapCoverage, longUnitigThreshold, kmerSize, true);
 }
+
+bool splitHugeCoverageChunks(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize, const size_t numThreads, const size_t hugeCoverageThreshold)
+{
+	assert(chunksPerRead.size() == sequenceIndex.size()*2);
+	std::vector<size_t> chunkCoverage;
+	for (size_t readi = 0; readi < chunksPerRead.size(); readi++)
+	{
+		for (auto t : chunksPerRead[readi])
+		{
+			if (NonexistantChunk(std::get<2>(t))) continue;
+			size_t chunk = std::get<2>(t) & maskUint64_t;
+			while (chunkCoverage.size() <= chunk) chunkCoverage.emplace_back(0);
+			chunkCoverage[chunk] += 1;
+		}
+	}
+	phmap::flat_hash_set<size_t> highCoverageChunks;
+	for (size_t i = 0; i < chunkCoverage.size(); i++)
+	{
+		if (chunkCoverage[i] < hugeCoverageThreshold) continue;
+		highCoverageChunks.insert(i);
+	}
+	if (highCoverageChunks.size() == 0) return false;
+	std::atomic<size_t> numSplitted;
+	std::atomic<size_t> numSplittedTo;
+	numSplitted = 0;
+	numSplittedTo = 0;
+	std::mutex newChunkIndexMutex;
+	size_t nextChunkIndex = chunkCoverage.size();
+	phmap::flat_hash_map<std::tuple<size_t, uint64_t, uint64_t>, size_t> newChunkIndex;
+	iterateMultithreaded(0, chunksPerRead.size(), numThreads, [&chunksPerRead, &sequenceIndex, &highCoverageChunks, &numSplitted, &numSplittedTo, &newChunkIndex, &newChunkIndexMutex, &nextChunkIndex, kmerSize](const size_t readi)
+	{
+		std::vector<std::tuple<size_t, size_t, uint64_t>> newChunks;
+		phmap::flat_hash_set<std::tuple<size_t, size_t, uint64_t>> removedChunks;
+		std::string readSequence;
+		for (auto t : chunksPerRead[readi])
+		{
+			if (NonexistantChunk(std::get<2>(t))) continue;
+			if (highCoverageChunks.count(std::get<2>(t) & maskUint64_t) == 0) continue;
+			if (std::get<1>(t) - std::get<0>(t) < 3 * kmerSize) continue;
+			if (readSequence.size() == 0)
+			{
+				if (readi < sequenceIndex.size())
+				{
+					readSequence = sequenceIndex.getSequence(readi);
+				}
+				else
+				{
+					readSequence = revCompRaw(sequenceIndex.getSequence(readi - sequenceIndex.size()));
+				}
+			}
+			assert(readSequence.size() >= kmerSize);
+			size_t minimalHash = std::numeric_limits<size_t>::max();
+			std::vector<size_t> minHashPositions;
+			iterateKmers(readSequence, std::get<0>(t)+kmerSize, std::get<1>(t)-kmerSize, true, kmerSize, [&minimalHash, &minHashPositions, &readSequence, kmerSize, t](const uint64_t kmer, const size_t position)
+			{
+				size_t hash = hashFwAndBw(kmer, kmerSize);
+				if (hash < minimalHash)
+				{
+					minimalHash = hash;
+					minHashPositions.clear();
+				}
+				if (hash == minimalHash)
+				{
+					minHashPositions.emplace_back((std::get<0>(t) + kmerSize) + position);
+				}
+			});
+			assert(minHashPositions.size() >= 1);
+			assert(minimalHash != std::numeric_limits<size_t>::max());
+			assert(minHashPositions.back() < std::get<1>(t)-kmerSize+1);
+			assert(minHashPositions[0] > std::get<0>(t));
+			minHashPositions.insert(minHashPositions.begin(), std::get<0>(t));
+			minHashPositions.emplace_back(std::get<1>(t)-kmerSize+1);
+			for (size_t i = 1; i < minHashPositions.size(); i++)
+			{
+				assert(minHashPositions[i] > minHashPositions[i-1]);
+				uint64_t startKmer = 0;
+				uint64_t endKmer = 0;
+				for (size_t j = 0; j < kmerSize; j++)
+				{
+					startKmer <<= 2;
+					endKmer <<= 2;
+					startKmer += charToInt(readSequence[minHashPositions[i-1]+j]);
+					endKmer += charToInt(readSequence[minHashPositions[i]+j]);
+				}
+				std::lock_guard<std::mutex> lock { newChunkIndexMutex };
+				size_t newIndex = nextChunkIndex;
+				std::tuple<size_t, uint64_t, uint64_t> key { std::get<2>(t) & maskUint64_t, startKmer, endKmer };
+				if (newChunkIndex.count(key) == 0)
+				{
+					newChunkIndex[key] = nextChunkIndex;
+					nextChunkIndex += 1;
+				}
+				else
+				{
+					newIndex = newChunkIndex.at(key);
+				}
+				newChunks.emplace_back(minHashPositions[i-1], minHashPositions[i]+kmerSize-1, newIndex + firstBitUint64_t);
+			}
+			removedChunks.insert(t);
+		}
+		if (newChunks.size() == 0)
+		{
+			assert(removedChunks.size() == 0);
+			return;
+		}
+		assert(newChunks.size() >= 2);
+		assert(removedChunks.size() >= 1);
+		numSplitted += removedChunks.size();
+		numSplittedTo += newChunks.size();
+		assert(newChunks.size() >= removedChunks.size()*2);
+		for (size_t i = chunksPerRead[readi].size()-1; i < chunksPerRead[readi].size(); i--)
+		{
+			if (removedChunks.count(chunksPerRead[readi][i]) == 0) continue;
+			std::swap(chunksPerRead[readi][i], chunksPerRead[readi].back());
+			chunksPerRead[readi].pop_back();
+		}
+		chunksPerRead[readi].insert(chunksPerRead[readi].end(), newChunks.begin(), newChunks.end());
+		std::sort(chunksPerRead[readi].begin(), chunksPerRead[readi].end());
+	});
+	std::cerr << "splitted " << highCoverageChunks.size() << " chunks from " << numSplitted << " instances to " << numSplittedTo << " instances" << std::endl;
+	return numSplitted > 0;
+}

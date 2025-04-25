@@ -2134,6 +2134,11 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			[[fallthrough]];
 		case 2:
 			splitPerBaseCounts(sequenceIndex, rawReadLengths, chunksPerRead, kmerSize, numThreads);
+			writeStage(250, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+		case 250:
+			splitHugeCoverageChunks(sequenceIndex, rawReadLengths, chunksPerRead, kmerSize, numThreads, 1000000);
+			splitPerLength(chunksPerRead, 0.02, 50, kmerSize, numThreads);
+			splitPerLength(chunksPerRead, mismatchFraction, 10, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(3, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];

@@ -176,8 +176,15 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 		{
 			ranges.emplace_back(0, indicesWithDistinctSequences.size());
 		}
+		std::cerr << "ranges:";
 		for (auto range : ranges)
 		{
+			std::cerr << " " << range.first << "-" << range.second;
+		}
+		std::cerr << std::endl;
+		for (auto range : ranges)
+		{
+			std::cerr << "run range " << range.first << "-" << range.second << std::endl;
 			assert(range.second > range.first);
 			longestLength = sequences[indicesWithDistinctSequences[range.second-1]].size();
 			std::vector<size_t> parentOfDistinctSequences = getFastTransitiveClosureMultithread(range.second-range.first, std::max((size_t)(longestLength * mismatchFraction), mismatchFloor), longestLength, numThreads, [&sequences, &indicesWithDistinctSequences, range](const size_t i, const size_t j, const size_t maxDist) { return getNumMismatches(sequences[indicesWithDistinctSequences[range.first+i]], sequences[indicesWithDistinctSequences[range.first+j]], maxDist); }, [&sequences, mismatchFloor, &indicesWithDistinctSequences, range](const size_t i, const size_t j) { return std::max((size_t)(std::min(sequences[indicesWithDistinctSequences[range.first+i]].size(), sequences[indicesWithDistinctSequences[range.first+j]].size()) * mismatchFraction), mismatchFloor); });
