@@ -132,6 +132,7 @@ bool expandResolvableChunksOnce(std::vector<std::vector<std::tuple<size_t, size_
 			unitigChunkCounts[i] = graph.chunksInUnitig[i].size();
 			if (graph.unitigLengths[i] > expandedSize) continue;
 			if (graph.edges.getEdges(std::make_pair(i, true)).size() == 1 || graph.edges.getEdges(std::make_pair(i, false)).size() == 1) continue;
+			if (graph.edges.getEdges(std::make_pair(i, true)).size() == 0 && graph.edges.getEdges(std::make_pair(i, false)).size() == 0) continue;
 			canExpandUnitig[i] = true;
 		}
 		phmap::flat_hash_map<size_t, phmap::flat_hash_map<std::pair<uint64_t, uint64_t>, size_t>> tripletCoverages;
@@ -141,6 +142,7 @@ bool expandResolvableChunksOnce(std::vector<std::vector<std::tuple<size_t, size_
 			{
 				for (size_t k = 1; k+1 < readPaths[i][j].path.size(); k++)
 				{
+					assert(readPaths[i][j].path[k] & firstBitUint64_t);
 					size_t unitig = readPaths[i][j].path[k] & maskUint64_t;
 					if (!canExpandUnitig[unitig]) continue;
 					uint64_t prev = readPaths[i][j].path[k-1];
