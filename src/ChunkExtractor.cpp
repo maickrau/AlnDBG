@@ -69,7 +69,7 @@ std::pair<std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>, std::v
 	{
 		std::string readSequence = sequenceIndex.getSequence(readIndex);
 		std::vector<size_t> minimizerPositions;
-		iterateMinimizers(readSequence, k, windowSize, [&minimizerPositions](const size_t pos)
+		iterateMiniceptions(readSequence, k, windowSize, [&minimizerPositions](const size_t pos)
 		{
 			assert(minimizerPositions.size() == 0 || pos > minimizerPositions.back());
 			minimizerPositions.emplace_back(pos);
