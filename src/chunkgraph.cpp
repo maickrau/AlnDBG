@@ -26,6 +26,7 @@
 #include "ChunkResolution.h"
 #include "OverlapMatcher.h"
 #include "PathWalker.h"
+#include "ChunkCorrection.h"
 
 const size_t RestartStageLatest = std::numeric_limits<size_t>::max()-1;
 
@@ -434,7 +435,6 @@ void fixYForks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& c
 	phmap::flat_hash_map<uint64_t, size_t> forkBranchLongestHomozygousChunks;
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
-		uint64_t lastLongNode = std::numeric_limits<uint64_t>::max();
 		std::vector<uint64_t> longNodes;
 		std::vector<std::pair<size_t, size_t>> unitigChunksInLongnode;
 		for (size_t j = 0; j < readPaths[i].size(); j++)
@@ -2074,7 +2074,11 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	}
 	else if (startStage > 0)
 	{
-		std::string minimizerFileName = "tmppaths_minimizers.txt";
+		std::string minimizerFileName = "tmppaths_minimizers0.txt";
+		if (startStage >= 2)
+		{
+			minimizerFileName = "tmppaths_minimizers2.txt";
+		}
 		std::string chunkFilename = "tmppaths" + std::to_string(startStage) + ".txt";
 		try
 		{
@@ -2121,7 +2125,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			}
 			writeStage(1, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
-			writeMinimizers("tmppaths_minimizers.txt", minimizerPositionsPerRead);
+			writeMinimizers("tmppaths_minimizers0.txt", minimizerPositionsPerRead);
 			[[fallthrough]];
 		case 1:
 			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize, numThreads);
@@ -2130,9 +2134,26 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			splitPerLength(chunksPerRead, mismatchFraction, 10, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			removeBadShortHighCoverageChunks(chunksPerRead, kmerSize);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			mergeNonexistentChunks(chunksPerRead);
+			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			writeStage(115, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+		case 115:
+			for (size_t i = 0; i < 3; i++)
+			{
+				correctChunks(chunksPerRead, minimizerPositionsPerRead, rawReadLengths, sequenceIndex, kmerSize, numThreads);
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize, numThreads);
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+				splitPerLength(chunksPerRead, 0.02, 50, kmerSize, numThreads);
+				splitPerLength(chunksPerRead, mismatchFraction, 10, kmerSize, numThreads);
+				std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+			}
+			removeBadShortHighCoverageChunks(chunksPerRead, kmerSize);
 			mergeNonexistentChunks(chunksPerRead);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
+			writeMinimizers("tmppaths_minimizers2.txt", minimizerPositionsPerRead);
 			[[fallthrough]];
 		case 2:
 			splitPerBaseCounts(sequenceIndex, rawReadLengths, chunksPerRead, kmerSize, numThreads);

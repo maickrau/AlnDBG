@@ -325,7 +325,7 @@ void iterateMinimizers(const std::string& str, const size_t kmerSize, const size
 }
 
 template <typename F>
-void iterateKmers(const TwobitString& baseSequence, const size_t start, const size_t end, const bool fw, const size_t k, F callback)
+void iterateKmersTwoBit(const TwobitString& baseSequence, const size_t start, const size_t end, const bool fw, const size_t k, F callback)
 {
 	const size_t mask = (1ull << (2ull*k))-1;
 	size_t kmer = 0;
@@ -350,6 +350,64 @@ void iterateKmers(const TwobitString& baseSequence, const size_t start, const si
 			if (m > end-k+1) continue;
 			callback(kmer, end - m + 1 - k);
 		}
+	}
+}
+
+// iterates until the k-mer starting at endPos! not k-mer ending at endPos
+template <typename F>
+void iterateKmersChar(const std::string& baseSequence, const size_t startPos, size_t endPos, const size_t k, F callback)
+{
+	if (baseSequence.size() < k) return;
+	if (endPos+k > baseSequence.size()) endPos = baseSequence.size()-k;
+	if (endPos < startPos) return;
+	const size_t mask = (1ull << (2ull*k))-1;
+	uint64_t kmer = 0;
+	for (size_t i = 0; i < k; i++)
+	{
+		kmer <<= 2;
+		switch(baseSequence[i+startPos])
+		{
+			case 'A':
+				kmer += 0;
+				break;
+			case 'C':
+				kmer += 1;
+				break;
+			case 'G':
+				kmer += 2;
+				break;
+			case 'T':
+				kmer += 3;
+				break;
+			default:
+				assert(false);
+				break;
+		}
+	}
+	callback(kmer, startPos);
+	for (size_t i = k; i < endPos-startPos+k; i++)
+	{
+		kmer <<= 2;
+		kmer &= mask;
+		switch(baseSequence[i+startPos])
+		{
+			case 'A':
+				kmer += 0;
+				break;
+			case 'C':
+				kmer += 1;
+				break;
+			case 'G':
+				kmer += 2;
+				break;
+			case 'T':
+				kmer += 3;
+				break;
+			default:
+				assert(false);
+				break;
+		}
+		callback(kmer, i-k+1+startPos);
 	}
 }
 
@@ -402,7 +460,7 @@ phmap::flat_hash_map<size_t, std::vector<std::pair<double, double>>> iterateSoli
 			size_t startPos, endPos;
 			startPos = currentPosPerOccurrence[j];
 			endPos = nextOffset;
-			iterateKmers(chunkSequences[j], startPos, endPos, true, kmerSize, [&kmers, &nextCluster, &kmerToIndex, &inContext, &currentPosPerOccurrence, &validClusters, &actualKmer, &chunkSequences, kmerSize, j, offsetBreakpoint, startPos, endPos](const size_t kmer, const size_t pos)
+			iterateKmersTwoBit(chunkSequences[j], startPos, endPos, true, kmerSize, [&kmers, &nextCluster, &kmerToIndex, &inContext, &currentPosPerOccurrence, &validClusters, &actualKmer, &chunkSequences, kmerSize, j, offsetBreakpoint, startPos, endPos](const size_t kmer, const size_t pos)
 			{
 				assert(pos < endPos-startPos);
 				assert(pos + currentPosPerOccurrence[j] < chunkSequences[j].size());

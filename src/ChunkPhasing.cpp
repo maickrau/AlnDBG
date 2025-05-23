@@ -3677,7 +3677,7 @@ void splitPerInterchunkPhasedKmers(const FastaCompressor::CompressedStringIndex&
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 			assert(!NonexistantChunk(std::get<2>(t)));
 			phmap::flat_hash_set<size_t> kmersHere;
-			iterateKmers(chunkSequences[j], 0, chunkSequences[j].size()-1, true, kmerSize, [&kmersHere](const size_t kmer, const size_t pos)
+			iterateKmersTwoBit(chunkSequences[j], 0, chunkSequences[j].size()-1, true, kmerSize, [&kmersHere](const size_t kmer, const size_t pos)
 			{
 				kmersHere.insert(kmer);
 			});
@@ -4431,7 +4431,7 @@ void splitPerNeighborForksPolyploid(const FastaCompressor::CompressedStringIndex
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 			assert(!NonexistantChunk(std::get<2>(t)));
 			phmap::flat_hash_set<size_t> kmersHere;
-			iterateKmers(chunkSequences[j], 0, chunkSequences[j].size()-1, true, kmerSize, [&kmersHere](const size_t kmer, const size_t pos)
+			iterateKmersTwoBit(chunkSequences[j], 0, chunkSequences[j].size()-1, true, kmerSize, [&kmersHere](const size_t kmer, const size_t pos)
 			{
 				kmersHere.insert(kmer);
 			});
@@ -5089,7 +5089,7 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 			assert(!NonexistantChunk(std::get<2>(t)));
 			phmap::flat_hash_set<size_t> kmersHere;
-			iterateKmers(chunkSequences[j], 0, chunkSequences[j].size()-1, true, kmerSize, [&kmersHere](const size_t kmer, const size_t pos)
+			iterateKmersTwoBit(chunkSequences[j], 0, chunkSequences[j].size()-1, true, kmerSize, [&kmersHere](const size_t kmer, const size_t pos)
 			{
 				kmersHere.insert(kmer);
 			});
