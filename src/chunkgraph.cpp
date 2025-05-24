@@ -26,6 +26,7 @@
 #include "ChunkResolution.h"
 #include "OverlapMatcher.h"
 #include "PathWalker.h"
+#include "MinimizerCorrection.h"
 
 const size_t RestartStageLatest = std::numeric_limits<size_t>::max()-1;
 
@@ -1764,6 +1765,10 @@ void fragmentChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>
 				}
 				assert(firstMinimizer != std::numeric_limits<size_t>::max());
 				assert(lastMinimizer != std::numeric_limits<size_t>::max());
+				if (!(lastMinimizer > firstMinimizer))
+				{
+					std::cerr << i << " " << j << std::endl;
+				}
 				assert(lastMinimizer > firstMinimizer);
 				for (size_t k = firstMinimizer; k < lastMinimizer; k++)
 				{
@@ -2102,15 +2107,19 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 	{
 		case 0:
 			std::cerr << "getting chunks from reads" << std::endl;
-			std::tie(chunksPerRead, minimizerPositionsPerRead) = getMinimizerBoundedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize);
-			for (size_t i = 0; i < chunksPerRead.size(); i++)
+			{
+				auto minimizers = getCorrectedMinimizers(sequenceIndex, rawReadLengths, 11, windowSize, numThreads);
+				std::tie(minimizerPositionsPerRead, chunksPerRead) = getChunksPerReadFromCorrectedMinimizers(minimizers.first, minimizers.second, rawReadLengths, 11);
+			}
+//			std::tie(chunksPerRead, minimizerPositionsPerRead) = getMinimizerBoundedChunksPerRead(sequenceIndex, rawReadLengths, numThreads, kmerSize, windowSize);
+/*			for (size_t i = 0; i < chunksPerRead.size(); i++)
 			{
 				for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 				{
 					assert((std::get<2>(chunksPerRead[i][j]) & firstBitUint64_t) == 0);
 					std::get<2>(chunksPerRead[i][j]) |= firstBitUint64_t;
 				}
-			}
+			}*/
 			{
 				size_t numChunks = 0;
 				for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -2124,13 +2133,13 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			writeMinimizers("tmppaths_minimizers.txt", minimizerPositionsPerRead);
 			[[fallthrough]];
 		case 1:
-			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize, numThreads);
-			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
+//			splitPerFirstLastKmers(sequenceIndex, chunksPerRead, kmerSize, numThreads);
+//			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			splitPerLength(chunksPerRead, 0.02, 50, kmerSize, numThreads);
 			splitPerLength(chunksPerRead, mismatchFraction, 10, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			removeBadShortHighCoverageChunks(chunksPerRead, kmerSize);
-			mergeNonexistentChunks(chunksPerRead);
+//			removeBadShortHighCoverageChunks(chunksPerRead, kmerSize);
+//			mergeNonexistentChunks(chunksPerRead);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
 			[[fallthrough]];
