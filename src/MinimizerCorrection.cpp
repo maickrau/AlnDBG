@@ -143,8 +143,8 @@ Overlap getBestOverlap(const std::vector<MinimizerIndex>& minimizerPairIndex, co
 	for (size_t i = 1; i <= activeDiagonals.size(); i++)
 	{
 		assert(i == activeDiagonals.size() || activeDiagonals[i] > activeDiagonals[i-1]);
-		if (i < activeDiagonals.size() && activeDiagonals[i] == activeDiagonals[i-1]+50) continue;
-		if (i < activeDiagonals.size() && activeDiagonals[i] == activeDiagonals[i-1]+100)
+		if (i < activeDiagonals.size() && activeDiagonals[i] == activeDiagonals[i-1]+1) continue;
+		if (i < activeDiagonals.size() && activeDiagonals[i] == activeDiagonals[i-1]+2)
 		{
 			if (std::get<0>(matchesPerDiagonal.at(activeDiagonals[i])) < std::get<1>(matchesPerDiagonal.at(activeDiagonals[i-1])) + 100) continue;
 		}
