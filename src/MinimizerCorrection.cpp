@@ -107,30 +107,51 @@ Overlap getBestOverlap(const std::vector<MinimizerIndex>& minimizerPairIndex, co
 	Overlap result;
 	result.referenceRead = referenceRead;
 	result.queryRead = queryRead;
+	phmap::flat_hash_map<int, std::tuple<int, int, size_t, std::vector<std::pair<size_t, size_t>>>> matchesPerDiagonal;
 	std::vector<std::pair<int, size_t>> diagonalMatches;
-	iterateMinimizerMatches(minimizerPairIndex, referenceRead, queryRead, [&rawMinimizers, &diagonalMatches, referenceRead, queryRead](const size_t pos, const size_t pos2)
+	iterateMinimizerMatches(minimizerPairIndex, referenceRead, queryRead, [&rawMinimizers, &diagonalMatches, &matchesPerDiagonal, referenceRead, queryRead](const size_t pos, const size_t pos2)
 	{
 		size_t refLength = rawMinimizers[referenceRead][pos].first - rawMinimizers[referenceRead][pos-1].first;
 		size_t queryLength = rawMinimizers[queryRead][pos2].first - rawMinimizers[queryRead][pos2-1].first;
 		if (refLength > queryLength*1.02+50) return;
 		if (queryLength > refLength*1.02+50) return;
 		int diagonal = (int)rawMinimizers[referenceRead][pos].first - (int)rawMinimizers[queryRead][pos2].first;
-		diagonalMatches.emplace_back(diagonal, refLength);
+		if (matchesPerDiagonal.count(diagonal/50) == 0)
+		{
+			matchesPerDiagonal[diagonal/50] = std::make_tuple(diagonal, diagonal, refLength, std::vector<std::pair<size_t, size_t>>{ { pos, pos2 } } );
+		}
+		else
+		{
+			auto& t = matchesPerDiagonal[diagonal/50];
+			std::get<0>(t) = std::min(std::get<0>(t), diagonal);
+			std::get<1>(t) = std::max(std::get<1>(t), diagonal);
+			std::get<2>(t) += refLength;
+			std::get<3>(t).emplace_back(pos, pos2);
+		}
 	});
-	if (diagonalMatches.size() == 0) return result;
-	std::sort(diagonalMatches.begin(), diagonalMatches.end());
-	int bestDiagonalStart = diagonalMatches[0].first;
-	int bestDiagonalEnd = diagonalMatches[0].first;
-	size_t bestDiagonalLengthSum = diagonalMatches[0].second;
-	size_t clusterStart = 0;
-	for (size_t i = 1; i <= diagonalMatches.size(); i++)
+	if (matchesPerDiagonal.size() == 0) return result;
+	std::vector<int> activeDiagonals;
+	for (const auto& pair : matchesPerDiagonal)
 	{
-		assert(i == diagonalMatches.size() || diagonalMatches[i].first >= diagonalMatches[i-1].first);
-		if (i < diagonalMatches.size() && diagonalMatches[i].first < diagonalMatches[i-1].first+100) continue;
+		activeDiagonals.emplace_back(pair.first);
+	}
+	std::sort(activeDiagonals.begin(), activeDiagonals.end());
+	size_t bestDiagonalStart = 0;
+	size_t bestDiagonalEnd = 0;
+	size_t bestDiagonalLengthSum = 0;
+	size_t clusterStart = 0;
+	for (size_t i = 1; i <= activeDiagonals.size(); i++)
+	{
+		assert(i == activeDiagonals.size() || activeDiagonals[i] > activeDiagonals[i-1]);
+		if (i < activeDiagonals.size() && activeDiagonals[i] == activeDiagonals[i-1]+50) continue;
+		if (i < activeDiagonals.size() && activeDiagonals[i] == activeDiagonals[i-1]+100)
+		{
+			if (std::get<0>(matchesPerDiagonal.at(activeDiagonals[i])) < std::get<1>(matchesPerDiagonal.at(activeDiagonals[i-1])) + 100) continue;
+		}
 		size_t lengthSumHere = 0;
 		for (size_t j = clusterStart; j < i; j++)
 		{
-			lengthSumHere += diagonalMatches[j].second;
+			lengthSumHere += std::get<2>(matchesPerDiagonal.at(activeDiagonals[j]));
 		}
 		if (lengthSumHere == bestDiagonalLengthSum)
 		{
@@ -139,8 +160,8 @@ Overlap getBestOverlap(const std::vector<MinimizerIndex>& minimizerPairIndex, co
 		}
 		if (lengthSumHere > bestDiagonalLengthSum)
 		{
-			bestDiagonalStart = diagonalMatches[clusterStart].first;
-			bestDiagonalEnd = diagonalMatches[i-1].first;
+			bestDiagonalStart = clusterStart;
+			bestDiagonalEnd = i;
 			bestDiagonalLengthSum = lengthSumHere;
 		}
 		clusterStart = i;
@@ -148,17 +169,13 @@ Overlap getBestOverlap(const std::vector<MinimizerIndex>& minimizerPairIndex, co
 	if (bestDiagonalEnd == bestDiagonalStart) return result;
 	if (bestDiagonalLengthSum < 5000) return result;
 	std::vector<std::pair<size_t, size_t>> matches;
-	iterateMinimizerMatches(minimizerPairIndex, referenceRead, queryRead, [&rawMinimizers, &matches, referenceRead, queryRead, bestDiagonalStart, bestDiagonalEnd](const size_t pos, const size_t pos2)
+	for (size_t i = bestDiagonalStart; i < bestDiagonalEnd; i++)
 	{
-		size_t refLength = rawMinimizers[referenceRead][pos].first - rawMinimizers[referenceRead][pos-1].first;
-		size_t queryLength = rawMinimizers[queryRead][pos2].first - rawMinimizers[queryRead][pos2-1].first;
-		if (refLength > queryLength*1.02+50) return;
-		if (queryLength > refLength*1.02+50) return;
-		int diagonal = (int)rawMinimizers[referenceRead][pos].first - (int)rawMinimizers[queryRead][pos2].first;
-		if (diagonal < bestDiagonalStart) return;
-		if (diagonal > bestDiagonalEnd) return;
-		matches.emplace_back(pos, pos2);
-	});
+		for (const auto& pair : std::get<3>(matchesPerDiagonal.at(activeDiagonals[i])))
+		{
+			matches.emplace_back(pair.first, pair.second);
+		}
+	}
 	phmap::flat_hash_set<std::pair<size_t, size_t>> matchPoses;
 	for (auto pair : matches)
 	{
