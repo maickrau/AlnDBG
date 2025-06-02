@@ -2138,7 +2138,7 @@ void makeGraph(const FastaCompressor::CompressedStringIndex& sequenceIndex, cons
 			splitPerLength(chunksPerRead, 0.02, 50, kmerSize, numThreads);
 			splitPerLength(chunksPerRead, mismatchFraction, 10, kmerSize, numThreads);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
-			removeBadShortHighCoverageChunks(chunksPerRead, kmerSize);
+			removeBadShortHighCoverageChunks(chunksPerRead, 11);
 			mergeNonexistentChunks(chunksPerRead);
 			std::cerr << "elapsed time " << formatTime(programStartTime, getTime()) << std::endl;
 			writeStage(2, chunksPerRead, sequenceIndex, rawReadLengths, approxOneHapCoverage, kmerSize);
