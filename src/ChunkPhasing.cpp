@@ -1808,6 +1808,33 @@ void checkAndFixPalindromicChunk(std::vector<std::vector<size_t>>& clusters, con
 	}
 }
 
+void fixFalseSplittedClusters(std::vector<std::vector<size_t>>& clusters)
+{
+	assert(clusters.size() >= 1);
+	if (clusters.size() == 1) return;
+	size_t countBig = 0;
+	for (size_t i = 0; i < clusters.size(); i++)
+	{
+		if (clusters[i].size() == 1) continue;
+		countBig += 1;
+	}
+	if (countBig >= 2) return;
+	assert(countBig == 1 || countBig == 0);
+	for (size_t i = 1; i < clusters.size(); i++)
+	{
+		if (clusters[i].size() > clusters[0].size())
+		{
+			std::swap(clusters[i], clusters[0]);
+		}
+	}
+	for (size_t i = 1; i < clusters.size(); i++)
+	{
+		clusters[0].insert(clusters[0].end(), clusters[i].begin(), clusters[i].end());
+	}
+	clusters.resize(1);
+	return;
+}
+
 void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
 {
 	const size_t minSolidBaseCoverage = 10;
@@ -1988,47 +2015,55 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			std::vector<std::vector<size_t>> clusters = trySNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 			if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 			assert(clusters.size() >= 1);
+			fixFalseSplittedClusters(clusters);
 			if (clusters.size() == 1)
 			{
 				clusters = tryPairPhasingGroupSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
+				fixFalseSplittedClusters(clusters);
 			}
 			if (clusters.size() == 1)
 			{
 				clusters = tryTripletSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate, tripletQueues, tripletQueuesMutex);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
+				fixFalseSplittedClusters(clusters);
 			}
 			if (clusters.size() == 1 && chunkBeingDone.size() > 1000)
 			{
 				clusters = tryPairPhasingGroupSplittingDiscardSingletons(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
+				fixFalseSplittedClusters(clusters);
 			}
 			if (clusters.size() == 1)
 			{
 				clusters = tryOccurrenceLinkageSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
+				fixFalseSplittedClusters(clusters);
 			}
 			if (clusters.size() == 1)
 			{
 				clusters = tryMultinomiallySignificantSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
+				fixFalseSplittedClusters(clusters);
 			}
 			if (clusters.size() == 1 && chunkBeingDone.size() > 1000 && estimatedAverageErrorRate < mismatchFraction)
 			{
 				clusters = tryMultinomiallySignificantSNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
+				fixFalseSplittedClusters(clusters);
 			}
 			if (clusters.size() == 1 && chunkBeingDone.size() > 1000 && estimatedAverageErrorRate < mismatchFraction)
 			{
 				clusters = trySNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
+				fixFalseSplittedClusters(clusters);
 			}
 			auto endTime = getTime();
 			// sort smallest last, so emplace-pop-swap puts biggest on top of chunksNeedProcessing
