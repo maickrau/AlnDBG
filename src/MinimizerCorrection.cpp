@@ -680,7 +680,7 @@ std::vector<size_t> findKmerPositions(const std::string& sequence, const size_t 
 	return result;
 }
 
-void filterOutEditsWhereKmerIsNotFound(std::vector<std::vector<Edit>>& validEdits, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::pair<size_t, size_t>>>& rawMinimizers, const size_t kmerSize, const size_t numThreads)
+void addEditKmerLocations(std::vector<std::vector<Edit>>& validEdits, const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<std::vector<std::pair<size_t, size_t>>>& rawMinimizers, const size_t kmerSize, const size_t numThreads)
 {
 	assert(rawMinimizers.size() == sequenceIndex.size()*2);
 	assert(validEdits.size() == sequenceIndex.size());
@@ -695,6 +695,91 @@ void filterOutEditsWhereKmerIsNotFound(std::vector<std::vector<Edit>>& validEdit
 			assert(validEdits[i][j].actualKmerPositionsInReference.size() == validEdits[i][j].replacementKmers.size());
 			assert(validEdits[i][j].actualKmerPositionsInReference[0] == rawMinimizers[i][validEdits[i][j].startIndex].first);
 			assert(validEdits[i][j].actualKmerPositionsInReference.back() == rawMinimizers[i][validEdits[i][j].endIndex].first);
+		}
+	});
+}
+
+void splitEditsToIndividualParts(std::vector<std::vector<Edit>>& validEdits, const std::vector<std::vector<std::pair<size_t, size_t>>>& rawMinimizers, const size_t numThreads)
+{
+	assert(rawMinimizers.size() == validEdits.size()*2);
+	iterateMultithreaded(0, validEdits.size(), numThreads, [&validEdits, &rawMinimizers](const size_t i)
+	{
+		if (validEdits[i].size() == 0) return;
+		for (size_t j = validEdits[i].size()-1; j < validEdits[i].size(); j--)
+		{
+			phmap::flat_hash_map<size_t, size_t> kmerPositionInReference;
+			for (size_t pos = validEdits[i][j].startIndex; pos <= validEdits[i][j].endIndex; pos++)
+			{
+				if (kmerPositionInReference.count(rawMinimizers[i][pos].first) == 0)
+				{
+					kmerPositionInReference[rawMinimizers[i][pos].first] = pos-validEdits[i][j].startIndex;
+				}
+				else
+				{
+					kmerPositionInReference[rawMinimizers[i][pos].first] = std::numeric_limits<size_t>::max();
+				}
+			}
+			std::vector<std::pair<size_t, size_t>> matches;
+			for (size_t pos = 0; pos < validEdits[i][j].actualKmerPositionsInReference.size(); pos++)
+			{
+				if (kmerPositionInReference.count(validEdits[i][j].actualKmerPositionsInReference[pos]) == 0) continue;
+				if (kmerPositionInReference.at(validEdits[i][j].actualKmerPositionsInReference[pos]) == std::numeric_limits<size_t>::max()) continue;
+				matches.emplace_back(kmerPositionInReference.at(validEdits[i][j].actualKmerPositionsInReference[pos]), pos);
+			}
+			if (matches.size() <= 2) continue;
+			std::sort(matches.begin(), matches.end());
+			if (matches[0].first != 0) continue;
+			if (matches[0].second != 0) continue;
+			if (matches.back().first != validEdits[i][j].endIndex-validEdits[i][j].startIndex) continue;
+			if (matches.back().second+1 != validEdits[i][j].actualKmerPositionsInReference.size()) continue;
+			bool allGood = true;
+			for (size_t k = 1; k < matches.size(); k++)
+			{
+				if (matches[k].first <= matches[k-1].first) allGood = false;
+				if (matches[k].second <= matches[k-1].second) allGood = false;
+			}
+			if (!allGood) continue;
+			std::string info = "split edit read " + std::to_string(i) + " poses";
+			for (size_t pos = validEdits[i][j].startIndex; pos <= validEdits[i][j].endIndex; pos++)
+			{
+				info += " " + std::to_string(rawMinimizers[i][pos].first);
+			}
+			info += " vs";
+			for (size_t pos : validEdits[i][j].actualKmerPositionsInReference)
+			{
+				info += " " + std::to_string(pos);
+			}
+			info += " matches";
+			for (auto match : matches)
+			{
+				info += " " + std::to_string(match.first) + "," + std::to_string(match.second);
+			}
+			info += "\n";
+			std::cerr << info;
+			for (size_t k = 1; k < matches.size(); k++)
+			{
+				validEdits[i].emplace_back();
+				validEdits[i].back().startIndex = validEdits[i][j].startIndex+matches[k-1].first;
+				validEdits[i].back().endIndex = validEdits[i][j].startIndex+matches[k].first;
+				validEdits[i].back().replacementKmers.insert(validEdits[i].back().replacementKmers.end(), validEdits[i][j].replacementKmers.begin()+matches[k-1].second, validEdits[i][j].replacementKmers.begin()+matches[k].second+1);
+				validEdits[i].back().replacementKmerPositions.insert(validEdits[i].back().replacementKmerPositions.end(), validEdits[i][j].replacementKmerPositions.begin()+matches[k-1].second, validEdits[i][j].replacementKmerPositions.begin()+matches[k].second+1);
+				validEdits[i].back().actualKmerPositionsInReference.insert(validEdits[i].back().actualKmerPositionsInReference.end(), validEdits[i][j].actualKmerPositionsInReference.begin()+matches[k-1].second, validEdits[i][j].actualKmerPositionsInReference.begin()+matches[k].second+1);
+			}
+			std::swap(validEdits[i][j], validEdits[i].back());
+			validEdits[i].pop_back();
+		}
+		std::sort(validEdits[i].begin(), validEdits[i].end());
+	});
+}
+
+void filterOutEditsWhereKmerIsNotFound(std::vector<std::vector<Edit>>& validEdits, const std::vector<std::vector<std::pair<size_t, size_t>>>& rawMinimizers, const size_t numThreads)
+{
+	assert(rawMinimizers.size() == validEdits.size()*2);
+	iterateMultithreaded(0, validEdits.size(), numThreads, [&validEdits, &rawMinimizers](const size_t i)
+	{
+		if (validEdits[i].size() == 0) return;
+		for (size_t j = validEdits[i].size()-1; j < validEdits[i].size(); j--)
+		{
 			bool allGood = true;
 			for (size_t k = 0; k < validEdits[i][j].actualKmerPositionsInReference.size(); k++)
 			{
@@ -730,7 +815,9 @@ std::vector<std::vector<std::pair<size_t, size_t>>> getCorrections(const std::ve
 {
 	assert(rawMinimizers.size() == 2*overlaps.size());
 	std::vector<std::vector<Edit>> validEdits = getValidEdits(rawMinimizers, overlaps, numThreads);
-	filterOutEditsWhereKmerIsNotFound(validEdits, sequenceIndex, rawMinimizers, kmerSize, numThreads);
+	addEditKmerLocations(validEdits, sequenceIndex, rawMinimizers, kmerSize, numThreads);
+	splitEditsToIndividualParts(validEdits, rawMinimizers, numThreads);
+	filterOutEditsWhereKmerIsNotFound(validEdits, rawMinimizers, numThreads);
 	size_t countFilteredEdits = 0;
 	for (size_t i = 0; i < validEdits.size(); i++)
 	{
