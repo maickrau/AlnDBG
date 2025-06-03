@@ -758,6 +758,7 @@ void splitEditsToIndividualParts(std::vector<std::vector<Edit>>& validEdits, con
 			std::cerr << info;
 			for (size_t k = 1; k < matches.size(); k++)
 			{
+				if (matches[k].first == matches[k-1].first+1 && matches[k].second == matches[k-1].second+1) continue;
 				validEdits[i].emplace_back();
 				validEdits[i].back().startIndex = validEdits[i][j].startIndex+matches[k-1].first;
 				validEdits[i].back().endIndex = validEdits[i][j].startIndex+matches[k].first;
@@ -869,6 +870,7 @@ std::vector<std::vector<std::pair<size_t, size_t>>> getCorrections(const std::ve
 
 std::pair<std::vector<std::vector<size_t>>, std::vector<std::vector<size_t>>> getCorrectedMinimizers(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, const size_t kmerSize, const size_t windowSize, const size_t numThreads)
 {
+	const size_t numCorrectionRounds = 5;
 	auto startTime = getTime();
 	std::vector<std::vector<std::pair<size_t, size_t>>> rawMinimizers;
 	rawMinimizers.resize(sequenceIndex.size());
@@ -879,28 +881,33 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<std::vector<size_t>>> ge
 		rawMinimizers[i] = getRawMinimizers(seq, kmerSize, windowSize);
 	});
 	auto minimizerTime = getTime();
-	makeReverseReads(rawMinimizers, rawReadLengths, kmerSize);
-	std::cerr << "get overlaps" << std::endl;
-	auto overlaps = getOverlaps(rawMinimizers, numThreads);
-	auto overlapTime = getTime();
-	std::cerr << "get corrected minimizers" << std::endl;
-	auto correctedMinimizers = getCorrections(rawMinimizers, sequenceIndex, overlaps, kmerSize, numThreads);
-	auto correctionTime = getTime();
-	assert(correctedMinimizers.size() == sequenceIndex.size());
-	std::pair<std::vector<std::vector<size_t>>, std::vector<std::vector<size_t>>> result;
-	result.first.resize(correctedMinimizers.size());
-	result.second.resize(correctedMinimizers.size());
-	for (size_t i = 0; i < correctedMinimizers.size(); i++)
+	std::cerr << "raw minimizers took " << formatTime(startTime, minimizerTime) << std::endl;
+	for (size_t round = 0; round < numCorrectionRounds; round++)
 	{
-		for (auto pair : correctedMinimizers[i])
+		auto overlapTime = getTime();
+		makeReverseReads(rawMinimizers, rawReadLengths, kmerSize);
+		std::cerr << "correction round " << round << "/" << numCorrectionRounds << std::endl;
+		std::cerr << "get overlaps" << std::endl;
+		auto overlaps = getOverlaps(rawMinimizers, numThreads);
+		auto correctionTime = getTime();
+		std::cerr << "get corrected minimizers" << std::endl;
+		rawMinimizers = getCorrections(rawMinimizers, sequenceIndex, overlaps, kmerSize, numThreads);
+		auto doneTime = getTime();
+		assert(rawMinimizers.size() == sequenceIndex.size());
+		std::cerr << "correction round " << round << " overlaps took " << formatTime(overlapTime, correctionTime) << " correction took " << formatTime(correctionTime, doneTime) << std::endl;
+	}
+	auto endTime = getTime();
+	std::pair<std::vector<std::vector<size_t>>, std::vector<std::vector<size_t>>> result;
+	result.first.resize(rawMinimizers.size());
+	result.second.resize(rawMinimizers.size());
+	for (size_t i = 0; i < rawMinimizers.size(); i++)
+	{
+		for (auto pair : rawMinimizers[i])
 		{
 			result.first[i].emplace_back(pair.first);
 			result.second[i].emplace_back(pair.second);
 		}
 	}
-	std::cerr << "raw minimizers took " << formatTime(startTime, minimizerTime) << std::endl;
-	std::cerr << "overlaps took " << formatTime(minimizerTime, overlapTime) << std::endl;
-	std::cerr << "correction took " << formatTime(overlapTime, correctionTime) << std::endl;
 	return result;
 }
 
