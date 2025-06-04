@@ -497,6 +497,7 @@ size_t findKmerPosition(const std::string& sequence, const size_t startPosition,
 {
 	const uint64_t mask = (1ull << (2ull*kmerSize)) - 1;
 	assert(startPosition >= kmerSize/2);
+	if (endPosition == startPosition) return std::numeric_limits<size_t>::max();
 	assert(endPosition > startPosition);
 	assert(sequence.size() >= endPosition+kmerSize/2);
 	uint64_t kmerHere = 0;
@@ -666,14 +667,18 @@ std::vector<size_t> findKmerPositions(const std::string& sequence, const size_t 
 		{
 			checkEnd = endPosition-1;
 		}
-		size_t kmerPos = findKmerPosition(sequence, checkStart, checkEnd, replacementKmers[j], kmerSize);
-		if (kmerPos == std::numeric_limits<size_t>::max())
+		size_t kmerPos = std::numeric_limits<size_t>::max();
+		if (checkEnd > checkStart)
 		{
-			kmerPos = findKmerPositionWithEdits(sequence, checkStart, checkEnd, replacementKmers[j], kmerSize, 1, 1);
-		}
-		if (kmerPos == std::numeric_limits<size_t>::max())
-		{
-			kmerPos = findKmerPositionWithEdits(sequence, checkStart, checkEnd, replacementKmers[j], kmerSize, 2, 2);
+			kmerPos = findKmerPosition(sequence, checkStart, checkEnd, replacementKmers[j], kmerSize);
+			if (kmerPos == std::numeric_limits<size_t>::max())
+			{
+				kmerPos = findKmerPositionWithEdits(sequence, checkStart, checkEnd, replacementKmers[j], kmerSize, 1, 1);
+			}
+			if (kmerPos == std::numeric_limits<size_t>::max())
+			{
+				kmerPos = findKmerPositionWithEdits(sequence, checkStart, checkEnd, replacementKmers[j], kmerSize, 2, 2);
+			}
 		}
 		result[j] = kmerPos;
 	}
