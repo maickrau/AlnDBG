@@ -305,22 +305,50 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 		}
 		maxDistance *= mismatchFraction;
 		maxDistance = std::max(maxDistance, mismatchFloor);
-		std::vector<size_t> parent = getFastTransitiveClosure(countsPerOccurrence.size(), maxDistance, [&countsPerOccurrence](const size_t left, const size_t right, const size_t maxDist)
+		std::vector<size_t> orderedOccurrences;
+		for (size_t j = 0; j < countsPerOccurrence.size(); j++)
+		{
+			orderedOccurrences.emplace_back(j);
+		}
+		std::sort(orderedOccurrences.begin(), orderedOccurrences.end(), [&countsPerOccurrence](const size_t left, const size_t right) { return countsPerOccurrence[left] < countsPerOccurrence[right]; });
+		std::vector<size_t> parent;
+		for (size_t j = 0; j < countsPerOccurrence.size(); j++)
+		{
+			parent.emplace_back(j);
+		}
+		std::vector<size_t> uniqueIndices;
+		uniqueIndices.emplace_back(orderedOccurrences[0]);
+		for (size_t j = 1; j < orderedOccurrences.size(); j++)
+		{
+			if (countsPerOccurrence[orderedOccurrences[j-1]] != countsPerOccurrence[orderedOccurrences[j]])
+			{
+				uniqueIndices.emplace_back(orderedOccurrences[j]);
+				continue;
+			}
+			merge(parent, orderedOccurrences[j-1], orderedOccurrences[j]);
+		}
+		std::string info = "chunk with coverage " + std::to_string(parent.size()) + " has " + std::to_string(uniqueIndices.size()) + " uniques\n";
+		std::cerr << info;
+		std::vector<size_t> uniqueParent = getFastTransitiveClosure(uniqueIndices.size(), maxDistance, [&countsPerOccurrence, &uniqueIndices](const size_t left, const size_t right, const size_t maxDist)
 		{
 			size_t result = 0;
 			for (size_t c = 0; c < 4; c++)
 			{
-				if (countsPerOccurrence[left][c] > countsPerOccurrence[right][c])
+				if (countsPerOccurrence[uniqueIndices[left]][c] > countsPerOccurrence[uniqueIndices[right]][c])
 				{
-					result += countsPerOccurrence[left][c] - countsPerOccurrence[right][c];
+					result += countsPerOccurrence[uniqueIndices[left]][c] - countsPerOccurrence[uniqueIndices[right]][c];
 				}
 				else
 				{
-					result += countsPerOccurrence[right][c] - countsPerOccurrence[left][c];
+					result += countsPerOccurrence[uniqueIndices[right]][c] - countsPerOccurrence[uniqueIndices[left]][c];
 				}
 			}
 			return result;
 		});
+		for (size_t i = 0; i < uniqueParent.size(); i++)
+		{
+			merge(parent, uniqueIndices[i], uniqueIndices[find(uniqueParent, i)]);
+		}
 		{
 			std::lock_guard<std::mutex> lock { resultMutex };
 			phmap::flat_hash_map<size_t, size_t> keyToNode;
