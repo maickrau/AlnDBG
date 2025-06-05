@@ -278,7 +278,7 @@ void splitPerBaseCounts(const FastaCompressor::CompressedStringIndex& sequenceIn
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 			assert(!NonexistantChunk(std::get<2>(t)));
-			std::string chunkSequence = getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
+			std::string chunkSequence = getChunkSequenceMaybeMemoized(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second);
 			maxDistance = std::max(maxDistance, chunkSequence.size());
 			assert(chunkSequence.size() == std::get<1>(t)-std::get<0>(t)+1);
 			countsPerOccurrence[j].resize(4);
