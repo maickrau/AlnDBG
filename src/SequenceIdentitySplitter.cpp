@@ -91,7 +91,7 @@ void splitPerSequenceIdentityRoughly(const FastaCompressor::CompressedStringInde
 		{
 			auto t = chunksPerRead[occurrencesPerChunk[i][j].first][occurrencesPerChunk[i][j].second];
 			assert(!NonexistantChunk(std::get<2>(t)));
-			sequences.emplace_back(getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
+			sequences.emplace_back(getChunkSequenceMaybeMemoized(sequenceIndex, rawReadLengths, chunksPerRead, occurrencesPerChunk[i][j].first, occurrencesPerChunk[i][j].second));
 			assert(j == 0 || sequences[j].size() >= sequences[j-1].size());
 			if (j > 0 && sequences.back().size() > sequences[j-1].size())
 			{
