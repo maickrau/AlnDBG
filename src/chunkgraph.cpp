@@ -1968,27 +1968,33 @@ void resplitFalselyMergedChunks(std::vector<std::vector<std::tuple<size_t, size_
 
 void removeBadShortHighCoverageChunks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t kmerSize)
 {
-	std::vector<size_t> coverage;
-	std::vector<bool> hasAnyLong;
+	std::vector<size_t> shortCoverage;
+	std::vector<size_t> longCoverage;
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
 	{
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
 			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
-			while (coverage.size() <= chunk) coverage.emplace_back(0);
-			while (hasAnyLong.size() <= chunk) hasAnyLong.emplace_back(false);
-			coverage[chunk] += 1;
-			if (std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) >= 2*kmerSize) hasAnyLong[chunk] = true;
+			while (shortCoverage.size() <= chunk) shortCoverage.emplace_back(0);
+			while (longCoverage.size() <= chunk) longCoverage.emplace_back(0);
+			if (std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) >= 2*kmerSize)
+			{
+				longCoverage[chunk] += 1;
+			}
+			else
+			{
+				shortCoverage[chunk] += 1;
+			}
 		}
 	}
 	std::vector<bool> remove;
-	remove.resize(hasAnyLong.size(), false);
-	for (size_t i = 0; i < hasAnyLong.size(); i++)
+	remove.resize(shortCoverage.size(), false);
+	for (size_t i = 0; i < shortCoverage.size(); i++)
 	{
-		if (hasAnyLong[i]) continue;
-		if (coverage[i] < 1000000) continue;
-		std::cerr << "remove short chunk " << i << " with coverage " << coverage[i] << std::endl;
+		if (shortCoverage[i] < 1000000) continue;
+		if (longCoverage[i] > 100000) continue;
+		std::cerr << "remove short chunk " << i << " with coverages " << shortCoverage[i] << " " << longCoverage[i] << std::endl;
 		remove[i] = true;
 	}
 	for (size_t i = 0; i < chunksPerRead.size(); i++)
@@ -1996,6 +2002,7 @@ void removeBadShortHighCoverageChunks(std::vector<std::vector<std::tuple<size_t,
 		for (size_t j = 0; j < chunksPerRead[i].size(); j++)
 		{
 			if (NonexistantChunk(std::get<2>(chunksPerRead[i][j]))) continue;
+			if (std::get<1>(chunksPerRead[i][j]) - std::get<0>(chunksPerRead[i][j]) >= 2*kmerSize) continue;
 			size_t chunk = std::get<2>(chunksPerRead[i][j]) & maskUint64_t;
 			if (remove[chunk])
 			{
