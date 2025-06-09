@@ -102,7 +102,7 @@ void iterateMinimizerMatches(const std::vector<MinimizerIndex>& minimizerPairInd
 	}
 }
 
-Overlap getBestOverlap(const std::vector<MinimizerIndex>& minimizerPairIndex, const std::vector<std::vector<std::pair<size_t, size_t>>>& rawMinimizers, const size_t referenceRead, const size_t queryRead)
+Overlap getBestOverlap(const std::vector<MinimizerIndex>& minimizerPairIndex, const std::vector<size_t>& rawReadLengths, const std::vector<std::vector<std::pair<size_t, size_t>>>& rawMinimizers, const size_t referenceRead, const size_t queryRead)
 {
 	Overlap result;
 	result.referenceRead = referenceRead;
@@ -185,6 +185,15 @@ Overlap getBestOverlap(const std::vector<MinimizerIndex>& minimizerPairIndex, co
 	std::vector<std::pair<size_t, size_t>> matchPosesVec { matchPoses.begin(), matchPoses.end() };
 	std::sort(matchPosesVec.begin(), matchPosesVec.end());
 	removeConflictMatches(matchPosesVec);
+	if (matchPosesVec.size() == 0) return result;
+	if (rawMinimizers[referenceRead][matchPosesVec[0].first].first > 10000 && rawMinimizers[queryRead][matchPosesVec[0].second].first > 10000)
+	{
+		return result;
+	}
+	if (rawMinimizers[referenceRead][matchPosesVec.back().first].first+10000 < rawReadLengths[referenceRead] && rawMinimizers[queryRead][matchPosesVec.back().second].first+10000 < rawReadLengths[queryRead])
+	{
+		return result;
+	}
 	result.matches = matchPosesVec;
 	return result;
 }
@@ -231,7 +240,7 @@ MinimizerIndex getReadMinimizerIndex(const phmap::flat_hash_map<std::pair<size_t
 	return result;
 }
 
-std::vector<std::vector<Overlap>> getOverlaps(const std::vector<std::vector<std::pair<size_t, size_t>>> rawMinimizers, const size_t numThreads)
+std::vector<std::vector<Overlap>> getOverlaps(const std::vector<std::vector<std::pair<size_t, size_t>>> rawMinimizers, const std::vector<size_t>& rawReadLengths, const size_t numThreads)
 {
 	assert(rawMinimizers.size() % 2 == 0);
 	std::vector<MinimizerIndex> minimizerPairIndex;
@@ -256,7 +265,7 @@ std::vector<std::vector<Overlap>> getOverlaps(const std::vector<std::vector<std:
 	}
 	std::vector<std::vector<Overlap>> result;
 	result.resize(rawMinimizers.size()/2);
-	iterateMultithreaded(0, rawMinimizers.size()/2, numThreads, [&result, &rawMinimizers, &minimizerPairIndex, &readsWithMinimizerPair](const size_t i)
+	iterateMultithreaded(0, rawMinimizers.size()/2, numThreads, [&result, &rawMinimizers, &rawReadLengths, &minimizerPairIndex, &readsWithMinimizerPair](const size_t i)
 	{
 		phmap::flat_hash_set<size_t> readsPossiblyOverlapping;
 		for (const auto& pair : minimizerPairIndex[i].kmerPairs)
@@ -267,7 +276,7 @@ std::vector<std::vector<Overlap>> getOverlaps(const std::vector<std::vector<std:
 		}
 		for (size_t read : readsPossiblyOverlapping)
 		{
-			auto overlap = getBestOverlap(minimizerPairIndex, rawMinimizers, i, read);
+			auto overlap = getBestOverlap(minimizerPairIndex, rawReadLengths, rawMinimizers, i, read);
 			if (overlap.matches.size() >= 2)
 			{
 				result[i].emplace_back(overlap);
@@ -893,7 +902,7 @@ std::pair<std::vector<std::vector<size_t>>, std::vector<std::vector<size_t>>> ge
 		makeReverseReads(rawMinimizers, rawReadLengths, kmerSize);
 		std::cerr << "correction round " << round << "/" << numCorrectionRounds << std::endl;
 		std::cerr << "get overlaps" << std::endl;
-		auto overlaps = getOverlaps(rawMinimizers, numThreads);
+		auto overlaps = getOverlaps(rawMinimizers, rawReadLengths, numThreads);
 		auto correctionTime = getTime();
 		std::cerr << "get corrected minimizers" << std::endl;
 		rawMinimizers = getCorrections(rawMinimizers, sequenceIndex, overlaps, kmerSize, numThreads);
