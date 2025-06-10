@@ -434,7 +434,6 @@ void fixYForks(std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& c
 	phmap::flat_hash_map<uint64_t, size_t> forkBranchLongestHomozygousChunks;
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
-		uint64_t lastLongNode = std::numeric_limits<uint64_t>::max();
 		std::vector<uint64_t> longNodes;
 		std::vector<std::pair<size_t, size_t>> unitigChunksInLongnode;
 		for (size_t j = 0; j < readPaths[i].size(); j++)

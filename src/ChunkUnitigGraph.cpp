@@ -1229,7 +1229,6 @@ std::pair<std::vector<size_t>, phmap::flat_hash_map<std::pair<uint64_t, uint64_t
 		{
 			if (NonexistantChunk(std::get<2>(fixedChunksPerRead[read][j]))) continue;
 			size_t chunk = std::get<2>(fixedChunksPerRead[read][j]) & maskUint64_t;
-			bool fw = std::get<2>(fixedChunksPerRead[read][j]) & firstBitUint64_t;
 			std::pair<size_t, size_t> firstAndLast = firstAndLastMinimizerWithinSpan(minimizerPositionsPerRead[read], std::get<0>(fixedChunksPerRead[read][j]), std::get<1>(fixedChunksPerRead[read][j]), kmerSize);
 			size_t countMinimizers = firstAndLast.second - firstAndLast.first + 1;
 			assert(countMinimizers >= 2);
@@ -1245,8 +1244,6 @@ std::pair<std::vector<size_t>, phmap::flat_hash_map<std::pair<uint64_t, uint64_t
 			if (NonexistantChunk(std::get<2>(fixedChunksPerRead[read][j]))) continue;
 			size_t currchunk = std::get<2>(fixedChunksPerRead[read][j]) & maskUint64_t;
 			size_t prevchunk = std::get<2>(fixedChunksPerRead[read][j-1]) & maskUint64_t;
-			bool currfw = std::get<2>(fixedChunksPerRead[read][j]) & firstBitUint64_t;
-			bool prevfw = std::get<2>(fixedChunksPerRead[read][j-1]) & firstBitUint64_t;
 			assert(std::get<1>(fixedChunksPerRead[read][j-1]) >= std::get<0>(fixedChunksPerRead[read][j]));
 			std::pair<size_t, size_t> firstAndLast = firstAndLastMinimizerWithinSpan(minimizerPositionsPerRead[read], std::get<0>(fixedChunksPerRead[read][j]), std::get<1>(fixedChunksPerRead[read][j-1]), kmerSize);
 			assert(firstAndLast.second >= firstAndLast.first);

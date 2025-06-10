@@ -182,7 +182,7 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 		merge(parent, anchors[1], anchors[2]);
 	}
 	std::mutex resultMutex;
-	iterateMultithreaded(0, (itemCount+chunkSize-1)/chunkSize, numThreads, [&resultMutex, &clusterExample, &clusterBins, &clusterAdditionals, &clusterMaxDistance, &parent, &binCheckOrder, &anchors, distanceFunction, allowedPairwiseDistanceFunction, maxAllowedDistance, clusteringDistance, maxDistanceEver, itemCount](const size_t blockindex)
+	iterateMultithreaded(0, (itemCount+chunkSize-1)/chunkSize, numThreads, [&resultMutex, &clusterExample, &clusterBins, &clusterAdditionals, &clusterMaxDistance, &parent, &anchors, distanceFunction, allowedPairwiseDistanceFunction, maxAllowedDistance, clusteringDistance, maxDistanceEver, itemCount](const size_t blockindex)
 	{
 		for (size_t i = blockindex*chunkSize; i < blockindex*chunkSize+chunkSize && i < itemCount; i++)
 		{
@@ -217,12 +217,12 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 				int dim1 = (int)binIndices[0] + (int)offset[0];
 				int dim2 = (int)binIndices[1] + (int)offset[1];
 				int dim3 = (int)binIndices[2] + (int)offset[2];
-				if (dim1 < 0 || dim1 >= clusterBins.size()) continue;
-				if (dim2 < 0 || dim2 >= clusterBins.size()) continue;
-				if (dim3 < 0 || dim3 >= clusterBins.size()) continue;
-				assert(dim1 < clusterBins.size());
-				assert(dim2 < clusterBins[dim1].size());
-				assert(dim3 < clusterBins[dim1][dim2].size());
+				if (dim1 < 0 || dim1 >= (int)clusterBins.size()) continue;
+				if (dim2 < 0 || dim2 >= (int)clusterBins.size()) continue;
+				if (dim3 < 0 || dim3 >= (int)clusterBins.size()) continue;
+				assert(dim1 < (int)clusterBins.size());
+				assert(dim2 < (int)clusterBins[dim1].size());
+				assert(dim3 < (int)clusterBins[dim1][dim2].size());
 				size_t clusterIndex = 0;
 				while (true)
 				{
@@ -296,16 +296,16 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 		{
 			int otherDimOne = (int)clusterDimOne + offset[0];
 			if (otherDimOne < 0) continue;
-			if (otherDimOne >= clusterBins.size()) continue;
+			if (otherDimOne >= (int)clusterBins.size()) continue;
 			for (size_t clusterDimTwo = 0; clusterDimTwo < clusterBins.size(); clusterDimTwo++)
 			{
 				int otherDimTwo = (int)clusterDimTwo + offset[1];
-				if (otherDimTwo >= clusterBins.size()) continue;
+				if (otherDimTwo >= (int)clusterBins.size()) continue;
 				if (otherDimTwo < 0) continue;
 				for (size_t clusterDimThree = 0; clusterDimThree < clusterBins.size(); clusterDimThree++)
 				{
 					int otherDimThree = (int)clusterDimThree + offset[2];
-					if (otherDimThree >= clusterBins.size()) continue;
+					if (otherDimThree >= (int)clusterBins.size()) continue;
 					if (otherDimThree < 0) continue;
 					if (clusterBins[clusterDimOne][clusterDimTwo][clusterDimThree].size() == 0) continue;
 					if (clusterBins[otherDimOne][otherDimTwo][otherDimThree].size() == 0) continue;
@@ -382,7 +382,6 @@ std::vector<size_t> getFastTransitiveClosureMultithread(const size_t itemCount, 
 					if (find(parent, clusterExample[pickedI]) == find(parent, clusterExample[pickedJ])) continue;
 				}
 				size_t distance = distanceFunction(clusterExample[pickedI], clusterExample[pickedJ], maxAllowedDistance + clusterMaxDistance[pickedI] + clusterMaxDistance[pickedJ]);
-				size_t allowedDistance = allowedPairwiseDistanceFunction(clusterExample[pickedI], clusterExample[pickedJ]);
 				if (distance > maxAllowedDistance + clusterMaxDistance[pickedI] + clusterMaxDistance[pickedJ]) continue;
 				size_t minPossibleDistance = 0;
 				if (distance >= clusterMaxDistance[pickedI] + clusterMaxDistance[pickedJ])

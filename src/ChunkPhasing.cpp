@@ -1362,8 +1362,9 @@ void runAlignmentItem(SNPAlignmentQueue::Item& item)
 		size_t consensusPos = 0;
 		size_t seqPos = 0;
 		readSNPMSA[j].resize(consensusSeq.size(), 'N');
-		assert(result.alignmentLength >= std::max(consensusSeq.size(), strings[j].size()));
-		for (size_t k = 0; k < result.alignmentLength; k++)
+		assert(result.alignmentLength >= 0);
+		assert((size_t)result.alignmentLength >= std::max(consensusSeq.size(), strings[j].size()));
+		for (size_t k = 0; k < (size_t)result.alignmentLength; k++)
 		{
 			switch(result.alignment[k])
 			{
@@ -1624,7 +1625,6 @@ bool sitePairIsMultinomiallySignificant(const std::vector<std::vector<uint8_t>>&
 std::vector<std::vector<uint8_t>> filterByMultinomiallySignificantSNPs(const std::vector<std::vector<uint8_t>>& unfiltered, const double estimatedAverageErrorRate)
 {
 	std::vector<std::vector<uint8_t>> filtered = filterMSAByCoverage(unfiltered, estimatedAverageErrorRate);
-	size_t oldSize = filtered[0].size();
 	std::vector<bool> multinomialSignificant;
 	multinomialSignificant.resize(filtered[0].size(), false);
 	for (size_t i = 1; i < filtered[0].size(); i++)
@@ -3076,7 +3076,7 @@ void splitPerAllelePhasingWithinChunk(const FastaCompressor::CompressedStringInd
 				std::swap(chunkBeingDone, chunksNeedProcessing.back());
 				chunksNeedProcessing.pop_back();
 			}
-			auto startTime = getTime();
+//			auto startTime = getTime();
 			if (chunkBeingDone.size() < 10)
 			{
 				std::lock_guard<std::mutex> lock { resultMutex };
@@ -4328,7 +4328,6 @@ void splitPerNeighborForksPolyploid(const FastaCompressor::CompressedStringIndex
 		}
 		size_t unitig = chunkBelongsToUnitig[i];
 		assert(unitig < graph.unitigLengths.size());
-		bool anythingToPhase = false;
 		std::vector<std::vector<phmap::flat_hash_set<size_t>>> maybePhaseGroups;
 		if (hasFwFork[unitig])
 		{
@@ -4988,7 +4987,6 @@ void splitPerDiploidChunkWithNeighbors(const FastaCompressor::CompressedStringIn
 			minCoverageHere = 2;
 		}
 		assert(unitig < graph.unitigLengths.size());
-		bool anythingToPhase = false;
 		std::vector<std::pair<phmap::flat_hash_set<size_t>, phmap::flat_hash_set<size_t>>> maybePhaseGroups;
 		if (hasFwFork[unitig])
 		{

@@ -1595,7 +1595,7 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 	for (size_t i = 0; i < readPaths.size(); i++)
 	{
 		uint64_t lastLongUnitig = std::numeric_limits<uint64_t>::max();
-		size_t lastLongUnitigChunkPos;
+		size_t lastLongUnitigChunkPos = std::numeric_limits<size_t>::max();
 		for (size_t j = 0; j < readPaths[i].size(); j++)
 		{
 			for (size_t k = 0; k < readPaths[i][j].path.size(); k++)

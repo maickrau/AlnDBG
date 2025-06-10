@@ -573,7 +573,6 @@ void writeReadChunkSequences(const std::string& filename, const std::vector<size
 		{
 			auto t = chunksPerRead[i][j];
 			size_t chunk = std::get<2>(t) & maskUint64_t;
-			bool fw = std::get<2>(t) & firstBitUint64_t;
 			std::string seq = getChunkSequence(sequenceIndex, rawReadLengths, chunksPerRead, i, j);
 			std::string name;
 			if (i < sequenceIndex.size())
