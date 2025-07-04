@@ -1703,6 +1703,159 @@ std::vector<std::vector<size_t>> tryTripletSplitting(const std::vector<std::vect
 	return getSNPTransitiveClosure(readFakeMSABases, 0);
 }
 
+std::vector<std::vector<size_t>> tryMinorMinorSNPSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate, const double approxOneHapCoverage)
+{
+	const size_t minCoverage = std::max<size_t>(approxOneHapCoverage, 10);
+	std::vector<std::vector<uint8_t>> readFakeMSABases = filterMSAByCoverage(unfilteredReadFakeMSABases, estimatedAverageErrorRate);
+	assert(readFakeMSABases.size() >= 1);
+	size_t bestSplitterFirst = std::numeric_limits<size_t>::max();
+	size_t bestSplitterSecond = std::numeric_limits<size_t>::max();
+	size_t bestSplitterScore = 0;
+	for (size_t i = 1; i < readFakeMSABases[0].size(); i++)
+	{
+		for (size_t j = 0; j < i; j++)
+		{
+			phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, size_t> pairCoverage;
+			for (size_t k = 0; k < readFakeMSABases.size(); k++)
+			{
+				std::pair<uint8_t, uint8_t> key { readFakeMSABases[k][i], readFakeMSABases[k][j] };
+				pairCoverage[key] += 1;
+			}
+			phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, std::pair<uint8_t, uint8_t>> parent;
+			size_t distinctValids = 0;
+			size_t missingValues = 0;
+			phmap::flat_hash_map<uint8_t, size_t> firstCoverages;
+			phmap::flat_hash_map<uint8_t, size_t> secondCoverages;
+			bool anySmall = false;
+			for (auto pair : pairCoverage)
+			{
+				if (pair.first.first == '-' || pair.first.second == '-')
+				{
+					missingValues += pair.second;
+					continue;
+				}
+				firstCoverages[pair.first.first] += pair.second;
+				secondCoverages[pair.first.second] += pair.second;
+				parent[pair.first] = pair.first;
+				if (pair.second < minCoverage) anySmall = true;
+				distinctValids += 1;
+			}
+			if (missingValues > 3) continue;
+			if (anySmall) continue;
+			for (auto pair : pairCoverage)
+			{
+				for (auto pair2 : pairCoverage)
+				{
+					if (pair == pair2) continue;
+					if (pair.first.first == '-') continue;
+					if (pair.first.second == '-') continue;
+					if (pair2.first.first == '-') continue;
+					if (pair2.first.second == '-') continue;
+					size_t hammingDistance = 0;
+					if (pair.first.first != pair2.first.first) hammingDistance += 1;
+					if (pair.first.second != pair2.first.second) hammingDistance += 1;
+					assert(hammingDistance >= 1);
+					if (hammingDistance == 1) merge(parent, pair.first, pair2.first);
+				}
+			}
+			phmap::flat_hash_set<std::pair<uint8_t, uint8_t>> clusters;
+			for (auto pair : pairCoverage)
+			{
+				if (pair.first.first == '-') continue;
+				if (pair.first.second == '-') continue;
+				clusters.insert(find(parent, pair.first));
+			}
+			if (clusters.size() == distinctValids)
+			{
+				size_t scoreHere = 3 * unfilteredReadFakeMSABases.size() - missingValues;
+				if (scoreHere > bestSplitterScore)
+				{
+					bestSplitterFirst = i;
+					bestSplitterSecond = j;
+					bestSplitterScore = scoreHere;
+				}
+			}
+			if (distinctValids != 3) continue;
+			if (clusters.size() != 1) continue;
+			if (firstCoverages.size() != 2) continue;
+			if (secondCoverages.size() != 2) continue;
+			std::vector<std::pair<uint8_t, size_t>> firstCoveragesVec { firstCoverages.begin(), firstCoverages.end() };
+			assert(firstCoveragesVec.size() == 2);
+			std::sort(firstCoveragesVec.begin(), firstCoveragesVec.end(), [](auto left, auto right) { return left.second > right.second; });
+			assert(firstCoveragesVec[0].second > firstCoveragesVec[1].second);
+			std::vector<std::pair<uint8_t, size_t>> secondCoveragesVec { secondCoverages.begin(), secondCoverages.end() };
+			assert(secondCoveragesVec.size() == 2);
+			std::sort(secondCoveragesVec.begin(), secondCoveragesVec.end(), [](auto left, auto right) { return left.second > right.second; });
+			if (firstCoveragesVec[0].second == firstCoveragesVec[1].second) continue;
+			if (secondCoveragesVec[0].second == secondCoveragesVec[1].second) continue;
+			assert(secondCoveragesVec[0].second > secondCoveragesVec[1].second);
+			if (pairCoverage.count(std::make_pair(firstCoveragesVec[1].first, secondCoveragesVec[0].first)) == 1 && pairCoverage.count(std::make_pair(firstCoveragesVec[0].first, secondCoveragesVec[1].first)) == 1) continue;
+			if (pairCoverage.count(std::make_pair(firstCoveragesVec[1].first, secondCoveragesVec[1].first)) == 0) continue;
+			size_t scoreHere = pairCoverage.at(std::make_pair(firstCoveragesVec[1].first, secondCoveragesVec[1].first));
+			size_t foundCoverage = pairCoverage.at(std::make_pair(firstCoveragesVec[1].first, secondCoveragesVec[1].first));
+			if (pairCoverage.count(std::make_pair(firstCoveragesVec[0].first, secondCoveragesVec[0].first))) foundCoverage += pairCoverage.at(std::make_pair(firstCoveragesVec[0].first, secondCoveragesVec[0].first));
+			if (pairCoverage.count(std::make_pair(firstCoveragesVec[1].first, secondCoveragesVec[0].first))) foundCoverage += pairCoverage.at(std::make_pair(firstCoveragesVec[1].first, secondCoveragesVec[0].first));
+			if (pairCoverage.count(std::make_pair(firstCoveragesVec[0].first, secondCoveragesVec[1].first))) foundCoverage += pairCoverage.at(std::make_pair(firstCoveragesVec[0].first, secondCoveragesVec[1].first));
+			assert(foundCoverage <= readFakeMSABases.size());
+			size_t missingCoverage = readFakeMSABases.size() - foundCoverage;
+			if (missingCoverage > 0)
+			{
+				if (scoreHere > missingCoverage*10)
+				{
+					scoreHere -= missingCoverage*10;
+				}
+				else
+				{
+					scoreHere = 0;
+				}
+			}
+			if (scoreHere > bestSplitterScore)
+			{
+				bestSplitterFirst = i;
+				bestSplitterSecond = j;
+				bestSplitterScore = scoreHere;
+			}
+		}
+	}
+	std::vector<std::vector<size_t>> result;
+	if (bestSplitterScore == 0)
+	{
+		assert(bestSplitterFirst == std::numeric_limits<size_t>::max());
+		assert(bestSplitterSecond == std::numeric_limits<size_t>::max());
+		result.resize(1);
+		for (size_t i = 0; i < unfilteredReadFakeMSABases.size(); i++)
+		{
+			result[0].emplace_back(i);
+		}
+		return result;
+	}
+	assert(bestSplitterFirst != std::numeric_limits<size_t>::max());
+	assert(bestSplitterSecond != std::numeric_limits<size_t>::max());
+	if (bestSplitterScore > 0)
+	{
+		phmap::flat_hash_map<std::pair<uint8_t, uint8_t>, size_t> alleleToIndex;
+		for (size_t i = 0; i < readFakeMSABases.size(); i++)
+		{
+			assert(bestSplitterFirst < readFakeMSABases[i].size());
+			assert(bestSplitterSecond < readFakeMSABases[i].size());
+			std::pair<uint8_t, uint8_t> key { readFakeMSABases[i][bestSplitterFirst], readFakeMSABases[i][bestSplitterSecond] };
+			if (alleleToIndex.count(key) == 0)
+			{
+				alleleToIndex[key] = result.size();
+				result.emplace_back();
+			}
+			result[alleleToIndex.at(key)].emplace_back(i);
+		}
+		std::cerr << "minor-minor SNP splitting splitted to " << result.size() << " clusters with sizes";
+		for (size_t i = 0; i < result.size(); i++)
+		{
+			std::cerr << " " << result[i].size();
+		}
+		std::cerr << std::endl;
+	}
+	return result;
+}
+
 std::vector<std::vector<size_t>> tryPairPhasingGroupSplitting(const std::vector<std::vector<uint8_t>>& unfilteredReadFakeMSABases, const size_t consensusLength, const double estimatedAverageErrorRate)
 {
 	std::vector<std::vector<uint8_t>> readFakeMSABases = filterByOccurrenceLinkage(unfilteredReadFakeMSABases);
@@ -1835,7 +1988,7 @@ void fixFalseSplittedClusters(std::vector<std::vector<size_t>>& clusters)
 	return;
 }
 
-void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads)
+void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStringIndex& sequenceIndex, const std::vector<size_t>& rawReadLengths, std::vector<std::vector<std::tuple<size_t, size_t, uint64_t>>>& chunksPerRead, const size_t numThreads, const double approxOneHapCoverage, const bool useHighCopycountHeuristics)
 {
 	const size_t minSolidBaseCoverage = 10;
 	std::cerr << "splitting by SNP transitive closure clustering" << std::endl;
@@ -1881,7 +2034,7 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 	std::vector<std::shared_ptr<TripletSplittingQueue>> tripletQueues;
 	std::mutex alignmentQueuesMutex;
 	std::mutex tripletQueuesMutex;
-	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, &alignmentQueues, &alignmentQueuesMutex, &tripletQueues, &tripletQueuesMutex, minSolidBaseCoverage](size_t dummy)
+	iterateMultithreaded(0, numThreads, numThreads, [&sequenceIndex, &chunksPerRead, &chunksNeedProcessing, &chunksDoneProcessing, &resultMutex, &countSplitted, &rawReadLengths, &threadsRunning, &alignmentQueues, &alignmentQueuesMutex, &tripletQueues, &tripletQueuesMutex, minSolidBaseCoverage, approxOneHapCoverage, useHighCopycountHeuristics](size_t dummy)
 	{
 		while (true)
 		{
@@ -2061,6 +2214,13 @@ void splitPerSNPTransitiveClosureClustering(const FastaCompressor::CompressedStr
 			if (clusters.size() == 1 && chunkBeingDone.size() > 1000 && estimatedAverageErrorRate < mismatchFraction)
 			{
 				clusters = trySNPSplittingLowerMismatchRate(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate);
+				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
+				assert(clusters.size() >= 1);
+				fixFalseSplittedClusters(clusters);
+			}
+			if (clusters.size() == 1 && useHighCopycountHeuristics)
+			{
+				clusters = tryMinorMinorSNPSplitting(unfilteredReadFakeMSABases, consensusLength, estimatedAverageErrorRate, approxOneHapCoverage);
 				if (chunkIsPalindrome) checkAndFixPalindromicChunk(clusters, chunkBeingDone, chunksPerRead);
 				assert(clusters.size() >= 1);
 				fixFalseSplittedClusters(clusters);
