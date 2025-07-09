@@ -1782,11 +1782,11 @@ std::vector<std::vector<size_t>> tryMinorMinorSNPSplitting(const std::vector<std
 			std::vector<std::pair<uint8_t, size_t>> firstCoveragesVec { firstCoverages.begin(), firstCoverages.end() };
 			assert(firstCoveragesVec.size() == 2);
 			std::sort(firstCoveragesVec.begin(), firstCoveragesVec.end(), [](auto left, auto right) { return left.second > right.second; });
+			if (firstCoveragesVec[0].second == firstCoveragesVec[1].second) continue;
 			assert(firstCoveragesVec[0].second > firstCoveragesVec[1].second);
 			std::vector<std::pair<uint8_t, size_t>> secondCoveragesVec { secondCoverages.begin(), secondCoverages.end() };
 			assert(secondCoveragesVec.size() == 2);
 			std::sort(secondCoveragesVec.begin(), secondCoveragesVec.end(), [](auto left, auto right) { return left.second > right.second; });
-			if (firstCoveragesVec[0].second == firstCoveragesVec[1].second) continue;
 			if (secondCoveragesVec[0].second == secondCoveragesVec[1].second) continue;
 			assert(secondCoveragesVec[0].second > secondCoveragesVec[1].second);
 			if (pairCoverage.count(std::make_pair(firstCoveragesVec[1].first, secondCoveragesVec[0].first)) == 1 && pairCoverage.count(std::make_pair(firstCoveragesVec[0].first, secondCoveragesVec[1].first)) == 1) continue;
