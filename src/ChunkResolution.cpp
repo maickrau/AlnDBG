@@ -1605,37 +1605,42 @@ void resolveBetweenTanglesInner(std::vector<std::vector<std::tuple<size_t, size_
 				assert(unitig < unitigIsLong.size());
 				if (!unitigIsLong[unitig]) continue;
 				uint64_t longUnitigHere = readPaths[i][j].path[k];
-				size_t chunkPosHere = graph.chunksInUnitig[longUnitigHere & maskUint64_t].size();
+				size_t chunkEndPosHere = graph.chunksInUnitig[longUnitigHere & maskUint64_t].size();
+				size_t chunkStartPosHere = 0;
+				if (k == 0)
+				{
+					chunkStartPosHere = readPaths[i][j].pathLeftClipChunks;
+				}
 				if (k+1 == readPaths[i][j].path.size())
 				{
-					assert(chunkPosHere >= readPaths[i][j].pathRightClipChunks);
-					chunkPosHere -= readPaths[i][j].pathRightClipChunks;
+					assert(chunkEndPosHere >= readPaths[i][j].pathRightClipChunks);
+					chunkEndPosHere -= readPaths[i][j].pathRightClipChunks;
 				}
 				if (lastLongUnitig == std::numeric_limits<size_t>::max())
 				{
 					lastLongUnitig = longUnitigHere;
-					lastLongUnitigChunkPos = chunkPosHere;
+					lastLongUnitigChunkPos = chunkEndPosHere;
 					continue;
 				}
 				if (lastLongUnitig == longUnitigHere)
 				{
-					if (chunkPosHere > lastLongUnitigChunkPos)
+					if (chunkStartPosHere >= lastLongUnitigChunkPos)
 					{
 						lastLongUnitig = longUnitigHere;
-						lastLongUnitigChunkPos = chunkPosHere;
+						lastLongUnitigChunkPos = chunkEndPosHere;
 						continue;
 					}
 				}
 				if (find(parent, 2 * (lastLongUnitig & maskUint64_t) + ((lastLongUnitig & firstBitUint64_t) ? 1 : 0)) != find(parent, 2 * (longUnitigHere & maskUint64_t) + ((longUnitigHere & firstBitUint64_t) ? 0 : 1)))
 				{
 					lastLongUnitig = longUnitigHere;
-					lastLongUnitigChunkPos = chunkPosHere;
+					lastLongUnitigChunkPos = chunkEndPosHere;
 					continue;
 				}
 				connectionCounts[lastLongUnitig][longUnitigHere ^ firstBitUint64_t] += 1;
 				connectionCounts[longUnitigHere ^ firstBitUint64_t][lastLongUnitig] += 1;
 				lastLongUnitig = longUnitigHere;
-				lastLongUnitigChunkPos = chunkPosHere;
+				lastLongUnitigChunkPos = chunkEndPosHere;
 			}
 		}
 	}
